@@ -135,6 +135,19 @@ cargo run -p arcade-app -- /Users/you/path/to/config.toml
   - `management.cover_scraping.default_delay_ms`
 - Changing DB, ROM, core, BIOS, or save-state paths is saved immediately, but those path changes are applied on the next app launch.
 
+## macOS arcade quick setup
+
+- Default `ARCADE` core is `fbneo`.
+- Place arcade ROM archives under `<rom_root>/arcade-mame2003/` (for example, `mslugx.zip`).
+- Shared arcade BIOS archives are discovered from these locations:
+  - `<bios_root>/arcade-mame2003`
+  - `<bios_root>`
+  - `<bios_root>/roms/arcade-mame2003`
+  - `<rom_root>/arcade-mame2003`
+  - `<rom_root>/roms/arcade-mame2003`
+- Common shared BIOS archives: `neogeo.zip`, `qsound.zip`, `pgm.zip`.
+- For Neo Geo titles on FBNeo, make sure `neogeo.zip` is present in one of the paths above.
+
 ## Native Gamepad + Audio
 
 Install Linux development packages first:
@@ -191,7 +204,7 @@ Older saved mappings that do not include newer frontend actions are backfilled w
 
 ## Supported core names
 
-Core binary extension is platform-specific (`.so` on Linux, `.dll` on Windows).
+Core binary extension is platform-specific (`.so` on Linux, `.dll` on Windows, `.dylib` on macOS).
 
 - `fceumm_libretro`
 - `snes9x_libretro`
@@ -219,7 +232,8 @@ Core binary extension is platform-specific (`.so` on Linux, `.dll` on Windows).
   - `LIBRETRO_PARALLEL_N64_GL_FALLBACK=1` forces the software fallback explicitly.
 - Arcade launches are validated before start:
   - CPS3 titles are blocked until the required assets are installed.
-  - Shared arcade BIOS files are expected under the arcade BIOS directory under `rom_root`.
+  - Shared arcade BIOS files are resolved from `bios_root` and `rom_root` arcade directories (see macOS arcade quick setup above).
+  - Default `ARCADE` core is `fbneo`.
   - Native arcade launches mirror the web app's title-specific arcade overrides before falling back to the ROM's configured core override or the default arcade core.
   - `mame2003` and `mame2003_plus` are treated as distinct native cores.
 - On Linux, when the external Vulkan N64 window is active, the main app window is moved offscreen instead of minimized so frame pacing stays stable.
