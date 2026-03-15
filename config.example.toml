@@ -1,0 +1,10 @@
+[paths]
+rom_root = "/abs/path/to/roms"
+db_path = "/abs/path/to/arcade.db"
+save_state_root = "/abs/path/to/save-states"
+core_root = "/abs/path/to/cores"
+bios_root = "/abs/path/to/bios"
+
+[emulation.n64]
+preferred_core = "mupen64plus_next"
+parallel_rdp_upscaling = "1x"

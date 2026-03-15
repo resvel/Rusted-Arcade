@@ -1,0 +1,6 @@
+[paths]
+rom_root = "/home/jules/personalWebArcade/native/roms"
+db_path = "/home/jules/.local/share/personal-arcade-native/data/arcade.db"
+save_state_root = "/home/jules/.local/share/personal-arcade-native/data/save-states"
+core_root = "/home/jules/.local/share/personal-arcade-native/cores"
+bios_root = "/home/jules/.local/share/personal-arcade-native/bios"

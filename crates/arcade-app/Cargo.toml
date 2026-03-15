@@ -1,0 +1,26 @@
+[package]
+name = "arcade-app"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+
+[features]
+default = ["native-av"]
+audio = ["arcade-libretro/audio"]
+gamepad = ["arcade-ui/gamepad"]
+native-av = ["audio", "gamepad"]
+
+[dependencies]
+anyhow.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+eframe.workspace = true
+image.workspace = true
+arcade-domain = { path = "../arcade-domain" }
+arcade-data = { path = "../arcade-data" }
+arcade-services = { path = "../arcade-services" }
+arcade-libretro = { path = "../arcade-libretro" }
+arcade-ui = { path = "../arcade-ui" }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+eframe = { workspace = true, features = ["x11", "wayland"] }

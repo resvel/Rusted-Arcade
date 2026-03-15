@@ -1,0 +1,31 @@
+[package]
+name = "arcade-ui"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+
+[features]
+default = []
+gamepad = []
+
+[dependencies]
+anyhow.workspace = true
+egui.workspace = true
+eframe.workspace = true
+tracing.workspace = true
+serde_json.workspace = true
+image.workspace = true
+resvg.workspace = true
+raw-window-handle.workspace = true
+arcade-domain = { path = "../arcade-domain" }
+arcade-services = { path = "../arcade-services" }
+arcade-libretro = { path = "../arcade-libretro" }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+eframe = { workspace = true, features = ["x11", "wayland"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+sdl2.workspace = true
+
+[target.'cfg(not(target_os = "windows"))'.dependencies]
+gilrs.workspace = true

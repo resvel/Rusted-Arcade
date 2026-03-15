@@ -1,0 +1,61 @@
+[workspace]
+members = [
+  "crates/arcade-app",
+  "crates/arcade-ui",
+  "crates/arcade-libretro",
+  "crates/arcade-domain",
+  "crates/arcade-data",
+  "crates/arcade-services",
+]
+resolver = "2"
+
+[workspace.package]
+edition = "2021"
+license = "UNLICENSED"
+
+[workspace.dependencies]
+anyhow = "1.0"
+thiserror = "2.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+toml = "0.8"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+directories = "6.0"
+rusqlite = { version = "0.32", features = ["bundled", "chrono"] }
+libloading = "0.8"
+cpal = "0.15"
+gilrs = "0.10"
+sdl2 = { version = "0.38", features = ["bundled", "static-link"] }
+parking_lot = "0.12"
+crossbeam-channel = "0.5"
+egui = "0.31"
+eframe = { version = "0.31", default-features = false, features = ["default_fonts", "glow"] }
+uuid = { version = "1.11", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["clock", "serde"] }
+once_cell = "1.20"
+glow = "0.16"
+ash = "0.38"
+raw-window-handle = "0.6"
+x11-dl = "2.21"
+tempfile = "3.14"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "bmp", "gif"] }
+resvg = "0.45"
+zip = { version = "2.2", default-features = false, features = ["deflate"] }
+sha1 = "0.10"
+ureq = { version = "2.12", features = ["json"] }
+
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package.arcade-libretro]
+opt-level = 3
+
+[profile.dev.package.arcade-ui]
+opt-level = 2
+
+[profile.dev.package.arcade-app]
+opt-level = 2
+
+[patch.crates-io]
+glutin = { path = "third_party/glutin-0.32.3" }
