@@ -3,7 +3,7 @@ use std::sync::mpsc;
 
 use arcade_domain::{
     CoverScrapeRunOptions, CoverScrapeSettingsInput, ManageOperationKind, ManageScope,
-    N64ParallelRdpUpscaling, N64PreferredCore, PathsConfig,
+    N64ParallelProfile, N64ParallelRdpUpscaling, N64PreferredCore, PathsConfig,
 };
 use eframe::egui;
 
@@ -40,6 +40,12 @@ impl NativeArcadeUiApp {
             .n64
             .parallel_rdp_upscaling
             .as_core_value()
+            .to_string();
+        self.state.manage.settings_n64_parallel_profile = config
+            .emulation
+            .n64
+            .parallel_profile
+            .as_config_value()
             .to_string();
         self.state.manage.settings_api_key = scrape.tgdb_api_key.clone().unwrap_or_default();
         self.state.manage.settings_limit = scrape.default_limit.to_string();
@@ -229,6 +235,35 @@ impl NativeArcadeUiApp {
                             MenuFocusRegion::SettingsAppConfigUpscaling;
                         self.state.menu_nav.settings_app_upscaling_index = index;
                         self.state.manage.settings_n64_parallel_rdp_upscaling = value.to_string();
+                    }
+                }
+            });
+
+            ui.add_space(4.0);
+            ui.label(
+                egui::RichText::new("Parallel Preset")
+                    .small()
+                    .color(palette.text_muted),
+            );
+            ui.horizontal_wrapped(|ui| {
+                for (index, (label, value)) in
+                    [("Balanced", "balanced"), ("Performance", "performance")]
+                        .into_iter()
+                        .enumerate()
+                {
+                    let selected = self.state.manage.settings_n64_parallel_profile == value;
+                    let focused = self.state.menu_nav.focus_region
+                        == MenuFocusRegion::SettingsAppConfigProfile
+                        && self.state.menu_nav.settings_app_profile_index == index;
+                    let response = ui.add(manage_button(label, focused, selected, palette));
+                    if focused {
+                        Self::paint_selection_glow(ui, response.rect, 255, palette.accent, 0.78);
+                    }
+                    if response.clicked() {
+                        self.state.menu_nav.focus_region =
+                            MenuFocusRegion::SettingsAppConfigProfile;
+                        self.state.menu_nav.settings_app_profile_index = index;
+                        self.state.manage.settings_n64_parallel_profile = value.to_string();
                     }
                 }
             });
@@ -698,11 +733,21 @@ impl NativeArcadeUiApp {
                 return;
             }
         };
+        let parallel_profile =
+            match parse_n64_parallel_profile(&self.state.manage.settings_n64_parallel_profile) {
+                Ok(value) => value,
+                Err(err) => {
+                    self.state.manage.status_message = err;
+                    self.state.status = self.state.manage.status_message.clone();
+                    return;
+                }
+            };
 
         match self.services.update_app_config_settings(
             paths,
             preferred_core,
             parallel_rdp_upscaling,
+            parallel_profile,
         ) {
             Ok(outcome) => {
                 if !outcome.restart_required {
@@ -1145,6 +1190,16 @@ fn parse_n64_parallel_rdp_upscaling(value: &str) -> Result<N64ParallelRdpUpscali
         "8x" => Ok(N64ParallelRdpUpscaling::X8),
         _ => Err(String::from(
             "Parallel RDP upscaling must be one of: 1x, 2x, 4x, 8x.",
+        )),
+    }
+}
+
+fn parse_n64_parallel_profile(value: &str) -> Result<N64ParallelProfile, String> {
+    match value.trim() {
+        "balanced" => Ok(N64ParallelProfile::Balanced),
+        "performance" => Ok(N64ParallelProfile::Performance),
+        _ => Err(String::from(
+            "Parallel preset must be one of: balanced, performance.",
         )),
     }
 }

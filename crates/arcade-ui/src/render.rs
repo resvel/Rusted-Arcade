@@ -30,22 +30,34 @@ fn summarize_rgba_debug_pixels(pixels: &[u8]) -> (u64, usize, [u8; 4]) {
 
 impl NativeArcadeUiApp {
     pub(crate) fn update_frame_texture(&mut self, ctx: &egui::Context, frame: FrameBuffer) {
-        frame_to_rgba_into(
-            &frame.data,
-            frame.width,
-            frame.height,
-            frame.pitch,
-            frame.pixel_format,
-            &mut self.assets.play_frame_rgba,
-        );
         let size = [frame.width as usize, frame.height as usize];
+        let required_len = size[0].saturating_mul(size[1]).saturating_mul(4);
+        let direct_rgba = matches!(frame.pixel_format, PixelFormat::Rgba8888)
+            && frame.pitch == size[0].saturating_mul(4)
+            && frame.data.len() >= required_len;
+
+        if !direct_rgba {
+            frame_to_rgba_into(
+                &frame.data,
+                frame.width,
+                frame.height,
+                frame.pitch,
+                frame.pixel_format,
+                &mut self.assets.play_frame_rgba,
+            );
+        }
+
+        let upload_rgba: &[u8] = if direct_rgba {
+            &frame.data[..required_len]
+        } else {
+            &self.assets.play_frame_rgba
+        };
         let reuse_texture = self.state.play.last_frame_size == Some((frame.width, frame.height))
             && self.assets.last_frame_texture.is_some();
         if std::env::var_os("ARCADE_VULKAN_DEBUG").is_some() {
             let frame_index = UI_FRAME_UPLOAD_DEBUG_COUNTER.fetch_add(1, Ordering::Relaxed);
             if frame_index < 16 {
-                let (checksum, non_black_pixels, first_rgba) =
-                    summarize_rgba_debug_pixels(&self.assets.play_frame_rgba);
+                let (checksum, non_black_pixels, first_rgba) = summarize_rgba_debug_pixels(upload_rgba);
                 info!(
                     target: "arcade_ui::video_debug",
                     "upload frame={} action={} size={}x{} src_pitch={} pixel_format={:?} checksum=0x{checksum:016x} non_black_samples={}/64 first_rgba={:02x},{:02x},{:02x},{:02x}",
@@ -63,7 +75,7 @@ impl NativeArcadeUiApp {
                 );
             }
         }
-        let image = ColorImage::from_rgba_unmultiplied(size, &self.assets.play_frame_rgba);
+        let image = ColorImage::from_rgba_unmultiplied(size, upload_rgba);
 
         match &mut self.assets.last_frame_texture {
             Some(texture)
@@ -116,6 +128,36 @@ fn frame_to_rgba_into(
     let required_len = width.saturating_mul(height).saturating_mul(4);
     if out.len() != required_len {
         out.resize(required_len, 0);
+    }
+
+    if matches!(pixel_format, PixelFormat::Rgba8888) {
+        let row_len = width.saturating_mul(4);
+        if pitch == row_len {
+            let bytes = required_len.min(input.len());
+            out[..bytes].copy_from_slice(&input[..bytes]);
+            if bytes < required_len {
+                out[bytes..].fill(0);
+            }
+            return;
+        }
+
+        for y in 0..height {
+            let src_row_start = y.saturating_mul(pitch);
+            let dst_row_start = y.saturating_mul(row_len);
+            if src_row_start >= input.len() || dst_row_start >= out.len() {
+                break;
+            }
+            let src_row_end = (src_row_start + row_len).min(input.len());
+            let dst_row_end = (dst_row_start + row_len).min(out.len());
+            let copy_len = (src_row_end - src_row_start).min(dst_row_end - dst_row_start);
+            out[dst_row_start..dst_row_start + copy_len]
+                .copy_from_slice(&input[src_row_start..src_row_start + copy_len]);
+            if copy_len < row_len && dst_row_start + copy_len < out.len() {
+                let fill_end = (dst_row_start + row_len).min(out.len());
+                out[dst_row_start + copy_len..fill_end].fill(0);
+            }
+        }
+        return;
     }
 
     for y in 0..height {
@@ -188,6 +230,25 @@ mod tests {
         let mut rgba = Vec::new();
         frame_to_rgba_into(&input, 1, 1, 4, PixelFormat::Xrgb8888, &mut rgba);
         assert_eq!(rgba, vec![0x11, 0x22, 0x33, 0xff]);
+    }
+
+    #[test]
+    fn keeps_rgba8888_rows_without_conversion_when_tightly_packed() {
+        let input = [0x01, 0x02, 0x03, 0x04, 0x11, 0x12, 0x13, 0x14];
+        let mut rgba = Vec::new();
+        frame_to_rgba_into(&input, 2, 1, 8, PixelFormat::Rgba8888, &mut rgba);
+        assert_eq!(rgba, input);
+    }
+
+    #[test]
+    fn keeps_rgba8888_rows_without_conversion_when_padded() {
+        let input = [
+            0x01, 0x02, 0x03, 0x04, 0xaa, 0xbb, 0xcc, 0xdd, // row 0 + padding
+            0x11, 0x12, 0x13, 0x14, 0xee, 0xff, 0x00, 0x99, // row 1 + padding
+        ];
+        let mut rgba = Vec::new();
+        frame_to_rgba_into(&input, 1, 2, 8, PixelFormat::Rgba8888, &mut rgba);
+        assert_eq!(rgba, vec![0x01, 0x02, 0x03, 0x04, 0x11, 0x12, 0x13, 0x14]);
     }
 
     #[test]

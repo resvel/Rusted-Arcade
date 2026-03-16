@@ -999,6 +999,7 @@ impl NativeArcadeUiApp {
             | MenuFocusRegion::ManageList
             | MenuFocusRegion::SettingsAppConfigCore
             | MenuFocusRegion::SettingsAppConfigUpscaling
+            | MenuFocusRegion::SettingsAppConfigProfile
             | MenuFocusRegion::SettingsAppConfigSave
             | MenuFocusRegion::SettingsCoverSettings => {}
             MenuFocusRegion::Grid => {
@@ -1110,6 +1111,7 @@ impl NativeArcadeUiApp {
             | MenuFocusRegion::ManageList
             | MenuFocusRegion::SettingsAppConfigCore
             | MenuFocusRegion::SettingsAppConfigUpscaling
+            | MenuFocusRegion::SettingsAppConfigProfile
             | MenuFocusRegion::SettingsAppConfigSave
             | MenuFocusRegion::SettingsCoverSettings => {}
         }
@@ -1321,6 +1323,7 @@ impl NativeArcadeUiApp {
             | MenuFocusRegion::Grid
             | MenuFocusRegion::SettingsAppConfigCore
             | MenuFocusRegion::SettingsAppConfigUpscaling
+            | MenuFocusRegion::SettingsAppConfigProfile
             | MenuFocusRegion::SettingsAppConfigSave
             | MenuFocusRegion::SettingsCoverSettings => {
                 self.state.menu_nav.focus_region = MenuFocusRegion::ManageHeader;
@@ -1379,6 +1382,7 @@ impl NativeArcadeUiApp {
             | MenuFocusRegion::Grid
             | MenuFocusRegion::SettingsAppConfigCore
             | MenuFocusRegion::SettingsAppConfigUpscaling
+            | MenuFocusRegion::SettingsAppConfigProfile
             | MenuFocusRegion::SettingsAppConfigSave
             | MenuFocusRegion::SettingsCoverSettings => {
                 self.state.menu_nav.focus_region = MenuFocusRegion::ManageHeader;
@@ -1405,6 +1409,7 @@ impl NativeArcadeUiApp {
             | MenuFocusRegion::Grid
             | MenuFocusRegion::SettingsAppConfigCore
             | MenuFocusRegion::SettingsAppConfigUpscaling
+            | MenuFocusRegion::SettingsAppConfigProfile
             | MenuFocusRegion::SettingsAppConfigSave
             | MenuFocusRegion::SettingsCoverSettings => MenuFocusRegion::ManageHeader,
         };
@@ -1461,7 +1466,7 @@ impl NativeArcadeUiApp {
                     self.state.menu_nav.focus_region = MenuFocusRegion::SettingsAppConfigCore;
                 }
                 MenuNavDirection::Down => {
-                    self.state.menu_nav.focus_region = MenuFocusRegion::SettingsAppConfigSave;
+                    self.state.menu_nav.focus_region = MenuFocusRegion::SettingsAppConfigProfile;
                 }
                 MenuNavDirection::Left => {
                     self.state.menu_nav.settings_app_upscaling_index = self
@@ -1475,9 +1480,28 @@ impl NativeArcadeUiApp {
                         (self.state.menu_nav.settings_app_upscaling_index + 1).min(3);
                 }
             },
-            MenuFocusRegion::SettingsAppConfigSave => match direction {
+            MenuFocusRegion::SettingsAppConfigProfile => match direction {
                 MenuNavDirection::Up => {
                     self.state.menu_nav.focus_region = MenuFocusRegion::SettingsAppConfigUpscaling;
+                }
+                MenuNavDirection::Down => {
+                    self.state.menu_nav.focus_region = MenuFocusRegion::SettingsAppConfigSave;
+                }
+                MenuNavDirection::Left => {
+                    self.state.menu_nav.settings_app_profile_index = self
+                        .state
+                        .menu_nav
+                        .settings_app_profile_index
+                        .saturating_sub(1);
+                }
+                MenuNavDirection::Right => {
+                    self.state.menu_nav.settings_app_profile_index =
+                        (self.state.menu_nav.settings_app_profile_index + 1).min(1);
+                }
+            },
+            MenuFocusRegion::SettingsAppConfigSave => match direction {
+                MenuNavDirection::Up => {
+                    self.state.menu_nav.focus_region = MenuFocusRegion::SettingsAppConfigProfile;
                 }
                 MenuNavDirection::Down => {
                     self.state.menu_nav.focus_region = MenuFocusRegion::SettingsCoverSettings;
@@ -1530,6 +1554,14 @@ impl NativeArcadeUiApp {
                         _ => String::from("1x"),
                     };
             }
+            MenuFocusRegion::SettingsAppConfigProfile => {
+                self.state.manage.settings_n64_parallel_profile =
+                    if self.state.menu_nav.settings_app_profile_index == 1 {
+                        String::from("performance")
+                    } else {
+                        String::from("balanced")
+                    };
+            }
             MenuFocusRegion::SettingsAppConfigSave => {
                 if !self.state.manage.job_running {
                     self.save_manage_app_settings();
@@ -1559,7 +1591,10 @@ impl NativeArcadeUiApp {
             MenuFocusRegion::TopNav => MenuFocusRegion::TopNav,
             MenuFocusRegion::SettingsAppConfigCore => MenuFocusRegion::TopNav,
             MenuFocusRegion::SettingsAppConfigUpscaling => MenuFocusRegion::SettingsAppConfigCore,
-            MenuFocusRegion::SettingsAppConfigSave => MenuFocusRegion::SettingsAppConfigUpscaling,
+            MenuFocusRegion::SettingsAppConfigProfile => {
+                MenuFocusRegion::SettingsAppConfigUpscaling
+            }
+            MenuFocusRegion::SettingsAppConfigSave => MenuFocusRegion::SettingsAppConfigProfile,
             MenuFocusRegion::SettingsCoverSettings => MenuFocusRegion::SettingsAppConfigSave,
             _ => MenuFocusRegion::TopNav,
         };

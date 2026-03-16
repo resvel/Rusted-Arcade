@@ -26,6 +26,7 @@
 #include <string.h>
 
 #include "api/m64p_types.h"
+#include "api/callbacks.h"
 #include "main/device.h"
 #include "ai/ai_controller.h"
 #include "pi/pi_controller.h"

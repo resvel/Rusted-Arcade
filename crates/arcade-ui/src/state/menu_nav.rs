@@ -19,6 +19,7 @@ pub(crate) enum MenuFocusRegion {
     ManageList,
     SettingsAppConfigCore,
     SettingsAppConfigUpscaling,
+    SettingsAppConfigProfile,
     SettingsAppConfigSave,
     SettingsCoverSettings,
     Grid,
@@ -45,6 +46,7 @@ pub(crate) struct MenuNavState {
     pub(crate) manage_list_index: usize,
     pub(crate) settings_app_core_index: usize,
     pub(crate) settings_app_upscaling_index: usize,
+    pub(crate) settings_app_profile_index: usize,
     pub(crate) settings_cover_action_index: usize,
     pub(crate) grid_index_home: usize,
     pub(crate) grid_index_library: usize,
@@ -85,6 +87,7 @@ impl Default for MenuNavState {
             manage_list_index: 0,
             settings_app_core_index: 0,
             settings_app_upscaling_index: 0,
+            settings_app_profile_index: 0,
             settings_cover_action_index: 0,
             grid_index_home: 0,
             grid_index_library: 0,
@@ -302,7 +305,10 @@ impl MenuNavState {
             MenuFocusRegion::ManageList => MenuFocusRegion::ManageScrapeActions,
             MenuFocusRegion::SettingsAppConfigCore => MenuFocusRegion::TopNav,
             MenuFocusRegion::SettingsAppConfigUpscaling => MenuFocusRegion::SettingsAppConfigCore,
-            MenuFocusRegion::SettingsAppConfigSave => MenuFocusRegion::SettingsAppConfigUpscaling,
+            MenuFocusRegion::SettingsAppConfigProfile => {
+                MenuFocusRegion::SettingsAppConfigUpscaling
+            }
+            MenuFocusRegion::SettingsAppConfigSave => MenuFocusRegion::SettingsAppConfigProfile,
             MenuFocusRegion::SettingsCoverSettings => MenuFocusRegion::SettingsAppConfigSave,
             MenuFocusRegion::Grid => {
                 if controller_panel_visible {

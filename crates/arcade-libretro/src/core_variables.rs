@@ -1,4 +1,5 @@
 use super::*;
+use arcade_domain::N64ParallelProfile;
 
 pub(super) fn default_core_variables_for(
     core_name: &str,
@@ -59,11 +60,60 @@ pub(super) fn default_core_variables_for(
                 #[cfg(not(target_os = "macos"))]
                 let gfx_plugin = "parallel";
                 insert_core_variable(&mut variables, "parallel-n64-gfxplugin", gfx_plugin);
+                let upscaling = emulation.n64.parallel_rdp_upscaling.as_core_value();
                 insert_core_variable(
                     &mut variables,
                     "parallel-n64-parallel-rdp-upscaling",
-                    emulation.n64.parallel_rdp_upscaling.as_core_value(),
+                    upscaling,
                 );
+                #[cfg(target_os = "macos")]
+                if backend == VideoBackendKind::Vulkan {
+                    // macOS fallback readback path: favor stable frame pacing over max quality.
+                    let accuracy = if emulation.n64.parallel_profile == N64ParallelProfile::Performance
+                    {
+                        if upscaling == "1x" {
+                            "medium"
+                        } else {
+                            "low"
+                        }
+                    } else if upscaling == "1x" {
+                        "high"
+                    } else {
+                        "medium"
+                    };
+                    insert_core_variable(&mut variables, "parallel-n64-gfxplugin-accuracy", accuracy);
+                    insert_core_variable(
+                        &mut variables,
+                        "parallel-n64-parallel-rdp-vi-aa",
+                        "disabled",
+                    );
+                    insert_core_variable(
+                        &mut variables,
+                        "parallel-n64-parallel-rdp-vi-bilinear",
+                        "disabled",
+                    );
+                    insert_core_variable(
+                        &mut variables,
+                        "parallel-n64-parallel-rdp-dither-filter",
+                        "disabled",
+                    );
+                    insert_core_variable(
+                        &mut variables,
+                        "parallel-n64-parallel-rdp-divot-filter",
+                        "disabled",
+                    );
+                    insert_core_variable(
+                        &mut variables,
+                        "parallel-n64-parallel-rdp-gamma-dither",
+                        "disabled",
+                    );
+                }
+                #[cfg(not(target_os = "macos"))]
+                if backend == VideoBackendKind::Vulkan
+                    && emulation.n64.parallel_profile == N64ParallelProfile::Performance
+                {
+                    apply_parallel_n64_performance_preset(&mut variables, upscaling);
+                }
             }
         }
         if let Some(cpucore_override) = parallel_n64_cpucore_override() {
@@ -127,6 +177,36 @@ fn parallel_n64_cpucore_override() -> Option<String> {
     std::env::var("ARCADE_PARALLEL_N64_CPUCORE")
         .ok()
         .filter(|value| !value.is_empty())
+}
+
+#[cfg(not(target_os = "macos"))]
+fn apply_parallel_n64_performance_preset(
+    variables: &mut HashMap<String, CString>,
+    upscaling: &str,
+) {
+    let accuracy = if upscaling == "1x" { "medium" } else { "low" };
+    insert_core_variable(variables, "parallel-n64-gfxplugin-accuracy", accuracy);
+    insert_core_variable(variables, "parallel-n64-parallel-rdp-vi-aa", "disabled");
+    insert_core_variable(
+        variables,
+        "parallel-n64-parallel-rdp-vi-bilinear",
+        "disabled",
+    );
+    insert_core_variable(
+        variables,
+        "parallel-n64-parallel-rdp-dither-filter",
+        "disabled",
+    );
+    insert_core_variable(
+        variables,
+        "parallel-n64-parallel-rdp-divot-filter",
+        "disabled",
+    );
+    insert_core_variable(
+        variables,
+        "parallel-n64-parallel-rdp-gamma-dither",
+        "disabled",
+    );
 }
 
 fn apply_runtime_env_default(key: &str, value: &str, log_message: &str) {
@@ -236,6 +316,41 @@ mod tests {
         assert_eq!(plugin.to_str().expect("utf8"), "angrylion");
     }
 
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn default_core_variables_tune_parallel_n64_macos_vulkan_for_headroom() {
+        let variables = default_core_variables_for(
+            "parallel_n64",
+            VideoBackendKind::Vulkan,
+            &EmulationConfig::default(),
+        );
+        let accuracy = variables
+            .get("parallel-n64-gfxplugin-accuracy")
+            .expect("parallel n64 accuracy override");
+        let vi_aa = variables
+            .get("parallel-n64-parallel-rdp-vi-aa")
+            .expect("parallel n64 vi-aa override");
+        let vi_bilinear = variables
+            .get("parallel-n64-parallel-rdp-vi-bilinear")
+            .expect("parallel n64 vi-bilinear override");
+        let dither_filter = variables
+            .get("parallel-n64-parallel-rdp-dither-filter")
+            .expect("parallel n64 dither-filter override");
+        let divot_filter = variables
+            .get("parallel-n64-parallel-rdp-divot-filter")
+            .expect("parallel n64 divot-filter override");
+        let gamma_dither = variables
+            .get("parallel-n64-parallel-rdp-gamma-dither")
+            .expect("parallel n64 gamma-dither override");
+
+        assert_eq!(accuracy.to_str().expect("utf8"), "high");
+        assert_eq!(vi_aa.to_str().expect("utf8"), "disabled");
+        assert_eq!(vi_bilinear.to_str().expect("utf8"), "disabled");
+        assert_eq!(dither_filter.to_str().expect("utf8"), "disabled");
+        assert_eq!(divot_filter.to_str().expect("utf8"), "disabled");
+        assert_eq!(gamma_dither.to_str().expect("utf8"), "disabled");
+    }
+
     #[test]
     fn default_core_variables_honor_parallel_n64_upscaling_override() {
         let mut emulation = EmulationConfig::default();
@@ -248,6 +363,40 @@ mod tests {
             .expect("parallel rdp upscaling override");
 
         assert_eq!(upscale.to_str().expect("utf8"), "2x");
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn default_core_variables_reduce_parallel_n64_accuracy_when_upscaled_on_macos_vulkan() {
+        let mut emulation = EmulationConfig::default();
+        emulation.n64.parallel_rdp_upscaling = arcade_domain::N64ParallelRdpUpscaling::X2;
+
+        let variables =
+            default_core_variables_for("parallel_n64", VideoBackendKind::Vulkan, &emulation);
+        let accuracy = variables
+            .get("parallel-n64-gfxplugin-accuracy")
+            .expect("parallel n64 accuracy override");
+
+        assert_eq!(accuracy.to_str().expect("utf8"), "medium");
+    }
+
+    #[test]
+    fn default_core_variables_apply_parallel_n64_performance_profile_defaults() {
+        let mut emulation = EmulationConfig::default();
+        emulation.n64.parallel_rdp_upscaling = arcade_domain::N64ParallelRdpUpscaling::X2;
+        emulation.n64.parallel_profile = arcade_domain::N64ParallelProfile::Performance;
+
+        let variables =
+            default_core_variables_for("parallel_n64", VideoBackendKind::Vulkan, &emulation);
+        let accuracy = variables
+            .get("parallel-n64-gfxplugin-accuracy")
+            .expect("parallel n64 accuracy override");
+        let vi_aa = variables
+            .get("parallel-n64-parallel-rdp-vi-aa")
+            .expect("parallel n64 vi-aa override");
+
+        assert_eq!(accuracy.to_str().expect("utf8"), "low");
+        assert_eq!(vi_aa.to_str().expect("utf8"), "disabled");
     }
 
     #[test]

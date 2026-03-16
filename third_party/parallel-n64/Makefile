@@ -6,6 +6,7 @@ FORCE_GLES=0
 HAVE_OPENGL=1
 HAVE_VULKAN_DEBUG=0
 ALLOW_OSX_OPENGL=0
+ALLOW_OSX_PARALLEL=0
 GLIDEN64=0
 GLIDEN64CORE=0
 GLIDEN64ES=0
@@ -322,8 +323,20 @@ else ifneq (,$(findstring osx,$(platform)))
       GL_LIB := -framework OpenGL
    endif
 
+   # ParaLLEl Vulkan is disabled by default on macOS. Allow explicit opt-in for local testing.
+   ifeq ($(ALLOW_OSX_PARALLEL),1)
+      HAVE_PARALLEL=1
+      HAVE_OPENGL=0
+      GL_LIB :=
+      # Apple Silicon: keep the paraLLEl Vulkan path enabled, but avoid asm/dynarec
+      # objects that currently fail to link in this macOS build.
+      ifeq ($(shell uname -p),arm)
+         WITH_DYNAREC =
+         HAVE_NEON=0
+         CPUFLAGS += -DNO_ASM -DDONT_WANT_ARM_OPTIMIZATIONS -DARM_FIX
+      endif
    # OpenGL is disabled by default on macOS, but allow an explicit opt-in for local testing.
-   ifeq ($(ALLOW_OSX_OPENGL),1)
+   else ifeq ($(ALLOW_OSX_OPENGL),1)
       CFLAGS += -DDONT_WANT_ARM_OPTIMIZATIONS
       CPUFLAGS += -DARM_FIX
       HAVE_NEON=0

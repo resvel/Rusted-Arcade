@@ -223,8 +223,23 @@ Core binary extension is platform-specific (`.so` on Linux, `.dll` on Windows, `
 - The native app does not implement account/admin flows; it uses one implicit local profile.
 - Hardware-render cores are still limited in the embedded host.
 - macOS is currently aimed at the safe boot path first:
+  - Default renderer is `glow` (OpenGL) on macOS.
   - OpenGL-backed frontend integration and software frame delivery are the intended first working modes.
-  - Vulkan/MoltenVK is not implemented yet.
+  - Vulkan/MoltenVK in the embedded host is experimental and requires Vulkan-capable core binaries.
+  - `wgpu`/Metal is opt-in experimental only: set `ARCADE_MACOS_RENDERER=wgpu` (or `metal`) to run eframe through `wgpu` on macOS (`WGPU_BACKEND=metal` is auto-set if absent).
+  - `parallel_n64` defaults to the Vulkan backend on macOS.
+  - This Vulkan experiment requires a working Vulkan loader + MoltenVK installation on macOS.
+  - Recommended install path: `brew install vulkan-loader molten-vk vulkan-tools` (loader path can be overridden with `ARCADE_VULKAN_LOADER=/absolute/path/to/libMoltenVK.dylib`).
+  - Set `ARCADE_MACOS_EXPERIMENTAL_VULKAN=0` to force `parallel_n64` back to the OpenGL path.
+  - macOS `parallel_n64` Vulkan defaults are tuned for headroom: `gfxplugin-accuracy=high` at `1x` upscaling, `medium` above `1x`, and ParaLLEl VI extras disabled (`vi-aa`, `vi-bilinear`, `dither-filter`, `divot-filter`, `gamma-dither`).
+  - Settings now include `Parallel Preset` for N64 `parallel_n64`:
+    - `balanced` (default): current headroom defaults.
+    - `performance`: more aggressive quality reduction (`gfxplugin-accuracy=medium` at `1x`, `low` above `1x`) while keeping ParaLLEl VI extras disabled.
+  - Fallback sync behavior: per-frame Vulkan idle waits are disabled by default for better performance/pacing in fallback readback mode.
+  - Override fallback sync with `ARCADE_VULKAN_FORCE_FALLBACK_IDLE=1` (enable conservative waits) or `=0` (force disable).
+  - Build and install a Vulkan-capable `parallel_n64` core with `./scripts/build_parallel_n64_macos_vulkan.sh`.
+  - Current Apple Silicon caveat: this build path disables dynarec/NEON asm in `parallel_n64` to keep the paraLLEl Vulkan experiment linkable.
+  - Current caveat: hardware-render cores in the host still rely on OpenGL frontend integration, so this mode can force software fallback for those cores.
 - `parallel_n64` is the current exception:
   - Linux/X11 uses the high-performance external Vulkan presentation window path.
   - Windows defaults to the working software fallback with `parallel-n64-gfxplugin=angrylion`.

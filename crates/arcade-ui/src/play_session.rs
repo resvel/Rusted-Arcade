@@ -15,7 +15,10 @@ impl NativeArcadeUiApp {
         const MAX_STALE_FRAMES: u32 = 3;
         const ARCADE_MAX_CATCH_UP_FRAMES: u32 = 2;
         const ARCADE_MAX_FRAME_BUDGET: f64 = 2.5;
-        const ARCADE_MAX_REPAINT_WAIT: std::time::Duration = std::time::Duration::from_millis(1);
+        const LOW_LATENCY_MAX_REPAINT_WAIT: std::time::Duration =
+            std::time::Duration::from_millis(1);
+        const PARALLEL_N64_MAX_REPAINT_WAIT: std::time::Duration =
+            std::time::Duration::from_millis(1);
 
         if !self.host.is_loaded() {
             return;
@@ -58,13 +61,15 @@ impl NativeArcadeUiApp {
                 let wait = std::time::Duration::from_secs_f64(
                     frame_interval.as_secs_f64() * (1.0 - frame_budget),
                 );
-                ctx.request_repaint_after(wait);
+                // macOS timer jitter can miss target cadence for Vulkan-backed N64;
+                // keep wake-ups short and let frame budget control pacing.
+                ctx.request_repaint_after(wait.min(PARALLEL_N64_MAX_REPAINT_WAIT));
                 return;
             }
         } else if elapsed < frame_interval {
             if arcade_low_latency_pacing {
-                // On macOS this avoids timer jitter that can land ARCADE cores in a ~30-40 Hz
-                // cadence despite low frame work time.
+                // Immediate repaint avoids timer jitter that can degrade effective cadence
+                // despite low frame work time.
                 ctx.request_repaint();
             } else {
                 ctx.request_repaint_after(frame_interval - elapsed);
@@ -163,7 +168,9 @@ impl NativeArcadeUiApp {
             let post_tick_elapsed =
                 std::time::Instant::now().duration_since(self.state.play.last_frame_run_at);
             if post_tick_elapsed < frame_interval {
-                ctx.request_repaint_after(frame_interval - post_tick_elapsed);
+                ctx.request_repaint_after(
+                    (frame_interval - post_tick_elapsed).min(PARALLEL_N64_MAX_REPAINT_WAIT),
+                );
             } else {
                 self.state.play.catch_up_frame_debt = 0.0;
                 ctx.request_repaint();
@@ -174,7 +181,7 @@ impl NativeArcadeUiApp {
                 std::time::Instant::now().duration_since(self.state.play.last_frame_run_at);
             if post_tick_elapsed < target_interval {
                 let remaining = target_interval - post_tick_elapsed;
-                ctx.request_repaint_after(remaining.min(ARCADE_MAX_REPAINT_WAIT));
+                ctx.request_repaint_after(remaining.min(LOW_LATENCY_MAX_REPAINT_WAIT));
             } else {
                 ctx.request_repaint();
             }

@@ -323,6 +323,7 @@ fn describe_display_handle_kind(handle: RawDisplayHandle) -> &'static str {
 
 fn frontend_capabilities(frame: &eframe::Frame) -> FrontendCapabilities {
     let glow_context = frame.gl().cloned();
+    let wgpu_render_state = frame.wgpu_render_state();
     let window_handle_kind = frame
         .window_handle()
         .ok()
@@ -336,6 +337,8 @@ fn frontend_capabilities(frame: &eframe::Frame) -> FrontendCapabilities {
         renderer_name: Some(
             if glow_context.is_some() {
                 "eframe_glow"
+            } else if wgpu_render_state.is_some() {
+                "eframe_wgpu"
             } else {
                 "eframe_non_gl"
             }

@@ -22,6 +22,8 @@ pub struct N64EmulationConfig {
     pub preferred_core: N64PreferredCore,
     #[serde(default)]
     pub parallel_rdp_upscaling: N64ParallelRdpUpscaling,
+    #[serde(default)]
+    pub parallel_profile: N64ParallelProfile,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq)]
@@ -61,6 +63,23 @@ impl N64ParallelRdpUpscaling {
             Self::X2 => "2x",
             Self::X4 => "4x",
             Self::X8 => "8x",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum N64ParallelProfile {
+    #[default]
+    Balanced,
+    Performance,
+}
+
+impl N64ParallelProfile {
+    pub fn as_config_value(self) -> &'static str {
+        match self {
+            Self::Balanced => "balanced",
+            Self::Performance => "performance",
         }
     }
 }
@@ -418,6 +437,10 @@ mod tests {
             config.emulation.n64.parallel_rdp_upscaling.as_core_value(),
             "1x"
         );
+        assert_eq!(
+            config.emulation.n64.parallel_profile.as_config_value(),
+            "balanced"
+        );
         assert_eq!(config.management.cover_scraping.default_limit, 200);
         assert_eq!(config.management.cover_scraping.default_delay_ms, 150);
         assert_eq!(config.management.cover_scraping.platform_ids.gba, vec![5]);
@@ -450,6 +473,10 @@ bios_root = "/tmp/bios"
             config.emulation.n64.parallel_rdp_upscaling.as_core_value(),
             "1x"
         );
+        assert_eq!(
+            config.emulation.n64.parallel_profile.as_config_value(),
+            "balanced"
+        );
         assert_eq!(config.management.cover_scraping.default_limit, 200);
     }
 
@@ -474,6 +501,10 @@ parallel_rdp_upscaling = "2x"
             config.emulation.n64.parallel_rdp_upscaling.as_core_value(),
             "2x"
         );
+        assert_eq!(
+            config.emulation.n64.parallel_profile.as_config_value(),
+            "balanced"
+        );
     }
 
     #[test]
@@ -496,6 +527,33 @@ parallel_rdp_upscaling = "4x"
         assert_eq!(
             config.emulation.n64.parallel_rdp_upscaling.as_core_value(),
             "4x"
+        );
+        assert_eq!(
+            config.emulation.n64.parallel_profile.as_config_value(),
+            "balanced"
+        );
+    }
+
+    #[test]
+    fn app_config_deserializes_parallel_profile_override() {
+        let config: AppConfig = toml::from_str(
+            r#"
+[paths]
+rom_root = "/tmp/roms"
+db_path = "/tmp/arcade.db"
+save_state_root = "/tmp/save-states"
+core_root = "/tmp/cores"
+bios_root = "/tmp/bios"
+
+[emulation.n64]
+parallel_profile = "performance"
+"#,
+        )
+        .expect("config");
+
+        assert_eq!(
+            config.emulation.n64.parallel_profile.as_config_value(),
+            "performance"
         );
     }
 

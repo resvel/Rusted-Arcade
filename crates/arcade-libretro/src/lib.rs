@@ -1387,6 +1387,17 @@ impl LibretroHost {
                 core_name, selection.chosen, selection.fallbacks, requirements.requires_hw_render
             );
         }
+        if vulkan_debug_enabled() {
+            info!(
+                target: "arcade_libretro::vulkan_debug",
+                "backend selection core={} chosen={:?} fallbacks={:?} requires_hw_render={} macos_experimental_vulkan={}",
+                core_name,
+                selection.chosen,
+                selection.fallbacks,
+                requirements.requires_hw_render,
+                video::macos_parallel_n64_vulkan_enabled()
+            );
+        }
         apply_core_runtime_env_defaults(core_name, selection.chosen);
         configure_environment_context(
             &self.runtime,
@@ -2802,6 +2813,16 @@ fn vulkan_debug_enabled() -> bool {
     std::env::var_os("ARCADE_VULKAN_DEBUG").is_some()
 }
 
+fn vulkan_force_fallback_idle() -> bool {
+    match std::env::var("ARCADE_VULKAN_FORCE_FALLBACK_IDLE") {
+        Ok(value) => {
+            let normalized = value.trim().to_ascii_lowercase();
+            !matches!(normalized.as_str(), "0" | "false" | "off" | "no")
+        }
+        Err(_) => false,
+    }
+}
+
 fn ensure_external_vulkan_window_for(
     runtime: &HostRuntime,
 ) -> Option<ExternalVulkanWindowDescriptor> {
@@ -2925,6 +2946,11 @@ fn build_vulkan_instance_extensions(
         &available_names,
         ash::vk::KHR_EXTERNAL_FENCE_CAPABILITIES_NAME,
     );
+    push_extension_if_available(
+        &mut enabled_extensions,
+        &available_names,
+        ash::vk::KHR_PORTABILITY_ENUMERATION_NAME,
+    );
     if vulkan_debug_enabled() {
         push_extension_if_available(
             &mut enabled_extensions,
@@ -2948,6 +2974,94 @@ fn build_vulkan_instance_extensions(
         .collect())
 }
 
+#[cfg(target_os = "macos")]
+fn macos_vulkan_loader_candidates() -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+
+    if let Some(path) = std::env::var_os("ARCADE_VULKAN_LOADER") {
+        candidates.push(PathBuf::from(path));
+    }
+    if let Some(vulkan_sdk) = std::env::var_os("VULKAN_SDK") {
+        let sdk = PathBuf::from(vulkan_sdk);
+        candidates.push(sdk.join("lib").join("libvulkan.dylib"));
+        candidates.push(sdk.join("macOS").join("lib").join("libvulkan.dylib"));
+        candidates.push(sdk.join("macOS").join("lib").join("libMoltenVK.dylib"));
+    }
+    for path in [
+        "/opt/homebrew/lib/libvulkan.dylib",
+        "/opt/homebrew/lib/libvulkan.1.dylib",
+        "/opt/homebrew/lib/libMoltenVK.dylib",
+        "/usr/local/lib/libvulkan.dylib",
+        "/usr/local/lib/libvulkan.1.dylib",
+        "/usr/local/lib/libMoltenVK.dylib",
+        "/usr/local/lib/libMoltenVK_all.dylib",
+    ] {
+        candidates.push(PathBuf::from(path));
+    }
+
+    let mut unique = Vec::new();
+    let mut seen = HashSet::new();
+    for candidate in candidates {
+        if seen.insert(candidate.clone()) {
+            unique.push(candidate);
+        }
+    }
+    unique
+}
+
+fn load_vulkan_entry() -> std::result::Result<ash::Entry, String> {
+    #[cfg(target_os = "macos")]
+    {
+        let mut attempted_paths = vec![PathBuf::from("libvulkan.dylib")];
+        let mut last_error = match unsafe { ash::Entry::load() } {
+            Ok(entry) => return Ok(entry),
+            Err(err) => err.to_string(),
+        };
+
+        for candidate in macos_vulkan_loader_candidates() {
+            if attempted_paths.iter().any(|existing| existing == &candidate) {
+                continue;
+            }
+            attempted_paths.push(candidate.clone());
+            match unsafe { ash::Entry::load_from(&candidate) } {
+                Ok(entry) => {
+                    if vulkan_debug_enabled() {
+                        info!(
+                            target: "arcade_libretro::vulkan_debug",
+                            "loaded Vulkan entry points from {}",
+                            candidate.display()
+                        );
+                    }
+                    return Ok(entry);
+                }
+                Err(err) => last_error = err.to_string(),
+            }
+        }
+
+        let attempted = attempted_paths
+            .iter()
+            .map(|path| path.display().to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let mut message = format!(
+            "failed to load Vulkan entry points on macOS. Tried: {attempted}. \
+Install Vulkan loader + MoltenVK (Homebrew: `brew install vulkan-loader molten-vk`) and ensure \
+`libvulkan.dylib` or `libMoltenVK.dylib` is discoverable \
+(for example `DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib:/usr/local/lib`)."
+        );
+        if vulkan_debug_enabled() {
+            message.push_str(&format!(" Last loader error: {last_error}"));
+        }
+        Err(message)
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        unsafe { ash::Entry::load() }
+            .map_err(|err| format!("failed to load Vulkan entry points: {err}"))
+    }
+}
+
 impl VulkanInterfaceState {
     fn create(
         runtime: &HostRuntime,
@@ -2959,8 +3073,7 @@ impl VulkanInterfaceState {
         let engine_name = CString::new("arcade-libretro")
             .map_err(|_| String::from("failed to build Vulkan engine name"))?;
 
-        let entry = unsafe { ash::Entry::load() }
-            .map_err(|err| format!("failed to load Vulkan entry points: {err}"))?;
+        let entry = load_vulkan_entry()?;
 
         let default_app_info = vk::ApplicationInfo::default()
             .application_name(&app_name)
@@ -2988,15 +3101,78 @@ impl VulkanInterfaceState {
                 app_info.api_version,
                 external_window.is_some()
             );
+            let loader_version = unsafe { entry.try_enumerate_instance_version() }
+                .ok()
+                .flatten()
+                .unwrap_or(vk::API_VERSION_1_0);
+            info!(
+                target: "arcade_libretro::vulkan_debug",
+                "Vulkan loader instance version=0x{:x}",
+                loader_version
+            );
         }
         let instance_extensions =
             build_vulkan_instance_extensions(&entry, external_window.is_some())?;
-        let create_info = vk::InstanceCreateInfo::default()
+        let portability_enumeration_enabled = instance_extensions
+            .iter()
+            .any(|&name| name == ash::vk::KHR_PORTABILITY_ENUMERATION_NAME.as_ptr());
+        let mut create_info = vk::InstanceCreateInfo::default()
             .application_info(app_info)
             .enabled_extension_names(&instance_extensions);
+        #[cfg(target_os = "macos")]
+        if portability_enumeration_enabled {
+            create_info =
+                create_info.flags(vk::InstanceCreateFlags::ENUMERATE_PORTABILITY_KHR);
+        }
 
-        let instance = unsafe { entry.create_instance(&create_info, None) }
-            .map_err(|err| format!("failed to create Vulkan instance: {err:?}"))?;
+        let instance = match unsafe { entry.create_instance(&create_info, None) } {
+            Ok(instance) => instance,
+            Err(err) => {
+                #[cfg(target_os = "macos")]
+                {
+                    // MoltenVK setups can report incompatible driver for higher API versions
+                    // requested by cores; retry with Vulkan 1.0 to maximize compatibility.
+                    if err == vk::Result::ERROR_INCOMPATIBLE_DRIVER
+                        && app_info.api_version > vk::API_VERSION_1_0
+                    {
+                        warn!(
+                            "Vulkan instance creation failed with {:?} at api_version=0x{:x}; retrying with Vulkan 1.0",
+                            err,
+                            app_info.api_version
+                        );
+                        let fallback_app_info =
+                            default_app_info.api_version(vk::API_VERSION_1_0);
+                        let mut fallback_create_info = vk::InstanceCreateInfo::default()
+                            .application_info(&fallback_app_info)
+                            .enabled_extension_names(&instance_extensions);
+                        if portability_enumeration_enabled {
+                            fallback_create_info = fallback_create_info
+                                .flags(vk::InstanceCreateFlags::ENUMERATE_PORTABILITY_KHR);
+                        }
+                        if let Ok(instance) =
+                            unsafe { entry.create_instance(&fallback_create_info, None) }
+                        {
+                            if vulkan_debug_enabled() {
+                                info!(
+                                    target: "arcade_libretro::vulkan_debug",
+                                    "Vulkan instance retry succeeded with api_version=0x{:x}",
+                                    vk::API_VERSION_1_0
+                                );
+                            }
+                            instance
+                        } else {
+                            return Err(format!("failed to create Vulkan instance: {err:?}"));
+                        }
+                    } else {
+                        return Err(format!("failed to create Vulkan instance: {err:?}"));
+                    }
+                }
+                #[cfg(not(target_os = "macos"))]
+                {
+                    return Err(format!("failed to create Vulkan instance: {err:?}"));
+                }
+            }
+        };
 
         let surface = external_window
             .map(|external_window| {
@@ -4844,8 +5020,7 @@ fn probe_basic_vulkan_bootstrap() -> std::result::Result<String, String> {
     let engine_name = CString::new("arcade-libretro")
         .map_err(|_| String::from("failed to build Vulkan engine name"))?;
 
-    let entry = unsafe { ash::Entry::load() }
-        .map_err(|err| format!("failed to load Vulkan entry points: {err}"))?;
+    let entry = load_vulkan_entry()?;
 
     let app_info = vk::ApplicationInfo::default()
         .application_name(&app_name)
@@ -5049,22 +5224,26 @@ unsafe extern "C" fn retro_vulkan_wait_sync_index(handle: *mut c_void) {
     };
     let Some(present) = vulkan.present.as_ref() else {
         let sync_index = vulkan.sync_index;
-        let wait_result = wait_for_vulkan_device_idle(vulkan);
-        if let Err(err) = wait_result {
-            warn!(
-                "libretro hw-render: wait_sync_index failed waiting for fallback queue idle: {err}"
-            );
-            record_runtime_load_error(format!(
-                "wait_sync_index failed waiting for fallback queue idle: {err}"
-            ));
-        } else if vulkan_debug_enabled() {
+        if vulkan_force_fallback_idle() {
+            let wait_result = wait_for_vulkan_device_idle(vulkan);
+            if let Err(err) = wait_result {
+                warn!(
+                    "libretro hw-render: wait_sync_index failed waiting for fallback queue idle: {err}"
+                );
+                record_runtime_load_error(format!(
+                    "wait_sync_index failed waiting for fallback queue idle: {err}"
+                ));
+            }
+        }
+        if vulkan_debug_enabled() {
             let debug_step = VULKAN_DEBUG_STEP_COUNTER.load(Ordering::Relaxed);
             if debug_step < 16 {
                 info!(
                     target: "arcade_libretro::vulkan_debug",
-                    "wait_sync_index completed fallback step={} sync_index={}",
+                    "wait_sync_index completed fallback step={} sync_index={} force_idle={}",
                     debug_step,
-                    sync_index
+                    sync_index,
+                    vulkan_force_fallback_idle()
                 );
             }
         }
@@ -5433,7 +5612,9 @@ fn take_vulkan_render_frame(
     if present_vulkan_image(vulkan, frame_size, external_window)? {
         return Ok(None);
     }
-    wait_for_vulkan_device_idle(vulkan)?;
+    if vulkan_force_fallback_idle() {
+        wait_for_vulkan_device_idle(vulkan)?;
+    }
     ensure_vulkan_readback_resources(vulkan, required_size)?;
 
     let Some(mut image) = take_current_pending_vulkan_image(vulkan) else {
@@ -5466,7 +5647,7 @@ fn take_vulkan_render_frame(
     let image_layout = image.image_layout;
     let image_subresource_range = image.subresource_range;
     let image_subresource_layers = image.subresource_layers;
-    let wait_semaphores = image.semaphores.clone();
+    let wait_semaphores = std::mem::take(&mut image.semaphores);
     let signal_semaphore = image.signal_semaphore.take();
     let src_queue_family_index = if image.src_queue_family == u32::MAX {
         vk::QUEUE_FAMILY_IGNORED
@@ -5589,17 +5770,18 @@ fn take_vulkan_render_frame(
     }
     drop(state);
 
-    if needs_bgra_swizzle {
-        for pixel in pixels.chunks_exact_mut(4) {
-            pixel.swap(0, 2);
-        }
-    }
-
     // Vulkan readback frames are displayed as standalone game images in the UI. Some cores
     // leave alpha undefined or zero, which makes the texture effectively invisible even though
     // RGB data is valid.
-    for pixel in pixels.chunks_exact_mut(4) {
-        pixel[3] = 255;
+    if needs_bgra_swizzle {
+        for pixel in pixels.chunks_exact_mut(4) {
+            pixel.swap(0, 2);
+            pixel[3] = 255;
+        }
+    } else {
+        for pixel in pixels.chunks_exact_mut(4) {
+            pixel[3] = 255;
+        }
     }
 
     if pending.bottom_left_origin {
@@ -5608,9 +5790,10 @@ fn take_vulkan_render_frame(
         for row in 0..half_height {
             let top = row * row_len;
             let bottom = (frame_size.1 as usize - 1 - row) * row_len;
-            for offset in 0..row_len {
-                pixels.swap(top + offset, bottom + offset);
-            }
+            let (head, tail) = pixels.split_at_mut(bottom);
+            let top_row = &mut head[top..top + row_len];
+            let bottom_row = &mut tail[..row_len];
+            top_row.swap_with_slice(bottom_row);
         }
     }
 
@@ -5693,24 +5876,27 @@ fn wait_for_unsignaled_vulkan_image(runtime: &HostRuntime) -> Result<()> {
                     if let Some(vulkan) = state.vulkan.as_ref() {
                         info!(
                             target: "arcade_libretro::vulkan_debug",
-                            "timed out waiting for core wait_sync_index; falling back to device idle sync_index={} generation={}",
+                            "timed out waiting for core wait_sync_index; proceeding without forced device idle sync_index={} generation={} force_idle={}",
                             vulkan.sync_index,
-                            vulkan.wait_sync_generation
+                            vulkan.wait_sync_generation,
+                            vulkan_force_fallback_idle()
                         );
                     }
                 }
                 let mut state = runtime.hw_render_state.lock();
                 if let Some(vulkan) = state.vulkan.as_mut() {
                     vulkan.waiting_for_core_wait_sync = false;
-                    if vulkan_debug_enabled()
-                        && VULKAN_READBACK_DEBUG_COUNTER.load(Ordering::Relaxed) < 16
-                    {
-                        info!(
-                            target: "arcade_libretro::vulkan_debug",
-                            "forcing Vulkan device idle for unsignaled image readiness"
-                        );
+                    if vulkan_force_fallback_idle() {
+                        if vulkan_debug_enabled()
+                            && VULKAN_READBACK_DEBUG_COUNTER.load(Ordering::Relaxed) < 16
+                        {
+                            info!(
+                                target: "arcade_libretro::vulkan_debug",
+                                "forcing Vulkan device idle for unsignaled image readiness"
+                            );
+                        }
+                        return wait_for_vulkan_device_idle(vulkan);
                     }
-                    return wait_for_vulkan_device_idle(vulkan);
                 }
                 return Ok(());
             }
@@ -5722,13 +5908,17 @@ fn wait_for_unsignaled_vulkan_image(runtime: &HostRuntime) -> Result<()> {
             return Ok(());
         }
 
-        if vulkan_debug_enabled() && VULKAN_READBACK_DEBUG_COUNTER.load(Ordering::Relaxed) < 16 {
-            info!(
-                target: "arcade_libretro::vulkan_debug",
-                "forcing Vulkan device idle for unsignaled image readiness"
-            );
+        if vulkan_force_fallback_idle() {
+            if vulkan_debug_enabled() && VULKAN_READBACK_DEBUG_COUNTER.load(Ordering::Relaxed) < 16
+            {
+                info!(
+                    target: "arcade_libretro::vulkan_debug",
+                    "forcing Vulkan device idle for unsignaled image readiness"
+                );
+            }
+            return wait_for_vulkan_device_idle(vulkan);
         }
-        return wait_for_vulkan_device_idle(vulkan);
+        return Ok(());
     }
 }
 
@@ -6050,6 +6240,25 @@ fn configure_environment_context(
         context.requested_hw_context_type = None;
         context.last_load_error = None;
         context.last_negotiation_interface = None;
+        if vulkan_debug_enabled() && core_name.eq_ignore_ascii_case("parallel_n64") {
+            let gfx = context
+                .variables
+                .get("parallel-n64-gfxplugin")
+                .and_then(|value| value.to_str().ok())
+                .unwrap_or("<unset>");
+            let cpucore = context
+                .variables
+                .get("parallel-n64-cpucore")
+                .and_then(|value| value.to_str().ok())
+                .unwrap_or("<unset>");
+            info!(
+                target: "arcade_libretro::vulkan_debug",
+                "configured parallel_n64 core vars backend={:?} parallel-n64-gfxplugin={} parallel-n64-cpucore={}",
+                backend,
+                gfx,
+                cpucore
+            );
+        }
     }
     runtime.hw_render_state.lock().vulkan_negotiation = None;
 }
@@ -6209,9 +6418,29 @@ unsafe extern "C" fn retro_environment(cmd: u32, data: *mut c_void) -> bool {
             let callback = unsafe { &mut *(data as *mut RetroHwRenderCallback) };
             let runtime = active_runtime();
             if let Some(runtime) = runtime.as_ref() {
+                let chosen_backend = runtime.video_coordinator.lock().current_backend_kind();
                 let mut context = runtime.environment_context.lock();
                 context.requested_hw_render = true;
                 context.requested_hw_context_type = Some(callback.context_type);
+                if vulkan_debug_enabled() {
+                    info!(
+                        target: "arcade_libretro::vulkan_debug",
+                        "SET_HW_RENDER requested context_type={} ({}) chosen_backend={:?}",
+                        callback.context_type,
+                        hw_context_type_name(callback.context_type),
+                        chosen_backend
+                    );
+                }
+                if chosen_backend == VideoBackendKind::Vulkan
+                    && callback.context_type != RETRO_HW_CONTEXT_VULKAN
+                {
+                    warn!(
+                        "libretro hw-render: core requested {} ({}) while host selected Vulkan; \
+this core binary is likely built without Vulkan hardware-render support",
+                        callback.context_type,
+                        hw_context_type_name(callback.context_type)
+                    );
+                }
             }
             let Some(runtime) = active_runtime() else {
                 return false;
@@ -6402,6 +6631,19 @@ unsafe extern "C" fn retro_environment(cmd: u32, data: *mut c_void) -> bool {
                 .get(key)
                 .map(|value| value.as_ptr())
                 .unwrap_or(std::ptr::null());
+            if vulkan_debug_enabled() && key.starts_with("parallel-n64-") {
+                let printable = context
+                    .variables
+                    .get(key)
+                    .and_then(|value| value.to_str().ok())
+                    .unwrap_or("<unset>");
+                info!(
+                    target: "arcade_libretro::vulkan_debug",
+                    "GET_VARIABLE key={} value={}",
+                    key,
+                    printable
+                );
+            }
             if std::env::var_os("LIBRETRO_TRACE_VARIABLES").is_some()
                 && key.starts_with("parallel-n64-")
             {
@@ -6570,6 +6812,14 @@ unsafe extern "C" fn retro_environment(cmd: u32, data: *mut c_void) -> bool {
                 return false;
             };
             let mut context = runtime.environment_context.lock();
+            if vulkan_debug_enabled() && key.starts_with("parallel-n64-") {
+                info!(
+                    target: "arcade_libretro::vulkan_debug",
+                    "SET_VARIABLE key={} value={}",
+                    key,
+                    value.to_str().unwrap_or("<invalid>")
+                );
+            }
             if std::env::var_os("LIBRETRO_TRACE_VARIABLES").is_some()
                 && key.starts_with("parallel-n64-")
             {

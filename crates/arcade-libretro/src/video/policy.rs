@@ -24,6 +24,7 @@ pub(super) struct BackendPolicyInput<'a> {
     pub frontend_capabilities: &'a FrontendCapabilities,
     pub explicit_parallel_n64_fallback: bool,
     pub windows_external_vulkan_present: bool,
+    pub macos_experimental_vulkan: bool,
 }
 
 pub(super) fn current_host_platform() -> HostPlatform {
@@ -79,6 +80,11 @@ fn select_parallel_n64_backend(input: BackendPolicyInput<'_>) -> BackendSelectio
     }
 
     match input.host_platform {
+        HostPlatform::MacOs if input.macos_experimental_vulkan => BackendSelection {
+            chosen: VideoBackendKind::Vulkan,
+            fallbacks: vec![VideoBackendKind::Software],
+            allows_external_present: false,
+        },
         HostPlatform::MacOs if input.frontend_capabilities.supports_gl_backend() => {
             BackendSelection {
                 chosen: VideoBackendKind::OpenGl,
@@ -145,6 +151,7 @@ mod tests {
             frontend_capabilities: &frontend(true, true),
             explicit_parallel_n64_fallback: false,
             windows_external_vulkan_present: false,
+            macos_experimental_vulkan: false,
         });
 
         assert_eq!(selection.chosen, VideoBackendKind::Vulkan);
@@ -163,6 +170,7 @@ mod tests {
             frontend_capabilities: &capabilities,
             explicit_parallel_n64_fallback: false,
             windows_external_vulkan_present: false,
+            macos_experimental_vulkan: false,
         });
         let enabled = select_backend(BackendPolicyInput {
             windows_external_vulkan_present: true,
@@ -174,6 +182,7 @@ mod tests {
                 frontend_capabilities: &capabilities,
                 explicit_parallel_n64_fallback: false,
                 windows_external_vulkan_present: false,
+                macos_experimental_vulkan: false,
             }
         });
 
@@ -191,6 +200,7 @@ mod tests {
             frontend_capabilities: &frontend(true, false),
             explicit_parallel_n64_fallback: false,
             windows_external_vulkan_present: false,
+            macos_experimental_vulkan: false,
         });
 
         assert_eq!(selection.chosen, VideoBackendKind::OpenGl);
@@ -207,6 +217,7 @@ mod tests {
             frontend_capabilities: &frontend(false, false),
             explicit_parallel_n64_fallback: false,
             windows_external_vulkan_present: false,
+            macos_experimental_vulkan: false,
         });
 
         assert_eq!(selection.chosen, VideoBackendKind::Software);
@@ -222,6 +233,7 @@ mod tests {
             frontend_capabilities: &frontend(true, false),
             explicit_parallel_n64_fallback: false,
             windows_external_vulkan_present: false,
+            macos_experimental_vulkan: false,
         });
 
         assert_eq!(selection.chosen, VideoBackendKind::OpenGl);
@@ -238,9 +250,28 @@ mod tests {
             frontend_capabilities: &frontend(true, false),
             explicit_parallel_n64_fallback: false,
             windows_external_vulkan_present: false,
+            macos_experimental_vulkan: false,
         });
 
         assert_eq!(selection.chosen, VideoBackendKind::OpenGl);
+        assert_eq!(selection.fallbacks, vec![VideoBackendKind::Software]);
+        assert!(!selection.allows_external_present);
+    }
+
+    #[test]
+    fn macos_parallel_n64_can_opt_into_vulkan_experiment() {
+        let selection = select_backend(BackendPolicyInput {
+            host_platform: HostPlatform::MacOs,
+            core_name: "parallel_n64",
+            requires_hw_render: true,
+            requested_hw_context_type: None,
+            frontend_capabilities: &frontend(false, true),
+            explicit_parallel_n64_fallback: false,
+            windows_external_vulkan_present: false,
+            macos_experimental_vulkan: true,
+        });
+
+        assert_eq!(selection.chosen, VideoBackendKind::Vulkan);
         assert_eq!(selection.fallbacks, vec![VideoBackendKind::Software]);
         assert!(!selection.allows_external_present);
     }

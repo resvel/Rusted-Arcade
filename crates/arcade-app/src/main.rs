@@ -71,11 +71,51 @@ fn load_app_icon() -> Result<egui::IconData> {
     })
 }
 
+fn select_native_renderer() -> eframe::Renderer {
+    #[cfg(target_os = "macos")]
+    {
+        let requested = std::env::var("ARCADE_MACOS_RENDERER")
+            .ok()
+            .map(|value| value.trim().to_ascii_lowercase());
+        match requested.as_deref() {
+            Some("wgpu") | Some("metal") => {
+                if std::env::var_os("WGPU_BACKEND").is_none() {
+                    std::env::set_var("WGPU_BACKEND", "metal");
+                }
+                info!("Using macOS experimental renderer: wgpu (Metal)");
+                eframe::Renderer::Wgpu
+            }
+            Some("glow") | Some("opengl") => {
+                info!("Using macOS renderer override: glow (OpenGL)");
+                eframe::Renderer::Glow
+            }
+            None | Some("") => {
+                info!(
+                    "Using macOS default renderer: glow (OpenGL). Set ARCADE_MACOS_RENDERER=wgpu for the experimental Metal path."
+                );
+                eframe::Renderer::Glow
+            }
+            Some(other) => {
+                info!(
+                    "Unknown ARCADE_MACOS_RENDERER={other}; using macOS default glow (OpenGL). Valid values: glow, wgpu"
+                );
+                eframe::Renderer::Glow
+            }
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        eframe::Renderer::Glow
+    }
+}
+
 fn main() -> Result<()> {
     init_tracing();
 
+    let renderer = select_native_renderer();
+
     #[cfg(target_os = "macos")]
-    if std::env::var_os("ARCADE_MACOS_GL_PROFILE").is_none() {
+    if renderer == eframe::Renderer::Glow && std::env::var_os("ARCADE_MACOS_GL_PROFILE").is_none() {
         std::env::set_var("ARCADE_MACOS_GL_PROFILE", "legacy");
     }
 
@@ -103,7 +143,7 @@ fn main() -> Result<()> {
             .with_inner_size([1440.0, 900.0])
             .with_min_inner_size([1024.0, 720.0])
             .with_icon(load_app_icon().context("failed to load window icon")?),
-        renderer: eframe::Renderer::Glow,
+        renderer,
         depth_buffer: 24,
         stencil_buffer: 8,
         ..Default::default()
