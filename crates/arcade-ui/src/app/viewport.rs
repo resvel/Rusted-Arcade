@@ -3,9 +3,6 @@ use eframe::egui;
 use super::NativeArcadeUiApp;
 
 impl NativeArcadeUiApp {
-    #[cfg(target_os = "linux")]
-    const EXTERNAL_PRESENT_OFFSCREEN_POSITION: egui::Pos2 = egui::pos2(-32_000.0, -32_000.0);
-
     pub(super) fn sync_session_viewport(
         &mut self,
         ctx: &egui::Context,
@@ -13,24 +10,6 @@ impl NativeArcadeUiApp {
         external_present_active: bool,
         external_window_available: bool,
     ) {
-        #[cfg(target_os = "windows")]
-        {
-            let _ = (
-                ctx,
-                session_active,
-                external_present_active,
-                external_window_available,
-            );
-            self.state.play.viewport_enter_stage = 0;
-            self.state.play.viewport_restore_stage = 0;
-            self.state.play.viewport_restore_frames = 0;
-            self.state.play.viewport_immersive_applied = false;
-            self.state.play.restore_maximized = false;
-            self.state.play.viewport_hidden_for_external_present = false;
-            self.state.play.restore_outer_position = None;
-            return;
-        }
-
         let window_level = if session_active && external_window_available {
             egui::viewport::WindowLevel::AlwaysOnBottom
         } else {
@@ -44,7 +23,6 @@ impl NativeArcadeUiApp {
             session_active && external_window_available,
         );
 
-        #[cfg(target_os = "macos")]
         if !session_active
             && (self.state.play.viewport_immersive_applied
                 || self.state.play.viewport_restore_stage != 0
@@ -82,8 +60,6 @@ impl NativeArcadeUiApp {
                 return;
             }
 
-            #[cfg(not(target_os = "macos"))]
-            ctx.send_viewport_cmd(egui::ViewportCommand::Decorations(false));
             ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(true));
             self.state.play.viewport_enter_stage = 0;
             self.state.play.viewport_immersive_applied = true;
@@ -186,33 +162,6 @@ impl NativeArcadeUiApp {
         viewport: &egui::ViewportInfo,
         hide_for_external_present: bool,
     ) {
-        #[cfg(not(target_os = "linux"))]
-        {
-            let _ = (ctx, viewport, hide_for_external_present);
-        }
-
-        #[cfg(target_os = "linux")]
-        {
-            if hide_for_external_present {
-                if !self.state.play.viewport_hidden_for_external_present {
-                    if let Some(outer_rect) = viewport.outer_rect {
-                        self.state.play.restore_outer_position =
-                            Some((outer_rect.min.x, outer_rect.min.y));
-                    }
-                    ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(
-                        Self::EXTERNAL_PRESENT_OFFSCREEN_POSITION,
-                    ));
-                    self.state.play.viewport_hidden_for_external_present = true;
-                }
-                return;
-            }
-
-            if self.state.play.viewport_hidden_for_external_present {
-                if let Some((x, y)) = self.state.play.restore_outer_position.take() {
-                    ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(egui::pos2(x, y)));
-                }
-                self.state.play.viewport_hidden_for_external_present = false;
-            }
-        }
+        let _ = (ctx, viewport, hide_for_external_present);
     }
 }

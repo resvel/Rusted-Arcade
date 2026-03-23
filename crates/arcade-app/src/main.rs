@@ -78,28 +78,25 @@ fn select_native_renderer() -> eframe::Renderer {
             .ok()
             .map(|value| value.trim().to_ascii_lowercase());
         match requested.as_deref() {
-            Some("wgpu") | Some("metal") => {
-                if std::env::var_os("WGPU_BACKEND").is_none() {
-                    std::env::set_var("WGPU_BACKEND", "metal");
-                }
-                info!("Using macOS experimental renderer: wgpu (Metal)");
-                eframe::Renderer::Wgpu
-            }
             Some("glow") | Some("opengl") => {
                 info!("Using macOS renderer override: glow (OpenGL)");
                 eframe::Renderer::Glow
             }
-            None | Some("") => {
-                info!(
-                    "Using macOS default renderer: glow (OpenGL). Set ARCADE_MACOS_RENDERER=wgpu for the experimental Metal path."
-                );
-                eframe::Renderer::Glow
+            None | Some("") | Some("wgpu") | Some("metal") => {
+                if std::env::var_os("WGPU_BACKEND").is_none() {
+                    std::env::set_var("WGPU_BACKEND", "metal");
+                }
+                info!("Using macOS default renderer: wgpu (Metal). Set ARCADE_MACOS_RENDERER=glow to use OpenGL.");
+                eframe::Renderer::Wgpu
             }
             Some(other) => {
+                if std::env::var_os("WGPU_BACKEND").is_none() {
+                    std::env::set_var("WGPU_BACKEND", "metal");
+                }
                 info!(
-                    "Unknown ARCADE_MACOS_RENDERER={other}; using macOS default glow (OpenGL). Valid values: glow, wgpu"
+                    "Unknown ARCADE_MACOS_RENDERER={other}; using macOS default wgpu (Metal). Valid values: wgpu, glow"
                 );
-                eframe::Renderer::Glow
+                eframe::Renderer::Wgpu
             }
         }
     }
@@ -114,10 +111,9 @@ fn main() -> Result<()> {
 
     let renderer = select_native_renderer();
 
-    #[cfg(target_os = "macos")]
-    if renderer == eframe::Renderer::Glow && std::env::var_os("ARCADE_MACOS_GL_PROFILE").is_none() {
-        std::env::set_var("ARCADE_MACOS_GL_PROFILE", "legacy");
-    }
+    // ARCADE_MACOS_GL_PROFILE defaults to the system Core 4.1 profile on macOS,
+    // which is required by GLideN64 (needs Core 3.3+). Set ARCADE_MACOS_GL_PROFILE=legacy
+    // to force the OpenGL 2.1 legacy profile if a specific core requires it.
 
     let config_path = std::env::args().nth(1).map(PathBuf::from);
     let (config, config_path) = AppConfig::load_or_create(config_path.as_deref())?;

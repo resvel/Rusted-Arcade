@@ -163,10 +163,6 @@ impl VideoCoordinator {
             frontend_capabilities: &self.frontend_capabilities,
             explicit_parallel_n64_fallback: std::env::var_os("LIBRETRO_PARALLEL_N64_GL_FALLBACK")
                 .is_some(),
-            windows_external_vulkan_present: std::env::var_os(
-                "ARCADE_WINDOWS_EXTERNAL_VULKAN_PRESENT",
-            )
-            .is_some(),
             macos_experimental_vulkan: macos_parallel_n64_vulkan_enabled(),
         });
         self.session = Some(ResolvedVideoSession {
@@ -217,6 +213,9 @@ impl VideoCoordinator {
 
     pub(super) fn consume_frame(&mut self, runtime: &HostRuntime) -> Result<FrameDelivery> {
         let kind = self.current_backend_kind();
+        if std::env::var_os("LIBRETRO_TRACE_GL_READBACK").is_some() {
+            eprintln!("video_coordinator consume_frame backend={kind:?}");
+        }
         self.with_backend_mut(runtime, kind, |backend| backend.consume_frame(runtime))
     }
 

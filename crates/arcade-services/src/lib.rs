@@ -12,9 +12,8 @@ use arcade_domain::{
     resolve_core, resolve_effective_core_override, resolve_path_from_root, AppConfig,
     CoverScrapePlatformIds, CoverScrapeRunOptions, CoverScrapeSettingsInput, CoverScrapingConfig,
     DetectedPadIdentity, ManageOperationKind, ManageOperationSummary, ManageProgressEvent,
-    ManageRomStatus, ManageScope, ManagementConfig, N64ParallelProfile,
-    N64ParallelRdpUpscaling, N64PreferredCore, PathsConfig, RomCard, RomQuery, SaveLimits,
-    SaveSlotData, SaveSlotSummary,
+    ManageRomStatus, ManageScope, ManagementConfig, N64ParallelProfile, N64ParallelRdpUpscaling,
+    N64PreferredCore, PathsConfig, RomCard, RomQuery, SaveLimits, SaveSlotData, SaveSlotSummary,
     SavedGamepadMappingSummary, StoredGamepadMapping, SYSTEM_DEFAULT_MAPPING_KEY,
 };
 use sha1::{Digest, Sha1};
@@ -1180,8 +1179,8 @@ mod tests {
     use arcade_data::Database;
     use arcade_domain::{
         CanonicalButton, MappingEntry, N64ParallelProfile, N64ParallelRdpUpscaling,
-        N64PreferredCore, PathsConfig, NEXT_SAVE_SLOT_ACTION, QUICK_LOAD_ACTION,
-        QUICK_SAVE_ACTION, SYSTEM_DEFAULT_MAPPING_KEY,
+        N64PreferredCore, PathsConfig, NEXT_SAVE_SLOT_ACTION, QUICK_LOAD_ACTION, QUICK_SAVE_ACTION,
+        SYSTEM_DEFAULT_MAPPING_KEY,
     };
     use chrono::Utc;
     use rusqlite::params;
@@ -1281,7 +1280,7 @@ mod tests {
     fn prepare_launch_uses_configured_n64_preferred_core() {
         let tmp = TempDir::new().expect("tempdir");
         let mut config = make_config(&tmp);
-        config.emulation.n64.preferred_core = N64PreferredCore::ParallelN64;
+        config.emulation.n64.preferred_core = N64PreferredCore::Mupen64plusNext;
         let db = Database::open(&config).expect("open db");
         seed_n64_rom(&config);
         {
@@ -1300,8 +1299,8 @@ mod tests {
 
         let plan = services.prepare_launch("rom-2").expect("prepare launch");
         assert_eq!(plan.system, "N64");
-        assert_eq!(plan.effective_core, Some(String::from("parallel_n64")));
-        assert_eq!(plan.resolved_core_name, "parallel_n64");
+        assert_eq!(plan.effective_core, Some(String::from("mupen64plus_next")));
+        assert_eq!(plan.resolved_core_name, "mupen64plus_next");
     }
 
     #[test]
@@ -1498,7 +1497,7 @@ mod tests {
         let outcome = services
             .update_app_config_settings(
                 updated_paths.clone(),
-                N64PreferredCore::ParallelN64,
+                N64PreferredCore::Mupen64plusNext,
                 N64ParallelRdpUpscaling::X2,
                 N64ParallelProfile::Performance,
             )
@@ -1511,7 +1510,7 @@ mod tests {
         assert_eq!(active.paths.db_path, config.paths.db_path);
         assert_eq!(
             active.emulation.n64.preferred_core,
-            N64PreferredCore::ParallelN64
+            N64PreferredCore::Mupen64plusNext
         );
         assert_eq!(
             active.emulation.n64.parallel_rdp_upscaling,
@@ -1542,7 +1541,7 @@ mod tests {
         let outcome = services
             .update_app_config_settings(
                 config.paths.clone(),
-                N64PreferredCore::ParallelN64,
+                N64PreferredCore::Mupen64plusNext,
                 N64ParallelRdpUpscaling::X4,
                 N64ParallelProfile::Balanced,
             )
@@ -1554,7 +1553,7 @@ mod tests {
         assert_eq!(active.paths.rom_root, config.paths.rom_root);
         assert_eq!(
             active.emulation.n64.preferred_core,
-            N64PreferredCore::ParallelN64
+            N64PreferredCore::Mupen64plusNext
         );
         assert_eq!(
             active.emulation.n64.parallel_rdp_upscaling,

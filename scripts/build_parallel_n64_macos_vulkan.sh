@@ -10,6 +10,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CORE_DIR="$ROOT_DIR/third_party/parallel-n64"
 OUTPUT_DIR="${1:-$ROOT_DIR/target/debug/cores}"
 JOBS="${JOBS:-$(sysctl -n hw.logicalcpu 2>/dev/null || sysctl -n hw.ncpu)}"
+HOST_ARCH="$(uname -m)"
 
 if [[ ! -d "$CORE_DIR" ]]; then
   echo "parallel-n64 source not found at $CORE_DIR" >&2
@@ -18,7 +19,13 @@ fi
 
 echo "Building parallel_n64 with macOS paraLLEl Vulkan enabled..."
 make -C "$CORE_DIR" clean >/dev/null
-make -C "$CORE_DIR" -j"$JOBS" platform=osx ALLOW_OSX_PARALLEL=1 HAVE_PARALLEL=1 HAVE_OPENGL=0
+
+dynarec_args=()
+if [[ "$HOST_ARCH" == "arm64" || "$HOST_ARCH" == "aarch64" ]]; then
+  dynarec_args+=(WITH_DYNAREC=aarch64)
+fi
+
+make -C "$CORE_DIR" -j"$JOBS" platform=osx ALLOW_OSX_PARALLEL=1 HAVE_PARALLEL=1 HAVE_OPENGL=0 "${dynarec_args[@]}"
 
 install -d "$OUTPUT_DIR"
 install -m 0644 "$CORE_DIR/parallel_n64_libretro.dylib" "$OUTPUT_DIR/parallel_n64_libretro.dylib"

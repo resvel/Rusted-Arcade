@@ -6,12 +6,22 @@ pub const SUPPORTED_CORES: &[&str] = &[
     "genesis_plus_gx",
     "gambatte",
     "mgba",
-    "mupen64plus_next",
     "parallel_n64",
+    "mupen64plus_next",
     "fbneo",
     "mame2003",
     "mame2003_plus",
 ];
+
+#[cfg(target_os = "macos")]
+const DEFAULT_N64_CORE: &str = "mupen64plus_next";
+#[cfg(not(target_os = "macos"))]
+const DEFAULT_N64_CORE: &str = "parallel_n64";
+
+#[cfg(target_os = "macos")]
+const ALLOWLIST_N64: &[&str] = &["mupen64plus_next"];
+#[cfg(not(target_os = "macos"))]
+const ALLOWLIST_N64: &[&str] = &["parallel_n64", "mupen64plus_next"];
 
 fn default_core(system: &str) -> &'static str {
     match system {
@@ -20,7 +30,7 @@ fn default_core(system: &str) -> &'static str {
         "GENESIS" => "genesis_plus_gx",
         "GB" => "gambatte",
         "GBA" => "mgba",
-        "N64" => "mupen64plus_next",
+        "N64" => DEFAULT_N64_CORE,
         "ARCADE" => "fbneo",
         _ => "fceumm",
     }
@@ -33,7 +43,7 @@ fn allowlist(system: &str) -> &'static [&'static str] {
         "GENESIS" => &["genesis_plus_gx"],
         "GB" => &["gambatte"],
         "GBA" => &["mgba"],
-        "N64" => &["mupen64plus_next", "parallel_n64"],
+        "N64" => ALLOWLIST_N64,
         "ARCADE" => &["fbneo", "mame2003", "mame2003_plus"],
         _ => &["fceumm"],
     }
@@ -141,11 +151,6 @@ mod tests {
     #[test]
     fn invalid_core_override_falls_back() {
         assert_eq!(resolve_core("NES", Some("mupen64plus_next")), "fceumm");
-    }
-
-    #[test]
-    fn n64_accepts_parallel_n64_override() {
-        assert_eq!(resolve_core("N64", Some("parallel_n64")), "parallel_n64");
     }
 
     #[test]

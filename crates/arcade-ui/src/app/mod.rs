@@ -9,14 +9,12 @@ use arcade_domain::{ManageOperationSummary, ManageProgressEvent};
 use arcade_libretro::{FrontendCapabilities, LibretroHost};
 use arcade_services::NativeServices;
 use eframe::egui;
-#[cfg(all(feature = "gamepad", not(target_os = "windows")))]
+#[cfg(feature = "gamepad")]
 use gilrs::Gilrs;
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle, RawDisplayHandle, RawWindowHandle};
 
 use crate::actions::INITIAL_LIBRARY_PRELOAD_SIZE;
 use crate::assets::AssetCache;
-#[cfg(all(feature = "gamepad", target_os = "windows"))]
-use crate::gamepad_backend::WindowsGamepadRuntime;
 use crate::state::ArcadeUiState;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -38,10 +36,8 @@ pub struct NativeArcadeUiApp {
     pub(crate) state: ArcadeUiState,
     pub(crate) assets: AssetCache,
     pub(crate) manage_job_rx: Option<Receiver<ManageUiMessage>>,
-    #[cfg(all(feature = "gamepad", not(target_os = "windows")))]
+    #[cfg(feature = "gamepad")]
     pub(crate) gilrs: Option<Gilrs>,
-    #[cfg(all(feature = "gamepad", target_os = "windows"))]
-    pub(crate) gamepad_runtime: Option<WindowsGamepadRuntime>,
 }
 
 pub(crate) enum ManageUiMessage {
@@ -194,13 +190,8 @@ impl NativeArcadeUiApp {
     }
 
     pub fn new(services: NativeServices, host: LibretroHost) -> Self {
-        #[cfg(all(feature = "gamepad", not(target_os = "windows")))]
+        #[cfg(feature = "gamepad")]
         let (gilrs, gamepad_warning) = match Gilrs::new() {
-            Ok(runtime) => (Some(runtime), None),
-            Err(err) => (None, Some(format!("Controller runtime unavailable: {err}"))),
-        };
-        #[cfg(all(feature = "gamepad", target_os = "windows"))]
-        let (gamepad_runtime, gamepad_warning) = match WindowsGamepadRuntime::new() {
             Ok(runtime) => (Some(runtime), None),
             Err(err) => (None, Some(format!("Controller runtime unavailable: {err}"))),
         };
@@ -213,10 +204,8 @@ impl NativeArcadeUiApp {
             state: ArcadeUiState::new(),
             assets,
             manage_job_rx: None,
-            #[cfg(all(feature = "gamepad", not(target_os = "windows")))]
+            #[cfg(feature = "gamepad")]
             gilrs,
-            #[cfg(all(feature = "gamepad", target_os = "windows"))]
-            gamepad_runtime,
         };
 
         #[cfg(feature = "gamepad")]
@@ -289,10 +278,6 @@ fn load_font_data(candidates: &[&str]) -> Option<egui::FontData> {
 
 fn describe_window_handle_kind(handle: RawWindowHandle) -> &'static str {
     match handle {
-        RawWindowHandle::Xlib(_) => "Xlib",
-        RawWindowHandle::Xcb(_) => "Xcb",
-        RawWindowHandle::Wayland(_) => "Wayland",
-        RawWindowHandle::Win32(_) => "Win32",
         RawWindowHandle::AppKit(_) => "AppKit",
         RawWindowHandle::UiKit(_) => "UiKit",
         RawWindowHandle::AndroidNdk(_) => "AndroidNdk",
@@ -306,10 +291,6 @@ fn describe_window_handle_kind(handle: RawWindowHandle) -> &'static str {
 
 fn describe_display_handle_kind(handle: RawDisplayHandle) -> &'static str {
     match handle {
-        RawDisplayHandle::Xlib(_) => "Xlib",
-        RawDisplayHandle::Xcb(_) => "Xcb",
-        RawDisplayHandle::Wayland(_) => "Wayland",
-        RawDisplayHandle::Windows(_) => "Windows",
         RawDisplayHandle::AppKit(_) => "AppKit",
         RawDisplayHandle::UiKit(_) => "UiKit",
         RawDisplayHandle::Android(_) => "Android",

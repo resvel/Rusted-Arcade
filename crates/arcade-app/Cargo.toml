@@ -21,6 +21,3 @@ arcade-data = { path = "../arcade-data" }
 arcade-services = { path = "../arcade-services" }
 arcade-libretro = { path = "../arcade-libretro" }
 arcade-ui = { path = "../arcade-ui" }
-
-[target.'cfg(target_os = "linux")'.dependencies]
-eframe = { workspace = true, features = ["x11", "wayland"] }

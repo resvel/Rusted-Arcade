@@ -17,8 +17,6 @@ impl NativeArcadeUiApp {
         const ARCADE_MAX_FRAME_BUDGET: f64 = 2.5;
         const LOW_LATENCY_MAX_REPAINT_WAIT: std::time::Duration =
             std::time::Duration::from_millis(1);
-        const PARALLEL_N64_MAX_REPAINT_WAIT: std::time::Duration =
-            std::time::Duration::from_millis(1);
 
         if !self.host.is_loaded() {
             return;
@@ -48,6 +46,12 @@ impl NativeArcadeUiApp {
             .active_core
             .as_deref()
             .is_some_and(|core| core.eq_ignore_ascii_case("parallel_n64"));
+        let mupen64plus_next_target_pacing = self
+            .state
+            .play
+            .active_core
+            .as_deref()
+            .is_some_and(|core| core.eq_ignore_ascii_case("mupen64plus_next"));
         let arcade_low_latency_pacing = self
             .state
             .play
@@ -58,12 +62,9 @@ impl NativeArcadeUiApp {
             let frame_budget = self.state.play.catch_up_frame_debt
                 + (elapsed.as_secs_f64() / frame_interval.as_secs_f64());
             if frame_budget < 1.0 {
-                let wait = std::time::Duration::from_secs_f64(
-                    frame_interval.as_secs_f64() * (1.0 - frame_budget),
-                );
-                // macOS timer jitter can miss target cadence for Vulkan-backed N64;
-                // keep wake-ups short and let frame budget control pacing.
-                ctx.request_repaint_after(wait.min(PARALLEL_N64_MAX_REPAINT_WAIT));
+                // macOS timer jitter can still miss cadence with very short sleeps;
+                // request immediate repaint and let frame_budget gate retro_run.
+                ctx.request_repaint();
                 return;
             }
         } else if elapsed < frame_interval {
@@ -77,22 +78,16 @@ impl NativeArcadeUiApp {
             return;
         }
 
-        let disable_catch_up = self
-            .state
-            .play
-            .active_system
-            .as_deref()
-            .is_some_and(|system| system.eq_ignore_ascii_case("N64"))
-            && !self
-                .state
-                .play
-                .active_core
-                .as_deref()
-                .is_some_and(|core| core.eq_ignore_ascii_case("parallel_n64"));
-        let frames_to_run = if disable_catch_up {
+        let frames_to_run = if parallel_n64_target_pacing {
+            let elapsed_frames = elapsed.as_secs_f64() / frame_interval.as_secs_f64();
+            let frame_budget =
+                (self.state.play.catch_up_frame_debt + elapsed_frames).clamp(1.0, 3.0);
+            let frames_to_run = frame_budget.floor().clamp(1.0, 2.0) as u32;
             self.state.play.set_last_frame_run_at(now);
-            1
-        } else if parallel_n64_target_pacing {
+            self.state.play.catch_up_frame_debt =
+                (frame_budget - frames_to_run as f64).clamp(0.0, 1.0);
+            frames_to_run
+        } else if mupen64plus_next_target_pacing {
             let elapsed_frames = elapsed.as_secs_f64() / frame_interval.as_secs_f64();
             let frame_budget =
                 (self.state.play.catch_up_frame_debt + elapsed_frames).clamp(1.0, 3.0);
@@ -135,7 +130,12 @@ impl NativeArcadeUiApp {
                 Ok(Some(frame)) => latest_frame = Some(frame),
                 Ok(None) => {}
                 Err(err) => {
-                    warn!("frame loop failed: {err}");
+                    let message = err.to_string();
+                    warn!("frame loop failed: {message}");
+                    if message.contains("Vulkan external-present fail-fast") {
+                        self.state.play.set_status(message);
+                        self.stop_play_session();
+                    }
                     break;
                 }
             }
@@ -162,15 +162,13 @@ impl NativeArcadeUiApp {
             );
         }
 
-        if parallel_n64_target_pacing {
+        if parallel_n64_target_pacing || mupen64plus_next_target_pacing {
             // If emulation work already exceeded the target frame interval, request
             // immediate repaint to avoid adding extra sleep and compounding lag.
             let post_tick_elapsed =
                 std::time::Instant::now().duration_since(self.state.play.last_frame_run_at);
             if post_tick_elapsed < frame_interval {
-                ctx.request_repaint_after(
-                    (frame_interval - post_tick_elapsed).min(PARALLEL_N64_MAX_REPAINT_WAIT),
-                );
+                ctx.request_repaint();
             } else {
                 self.state.play.catch_up_frame_debt = 0.0;
                 ctx.request_repaint();

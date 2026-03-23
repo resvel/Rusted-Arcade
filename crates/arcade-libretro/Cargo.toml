@@ -23,16 +23,8 @@ zip.workspace = true
 arcade-domain = { path = "../arcade-domain" }
 tempfile.workspace = true
 
-[target.'cfg(target_os = "linux")'.dependencies]
-x11-dl.workspace = true
-
-[target.'cfg(target_os = "windows")'.dependencies]
-windows-sys = { version = "0.59", features = [
-  "Win32_Foundation",
-  "Win32_Graphics_Gdi",
-  "Win32_System_LibraryLoader",
-  "Win32_UI_WindowsAndMessaging",
-] }
+[target.'cfg(target_os = "macos")'.dependencies]
+objc = { workspace = true }
 
 [build-dependencies]
 cc = "1.1"

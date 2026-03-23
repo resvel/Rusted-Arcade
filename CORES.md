@@ -24,11 +24,16 @@ This project ships app binaries only. Libretro cores are not bundled in release 
 - `genesis_plus_gx`
 - `gambatte`
 - `mgba`
-- `mupen64plus_next`
 - `parallel_n64`
+- `mupen64plus_next`
 - `fbneo`
 - `mame2003`
 - `mame2003_plus`
+
+## N64 platform notes
+
+- macOS uses `mupen64plus_next` as the supported embedded N64 core.
+- Linux keeps `parallel_n64` available as the primary high-performance N64 path.
 
 ## Arcade notes (native/macOS included)
 

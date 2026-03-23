@@ -31,6 +31,8 @@ pub struct N64EmulationConfig {
 pub enum N64PreferredCore {
     #[default]
     Mupen64plusNext,
+    // Keep the legacy value deserializable so old configs continue to load, but
+    // route it to the single supported N64 core at runtime.
     ParallelN64,
 }
 
@@ -38,6 +40,9 @@ impl N64PreferredCore {
     pub fn as_core_name(self) -> &'static str {
         match self {
             Self::Mupen64plusNext => "mupen64plus_next",
+            #[cfg(target_os = "macos")]
+            Self::ParallelN64 => "mupen64plus_next",
+            #[cfg(not(target_os = "macos"))]
             Self::ParallelN64 => "parallel_n64",
         }
     }
@@ -448,6 +453,29 @@ mod tests {
         assert_eq!(
             config.management.cover_scraping.platform_ids.arcade,
             vec![23]
+        );
+    }
+
+    #[test]
+    fn legacy_parallel_n64_preference_maps_to_mupen64plus_next() {
+        let config: AppConfig = toml::from_str(
+            r#"
+[paths]
+rom_root = "/tmp/roms"
+db_path = "/tmp/arcade.db"
+save_state_root = "/tmp/save-states"
+core_root = "/tmp/cores"
+bios_root = "/tmp/bios"
+
+[emulation.n64]
+preferred_core = "parallel_n64"
+"#,
+        )
+        .expect("config");
+
+        assert_eq!(
+            config.preferred_core_for_system("N64"),
+            Some("mupen64plus_next")
         );
     }
 

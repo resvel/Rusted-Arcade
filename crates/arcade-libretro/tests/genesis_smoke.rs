@@ -20,12 +20,7 @@ fn genesis_host_and_rom() -> (LibretroHost, PathBuf) {
     let save_root = root.join("target/debug/data/save-states");
     let rom_path = root.join("target/debug/roms/genesis/Contra - Hard Corps (USA, Korea).md");
 
-    #[cfg(target_os = "macos")]
     let core_name = "genesis_plus_gx_libretro.dylib";
-    #[cfg(target_os = "linux")]
-    let core_name = "genesis_plus_gx_libretro.so";
-    #[cfg(target_os = "windows")]
-    let core_name = "genesis_plus_gx_libretro.dll";
 
     assert!(
         core_root.join(core_name).exists(),

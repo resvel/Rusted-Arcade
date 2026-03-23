@@ -1,6 +1,10 @@
 fn main() {
     #[cfg(target_os = "macos")]
     println!("cargo:rustc-link-lib=framework=OpenGL");
+    #[cfg(target_os = "macos")]
+    println!("cargo:rustc-link-lib=framework=AppKit");
+    #[cfg(target_os = "macos")]
+    println!("cargo:rustc-link-lib=framework=QuartzCore");
 
     cc::Build::new()
         .file("src/libretro_log_shim.c")

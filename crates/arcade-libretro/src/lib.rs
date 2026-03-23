@@ -23,27 +23,15 @@ use ash::vk;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use glow::HasContext;
 use libloading::{Library, Symbol};
+#[cfg(target_os = "macos")]
+use objc::runtime::{Object, NO, YES};
+#[cfg(target_os = "macos")]
+use objc::{class, msg_send, sel, sel_impl};
 use once_cell::sync::Lazy;
 use parking_lot::Mutex;
 use tempfile::TempDir;
 use thiserror::Error;
 use tracing::{info, warn};
-#[cfg(target_os = "windows")]
-use windows_sys::Win32::Foundation::{
-    GetLastError, ERROR_CLASS_ALREADY_EXISTS, HINSTANCE, HWND, LPARAM, LRESULT, RECT, WPARAM,
-};
-#[cfg(target_os = "windows")]
-use windows_sys::Win32::System::LibraryLoader::GetModuleHandleA;
-#[cfg(target_os = "windows")]
-use windows_sys::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExA, DefWindowProcA, DestroyWindow, DispatchMessageA, GetClientRect,
-    GetSystemMetrics, MoveWindow, PeekMessageA, RegisterClassExA, SetWindowPos, SetWindowTextA,
-    ShowWindow, TranslateMessage, HWND_TOPMOST, MSG, PM_REMOVE, SM_CXSCREEN, SM_CYSCREEN,
-    SWP_SHOWWINDOW, SW_HIDE, SW_SHOW, SW_SHOWMAXIMIZED, WM_CLOSE, WNDCLASSEXA, WS_CHILD,
-    WS_EX_TOPMOST, WS_POPUP,
-};
-#[cfg(target_os = "linux")]
-use x11_dl::xlib;
 
 use self::content::{
     build_game_info, inspect_core_requirements, prepare_game_content, prepare_launch_session,
@@ -52,9 +40,9 @@ use self::content::{
 use self::core_variables::{
     apply_core_runtime_env_defaults, default_core_variables_for, store_default_variable,
 };
-use self::video::{FrameDelivery, VideoBackendKind, VideoCoordinator, VideoSessionInfo};
+use self::video::{FrameDelivery, VideoCoordinator, VideoSessionInfo};
 
-pub use self::video::FrontendCapabilities;
+pub use self::video::{FrontendCapabilities, VideoBackendKind};
 
 unsafe extern "C" {
     fn arcade_libretro_log_printf(level: i32, fmt: *const c_char, ...);
@@ -86,6 +74,37 @@ pub enum PixelFormat {
     Xrgb8888,
     Rgb565,
     Rgba8888,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VulkanPresentTestMetrics {
+    pub backend_kind: VideoBackendKind,
+    pub external_window_created: bool,
+    pub queue_present_attempts: u64,
+    pub queue_present_successes: u64,
+    pub external_present_deliveries: u64,
+    pub cpu_frame_deliveries: u64,
+    pub source_non_black_seen: bool,
+    pub swapchain_non_black_seen: bool,
+    pub non_tiny_source_frame_seen: bool,
+    pub max_consecutive_tiny_source_frames: u64,
+}
+
+impl Default for VulkanPresentTestMetrics {
+    fn default() -> Self {
+        Self {
+            backend_kind: VideoBackendKind::Software,
+            external_window_created: false,
+            queue_present_attempts: 0,
+            queue_present_successes: 0,
+            external_present_deliveries: 0,
+            cpu_frame_deliveries: 0,
+            source_non_black_seen: false,
+            swapchain_non_black_seen: false,
+            non_tiny_source_frame_seen: false,
+            max_consecutive_tiny_source_frames: 0,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -166,6 +185,18 @@ struct HardwareRenderTarget {
     depth_stencil: glow::Renderbuffer,
     width: u32,
     height: u32,
+    /// FBO created lazily in the emu thread's GL context wrapping the shared color_texture.
+    /// FBOs are not shared between GL contexts, but textures are — so when a core (e.g.
+    /// mupen64plus-next/GLideN64) renders on a background emu thread using a shared context,
+    /// this FBO is what get_current_framebuffer() returns.  The main-context FBO above is
+    /// used for readback (it wraps the same color_texture via the shared texture namespace).
+    emu_ctx_framebuffer: Option<glow::NativeFramebuffer>,
+    /// Discovered game-frame texture handle.  When a core (mupen64plus-next/GLideN64) renders
+    /// into its own internal texture via a shared GL context, textures from that context are
+    /// visible here (textures ARE shared; FBOs are NOT).  We scan texture handles once on the
+    /// first black frame, find the one with game content, cache it here, and read from it via
+    /// a temporary FBO on every subsequent frame.
+    emu_game_texture: Option<glow::NativeTexture>,
 }
 
 #[derive(Clone)]
@@ -235,22 +266,8 @@ fn take_current_pending_vulkan_image(
 }
 
 fn should_sample_pending_vulkan_image_directly(image: &PendingVulkanImage) -> bool {
-    #[cfg(target_os = "windows")]
-    {
-        image.semaphores.is_empty()
-            && image.signal_semaphore.is_none()
-            && image.src_queue_family == u32::MAX
-            && matches!(
-                image.image_layout,
-                vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL | vk::ImageLayout::GENERAL
-            )
-    }
-
-    #[cfg(not(target_os = "windows"))]
-    {
-        let _ = image;
-        false
-    }
+    let _ = image;
+    false
 }
 
 fn create_sampling_image_view_for_pending_image(
@@ -279,76 +296,83 @@ struct VulkanReadbackState {
     staging_capacity: usize,
 }
 
+#[cfg(target_os = "macos")]
+extern "C" {
+    fn CGMainDisplayID() -> u32;
+    fn CGDisplayPixelsWide(display: u32) -> usize;
+    fn CGDisplayPixelsHigh(display: u32) -> usize;
+}
+
+#[cfg(target_os = "macos")]
+#[repr(C)]
+#[derive(Copy, Clone)]
+struct NSPoint {
+    x: f64,
+    y: f64,
+}
+
+#[cfg(target_os = "macos")]
+#[repr(C)]
+#[derive(Copy, Clone)]
+struct NSSize {
+    width: f64,
+    height: f64,
+}
+
+#[cfg(target_os = "macos")]
+#[repr(C)]
+#[derive(Copy, Clone)]
+struct NSRect {
+    origin: NSPoint,
+    size: NSSize,
+}
+
+#[cfg(target_os = "macos")]
+unsafe impl objc::Encode for NSPoint {
+    fn encode() -> objc::Encoding {
+        unsafe { objc::Encoding::from_str("{CGPoint=dd}") }
+    }
+}
+
+#[cfg(target_os = "macos")]
+unsafe impl objc::Encode for NSSize {
+    fn encode() -> objc::Encoding {
+        unsafe { objc::Encoding::from_str("{CGSize=dd}") }
+    }
+}
+
+#[cfg(target_os = "macos")]
+unsafe impl objc::Encode for NSRect {
+    fn encode() -> objc::Encoding {
+        unsafe { objc::Encoding::from_str("{CGRect={CGPoint=dd}{CGSize=dd}}") }
+    }
+}
+
 #[derive(Clone, Copy)]
 enum ExternalVulkanWindowDescriptor {
-    #[cfg(target_os = "linux")]
-    Xlib {
-        display: *mut xlib::Display,
-        window: xlib::Window,
+    Metal {
+        layer: *const c_void,
         width: u32,
         height: u32,
     },
-    #[cfg(target_os = "windows")]
-    Win32 {
-        hwnd: vk::HWND,
-        hinstance: vk::HINSTANCE,
-        width: u32,
-        height: u32,
-    },
-    #[cfg(not(any(target_os = "linux", target_os = "windows")))]
-    Unsupported { width: u32, height: u32 },
 }
 
 impl ExternalVulkanWindowDescriptor {
     fn size(self) -> (u32, u32) {
         match self {
-            #[cfg(target_os = "linux")]
-            Self::Xlib { width, height, .. } => (width, height),
-            #[cfg(target_os = "windows")]
-            Self::Win32 { width, height, .. } => (width, height),
-            #[cfg(not(any(target_os = "linux", target_os = "windows")))]
-            Self::Unsupported { width, height } => (width, height),
+            Self::Metal { width, height, .. } => (width, height),
         }
     }
 }
 
-#[cfg(target_os = "linux")]
 struct ExternalVulkanWindow {
-    xlib: xlib::Xlib,
-    display: *mut xlib::Display,
-    window: xlib::Window,
-    overlay_window: xlib::Window,
-    overlay_gc: xlib::GC,
-    wm_delete: xlib::Atom,
-    net_wm_state: xlib::Atom,
-    net_wm_state_fullscreen: xlib::Atom,
-    net_wm_state_above: xlib::Atom,
-    net_wm_bypass_compositor: xlib::Atom,
+    ns_window: *mut Object,
+    metal_layer: *mut Object,
     width: u32,
     height: u32,
     visible: bool,
 }
 
-#[cfg(target_os = "windows")]
-struct ExternalVulkanWindow {
-    hinstance: HINSTANCE,
-    hwnd: HWND,
-    overlay_hwnd: HWND,
-    width: u32,
-    height: u32,
-    visible: bool,
-}
-
-#[cfg(not(any(target_os = "linux", target_os = "windows")))]
-struct ExternalVulkanWindow;
-
-#[cfg(target_os = "linux")]
-unsafe impl Send for ExternalVulkanWindow {}
-
-#[cfg(target_os = "windows")]
-unsafe impl Send for ExternalVulkanWindow {}
-
-#[cfg(not(any(target_os = "linux", target_os = "windows")))]
 unsafe impl Send for ExternalVulkanWindow {}
 
 struct VulkanPresentState {
@@ -426,6 +450,10 @@ struct HardwareRenderState {
     vulkan_fallback_frame_size: Option<(u32, u32)>,
     vulkan_negotiation: Option<VulkanNegotiationCallbacks>,
     vulkan: Option<VulkanInterfaceState>,
+    /// Pointer-sized identity of the eframe GL context at the time it was registered.
+    /// Used to detect when a core's retro_video_refresh callback is invoked from a
+    /// different (core-owned) context.  0 = not yet captured.
+    eframe_gl_ctx_id: usize,
 }
 
 #[derive(Default)]
@@ -436,30 +464,69 @@ struct HostRuntime {
     video_coordinator: Mutex<VideoCoordinator>,
     hw_render_state: Mutex<HardwareRenderState>,
     performance_log_state: Mutex<PerformanceLogState>,
+    vulkan_present_metrics: Mutex<VulkanPresentMetricsState>,
 }
 
-#[cfg(all(unix, not(target_os = "macos")))]
-type GlxGetProcAddress = unsafe extern "C" fn(*const u8) -> *const c_void;
-#[cfg(all(unix, not(target_os = "macos")))]
-type EglGetProcAddress = unsafe extern "C" fn(*const c_char) -> *const c_void;
-#[cfg(target_os = "windows")]
-type WglGetProcAddress = unsafe extern "system" fn(*const c_char) -> *const c_void;
+#[derive(Debug, Clone, Default)]
+struct VulkanPresentMetricsState {
+    queue_present_attempts: u64,
+    queue_present_successes: u64,
+    external_present_deliveries: u64,
+    cpu_frame_deliveries: u64,
+    source_non_black_seen: bool,
+    swapchain_non_black_seen: bool,
+    non_tiny_source_frame_seen: bool,
+    consecutive_tiny_source_frames: u64,
+    max_consecutive_tiny_source_frames: u64,
+    source_sample_checks: u64,
+    swapchain_sample_checks: u64,
+    black_fail_fast_error: Option<String>,
+    tiny_frame_fail_fast_error: Option<String>,
+}
+
+#[derive(Clone)]
+struct FrontendGlStateSnapshot {
+    active_texture: i32,
+    texture_units: Vec<FrontendGlTextureUnitState>,
+    current_program: Option<glow::Program>,
+    vertex_array: Option<glow::VertexArray>,
+    array_buffer: Option<glow::Buffer>,
+    element_array_buffer: Option<glow::Buffer>,
+    renderbuffer: Option<glow::Renderbuffer>,
+    framebuffer: Option<glow::Framebuffer>,
+    read_framebuffer: Option<glow::Framebuffer>,
+    draw_framebuffer: Option<glow::Framebuffer>,
+    unpack_alignment: i32,
+    pack_alignment: i32,
+    unpack_row_length: i32,
+    pack_row_length: i32,
+    viewport: [i32; 4],
+    scissor_box: [i32; 4],
+    blend_enabled: bool,
+    cull_face_enabled: bool,
+    depth_test_enabled: bool,
+    scissor_test_enabled: bool,
+    stencil_test_enabled: bool,
+    blend_src_rgb: i32,
+    blend_dst_rgb: i32,
+    blend_src_alpha: i32,
+    blend_dst_alpha: i32,
+    blend_equation_rgb: i32,
+    blend_equation_alpha: i32,
+    color_mask: [bool; 4],
+    depth_mask: bool,
+    stencil_mask_front: i32,
+    stencil_mask_back: i32,
+}
+
+#[derive(Clone)]
+struct FrontendGlTextureUnitState {
+    texture_2d: Option<glow::Texture>,
+    sampler: Option<glow::Sampler>,
+}
 
 struct GlProcLoader {
-    #[cfg(all(unix, not(target_os = "macos")))]
-    libgl: Option<Library>,
-    #[cfg(all(unix, not(target_os = "macos")))]
-    libegl: Option<Library>,
-    #[cfg(all(unix, not(target_os = "macos")))]
-    glx_get_proc_address: Option<GlxGetProcAddress>,
-    #[cfg(all(unix, not(target_os = "macos")))]
-    egl_get_proc_address: Option<EglGetProcAddress>,
-    #[cfg(target_os = "macos")]
     opengl_framework: Option<Library>,
-    #[cfg(target_os = "windows")]
-    opengl32: Option<Library>,
-    #[cfg(target_os = "windows")]
-    wgl_get_proc_address: Option<WglGetProcAddress>,
 }
 
 static GL_PROC_LOADER: Lazy<Mutex<GlProcLoader>> = Lazy::new(|| Mutex::new(GlProcLoader::new()));
@@ -469,6 +536,8 @@ static VULKAN_READBACK_DEBUG_COUNTER: AtomicU64 = AtomicU64::new(0);
 static VULKAN_PRESENT_DEBUG_COUNTER: AtomicU64 = AtomicU64::new(0);
 static VULKAN_SOURCE_IMAGE_DEBUG_COUNTER: AtomicU64 = AtomicU64::new(0);
 static VULKAN_RUN_FRAME_DEBUG_COUNTER: AtomicU64 = AtomicU64::new(0);
+static VULKAN_HANDOFF_TRACE_COUNTER: AtomicU64 = AtomicU64::new(0);
+static VULKAN_VIDEO_REFRESH_TRACE_COUNTER: AtomicU64 = AtomicU64::new(0);
 static GL_CONTEXT_DEBUG_LOGGED: AtomicU64 = AtomicU64::new(0);
 
 fn summarize_rgba_debug_pixels(pixels: &[u8]) -> (u64, usize, [u8; 4]) {
@@ -540,6 +609,24 @@ fn summarize_rgba_debug_pixels_grid(
     (checksum, non_black_samples, first_rgba, center_rgba)
 }
 
+/// Returns an opaque integer that uniquely identifies the GL context current on this thread.
+/// Used to detect when a libretro core has switched to a different (core-owned) GL context.
+/// Returns 0 when not implemented on the current platform.
+#[cfg(target_os = "macos")]
+fn current_gl_ctx_id() -> usize {
+    // CGLGetCurrentContext returns the CGL context current on the calling thread.
+    // The pointer value is a stable identity for the lifetime of the context.
+    extern "C" {
+        fn CGLGetCurrentContext() -> *const std::ffi::c_void;
+    }
+    unsafe { CGLGetCurrentContext() as usize }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn current_gl_ctx_id() -> usize {
+    0
+}
+
 fn log_frontend_gl_context(gl: &glow::Context) {
     if std::env::var_os("LIBRETRO_TRACE_GL_CONTEXT").is_none() {
         return;
@@ -594,6 +681,32 @@ fn active_runtime() -> Option<Arc<HostRuntime>> {
 fn with_active_runtime<T>(f: impl FnOnce(&HostRuntime) -> T) -> Option<T> {
     let runtime = active_runtime()?;
     Some(f(&runtime))
+}
+
+fn log_core_binary_load_metadata(core_name: &str, core_path: &Path) {
+    let canonical_path = core_path
+        .canonicalize()
+        .unwrap_or_else(|_| core_path.to_path_buf());
+    let metadata = fs::metadata(core_path).ok();
+    let modified_unix_secs = metadata
+        .as_ref()
+        .and_then(|meta| meta.modified().ok())
+        .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|duration| duration.as_secs());
+    let size_bytes = metadata.as_ref().map(|meta| meta.len());
+
+    info!(
+        target: "arcade_libretro::core_loader",
+        "loading core binary core={} path={} modified_unix_secs={} size_bytes={}",
+        core_name,
+        canonical_path.display(),
+        modified_unix_secs
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| String::from("unknown")),
+        size_bytes
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| String::from("unknown")),
+    );
 }
 
 fn register_active_runtime(runtime: &Arc<HostRuntime>) {
@@ -925,150 +1038,33 @@ fn default_core_library_filename(core_name: &str) -> String {
     core_library_filename_candidates(core_name)
         .into_iter()
         .next()
-        .unwrap_or_else(|| format!("{core_name}_libretro.so"))
+        .unwrap_or_else(|| format!("{core_name}_libretro.dylib"))
 }
 
 fn core_library_filename_candidates(core_name: &str) -> Vec<String> {
-    #[cfg(target_os = "windows")]
-    {
-        return vec![
-            format!("{core_name}_libretro.dll"),
-            format!("{core_name}.dll"),
-        ];
-    }
-
-    #[cfg(target_os = "macos")]
-    {
-        return vec![format!("{core_name}_libretro.dylib")];
-    }
-
-    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
-    {
-        vec![format!("{core_name}_libretro.so")]
-    }
+    vec![format!("{core_name}_libretro.dylib")]
 }
 
 impl GlProcLoader {
     fn new() -> Self {
-        #[cfg(all(unix, not(target_os = "macos")))]
-        unsafe {
-            let libgl = Library::new("libGL.so.1").ok();
-            let libegl = Library::new("libEGL.so.1").ok();
-
-            let glx_get_proc_address = libgl.as_ref().and_then(|lib| {
-                let symbol: std::result::Result<Symbol<GlxGetProcAddress>, _> =
-                    lib.get(b"glXGetProcAddressARB");
-                symbol.ok().map(|symbol| *symbol)
-            });
-            let egl_get_proc_address = libegl.as_ref().and_then(|lib| {
-                let symbol: std::result::Result<Symbol<EglGetProcAddress>, _> =
-                    lib.get(b"eglGetProcAddress");
-                symbol.ok().map(|symbol| *symbol)
-            });
-
-            Self {
-                libgl,
-                libegl,
-                glx_get_proc_address,
-                egl_get_proc_address,
-            }
-        }
-
-        #[cfg(target_os = "macos")]
         unsafe {
             let opengl_framework =
                 Library::new("/System/Library/Frameworks/OpenGL.framework/OpenGL").ok();
 
             Self { opengl_framework }
         }
-
-        #[cfg(target_os = "windows")]
-        unsafe {
-            let opengl32 = Library::new("opengl32.dll").ok();
-            let wgl_get_proc_address = opengl32.as_ref().and_then(|lib| {
-                let symbol: std::result::Result<Symbol<WglGetProcAddress>, _> =
-                    lib.get(b"wglGetProcAddress");
-                symbol.ok().map(|symbol| *symbol)
-            });
-
-            Self {
-                opengl32,
-                wgl_get_proc_address,
-            }
-        }
     }
 
     fn get(&self, sym: &CStr) -> *const c_void {
-        #[cfg(all(unix, not(target_os = "macos")))]
-        {
-            if let Some(glx_get_proc_address) = self.glx_get_proc_address {
-                let ptr = unsafe { glx_get_proc_address(sym.as_ptr() as *const u8) };
-                if !ptr.is_null() {
-                    return ptr;
+        if let Some(lib) = self.opengl_framework.as_ref() {
+            if let Ok(symbol) = unsafe { lib.get::<*const c_void>(sym.to_bytes_with_nul()) } {
+                if !(*symbol).is_null() {
+                    return *symbol;
                 }
             }
-            if let Some(egl_get_proc_address) = self.egl_get_proc_address {
-                let ptr = unsafe { egl_get_proc_address(sym.as_ptr()) };
-                if !ptr.is_null() {
-                    return ptr;
-                }
-            }
-            if let Some(lib) = self.libgl.as_ref() {
-                if let Ok(symbol) = unsafe { lib.get::<*const c_void>(sym.to_bytes_with_nul()) } {
-                    if !(*symbol).is_null() {
-                        return *symbol;
-                    }
-                }
-            }
-            if let Some(lib) = self.libegl.as_ref() {
-                if let Ok(symbol) = unsafe { lib.get::<*const c_void>(sym.to_bytes_with_nul()) } {
-                    if !(*symbol).is_null() {
-                        return *symbol;
-                    }
-                }
-            }
-            std::ptr::null()
         }
-
-        #[cfg(target_os = "macos")]
-        {
-            if let Some(lib) = self.opengl_framework.as_ref() {
-                if let Ok(symbol) = unsafe { lib.get::<*const c_void>(sym.to_bytes_with_nul()) } {
-                    if !(*symbol).is_null() {
-                        return *symbol;
-                    }
-                }
-            }
-
-            std::ptr::null()
-        }
-
-        #[cfg(target_os = "windows")]
-        {
-            if let Some(wgl_get_proc_address) = self.wgl_get_proc_address {
-                let ptr = unsafe { wgl_get_proc_address(sym.as_ptr()) };
-                if is_valid_wgl_proc_address(ptr) {
-                    return ptr;
-                }
-            }
-
-            if let Some(lib) = self.opengl32.as_ref() {
-                if let Ok(symbol) = unsafe { lib.get::<*const c_void>(sym.to_bytes_with_nul()) } {
-                    if !(*symbol).is_null() {
-                        return *symbol;
-                    }
-                }
-            }
-
-            std::ptr::null()
-        }
+        std::ptr::null()
     }
-}
-
-#[cfg(target_os = "windows")]
-fn is_valid_wgl_proc_address(ptr: *const c_void) -> bool {
-    let value = ptr as isize;
-    !ptr.is_null() && !matches!(value, -1 | 1 | 2 | 3)
 }
 
 #[cfg(feature = "audio")]
@@ -1263,6 +1259,12 @@ impl LibretroHost {
             .lock()
             .apply_frontend_capabilities(&self.runtime, capabilities.clone());
         self.runtime.hw_render_state.lock().frontend_gl_context = capabilities.gl_context.clone();
+        if capabilities.gl_context.is_some() {
+            let mut state = self.runtime.hw_render_state.lock();
+            if state.eframe_gl_ctx_id == 0 {
+                state.eframe_gl_ctx_id = current_gl_ctx_id();
+            }
+        }
         if changed {
             self.runtime
                 .hw_render_state
@@ -1272,11 +1274,10 @@ impl LibretroHost {
         if changed && vulkan_debug_enabled() {
             info!(
                 target: "arcade_libretro::vulkan_debug",
-                "frontend windowing renderer={:?} window_handle={:?} display_handle={:?} env_win32_external_present={}",
+                "frontend windowing renderer={:?} window_handle={:?} display_handle={:?}",
                 capabilities.renderer_name,
                 capabilities.window_handle_kind,
-                capabilities.display_handle_kind,
-                std::env::var_os("ARCADE_WINDOWS_EXTERNAL_VULKAN_PRESENT").is_some()
+                capabilities.display_handle_kind
             );
         }
     }
@@ -1293,6 +1294,29 @@ impl LibretroHost {
             .video_coordinator
             .lock()
             .has_external_present_window(&self.runtime)
+    }
+
+    pub fn vulkan_present_test_metrics(&self) -> VulkanPresentTestMetrics {
+        let backend_kind = self.runtime.video_coordinator.lock().current_backend_kind();
+        let external_window_created = self
+            .runtime
+            .hw_render_state
+            .lock()
+            .external_vulkan_window
+            .is_some();
+        let snapshot = self.runtime.vulkan_present_metrics.lock().clone();
+        VulkanPresentTestMetrics {
+            backend_kind,
+            external_window_created,
+            queue_present_attempts: snapshot.queue_present_attempts,
+            queue_present_successes: snapshot.queue_present_successes,
+            external_present_deliveries: snapshot.external_present_deliveries,
+            cpu_frame_deliveries: snapshot.cpu_frame_deliveries,
+            source_non_black_seen: snapshot.source_non_black_seen,
+            swapchain_non_black_seen: snapshot.swapchain_non_black_seen,
+            non_tiny_source_frame_seen: snapshot.non_tiny_source_frame_seen,
+            max_consecutive_tiny_source_frames: snapshot.max_consecutive_tiny_source_frames,
+        }
     }
 
     pub fn set_external_overlay_message(&self, message: Option<&str>) {
@@ -1371,7 +1395,9 @@ impl LibretroHost {
             return Err(LibretroError::CoreNotFound(core_path.display().to_string()).into());
         }
 
+        log_core_binary_load_metadata(core_name, core_path);
         let _ = self.unload();
+        reset_vulkan_present_metrics(&self.runtime);
         let requirements = inspect_core_requirements(core_path)?;
         let selection = {
             let mut coordinator = self.runtime.video_coordinator.lock();
@@ -1557,6 +1583,18 @@ impl LibretroHost {
             unsafe {
                 (api.deinit)();
             }
+            // Re-plan the video session so subsequent retry attempts dispatch to
+            // the correct backend. destroy_hw_render_session() calls end_session()
+            // which clears VideoCoordinator.session; without this, current_backend_kind()
+            // falls back to Software and HW frames are never read back.
+            {
+                let mut coordinator = self.runtime.video_coordinator.lock();
+                coordinator.plan_session(VideoSessionInfo {
+                    core_name: core_name.to_string(),
+                    requires_hw_render: requirements.requires_hw_render,
+                    requested_hw_context_type: None,
+                });
+            }
             let context = self.runtime.environment_context.lock();
             let requested_hw_render = context.requested_hw_render;
             let requested_hw_context_type = context.requested_hw_context_type;
@@ -1646,6 +1684,12 @@ impl LibretroHost {
         let Some(loaded) = loaded_guard.as_ref() else {
             return Ok(None);
         };
+        if let Some(error) = vulkan_present_fail_fast_error(&self.runtime) {
+            // Fail-fast is terminal for the current session: once Vulkan output is
+            // confirmed unhealthy, stop stepping the core and surface the explicit
+            // error without attempting fallback.
+            return Err(anyhow!(error));
+        }
         let uses_hw_render = loaded.uses_hw_render;
         let core_label = loaded
             .core_path
@@ -1677,6 +1721,11 @@ impl LibretroHost {
             .unwrap_or(false);
         let run_frame_debug_step = if vulkan_debug_enabled() && using_vulkan_hw_render {
             Some(VULKAN_RUN_FRAME_DEBUG_COUNTER.fetch_add(1, Ordering::Relaxed))
+        } else {
+            None
+        };
+        let frontend_gl_state = if uses_hw_render {
+            capture_frontend_gl_state(&self.runtime)
         } else {
             None
         };
@@ -1736,6 +1785,10 @@ impl LibretroHost {
             Ok(FrameDelivery::Error(err)) => FrameDelivery::Error(err.clone()),
             Err(err) => FrameDelivery::Error(err.to_string()),
         };
+        record_frame_delivery_metrics(&self.runtime, using_vulkan_hw_render, &delivery);
+        if let Some(snapshot) = frontend_gl_state.as_ref() {
+            restore_frontend_gl_state(&self.runtime, snapshot);
+        }
 
         if uses_hw_render {
             if let Some(debug_step) = run_frame_debug_step.filter(|step| *step < 8) {
@@ -1784,6 +1837,9 @@ impl LibretroHost {
                 present_duration,
                 delivery,
             );
+        }
+        if let Some(error) = vulkan_present_fail_fast_error(&self.runtime) {
+            return Err(anyhow!(error));
         }
 
         match frame {
@@ -1876,9 +1932,21 @@ impl LibretroHost {
     pub fn unload(&self) -> Result<()> {
         let mut loaded_guard = self.loaded.lock();
         if let Some(loaded) = loaded_guard.take() {
+            let core_label = loaded
+                .core_path
+                .file_stem()
+                .and_then(|name| name.to_str())
+                .unwrap_or("unknown_core")
+                .to_owned();
             unsafe {
                 (loaded.api.unload_game)();
             }
+            log_vulkan_present_metrics_summary(
+                &self.runtime,
+                &core_label,
+                loaded.uses_hw_render,
+                "final",
+            );
             destroy_hw_render_session();
             unsafe {
                 (loaded.api.deinit)();
@@ -1893,6 +1961,7 @@ impl LibretroHost {
             .lock()
             .controller_info
             .clear();
+        reset_vulkan_present_metrics(&self.runtime);
         clear_active_runtime(&self.runtime);
         Ok(())
     }
@@ -1934,6 +2003,137 @@ fn duration_to_ns(duration: std::time::Duration) -> u64 {
         .min(u64::MAX as u128)
         .try_into()
         .unwrap_or(u64::MAX)
+}
+
+fn reset_vulkan_present_metrics(runtime: &HostRuntime) {
+    *runtime.vulkan_present_metrics.lock() = VulkanPresentMetricsState::default();
+}
+
+fn record_vulkan_queue_present_attempt(runtime: &HostRuntime) {
+    let mut state = runtime.vulkan_present_metrics.lock();
+    state.queue_present_attempts = state.queue_present_attempts.saturating_add(1);
+}
+
+fn record_vulkan_queue_present_success(runtime: &HostRuntime) {
+    let mut state = runtime.vulkan_present_metrics.lock();
+    state.queue_present_successes = state.queue_present_successes.saturating_add(1);
+}
+
+fn record_vulkan_source_non_black_sample(runtime: &HostRuntime, source_non_black_seen: bool) {
+    let mut state = runtime.vulkan_present_metrics.lock();
+    state.source_sample_checks = state.source_sample_checks.saturating_add(1);
+    if source_non_black_seen {
+        state.source_non_black_seen = true;
+    }
+}
+
+fn record_vulkan_swapchain_non_black_sample(runtime: &HostRuntime, swapchain_non_black_seen: bool) {
+    let mut state = runtime.vulkan_present_metrics.lock();
+    state.swapchain_sample_checks = state.swapchain_sample_checks.saturating_add(1);
+    if swapchain_non_black_seen {
+        state.swapchain_non_black_seen = true;
+    }
+}
+
+fn record_vulkan_source_frame_size(runtime: &HostRuntime, width: u32, height: u32) {
+    let mut state = runtime.vulkan_present_metrics.lock();
+    if width > 1 && height > 1 {
+        state.non_tiny_source_frame_seen = true;
+        state.consecutive_tiny_source_frames = 0;
+        return;
+    }
+
+    state.consecutive_tiny_source_frames = state.consecutive_tiny_source_frames.saturating_add(1);
+    state.max_consecutive_tiny_source_frames = state
+        .max_consecutive_tiny_source_frames
+        .max(state.consecutive_tiny_source_frames);
+}
+
+fn has_vulkan_present_fail_fast(state: &VulkanPresentMetricsState) -> bool {
+    state.black_fail_fast_error.is_some() || state.tiny_frame_fail_fast_error.is_some()
+}
+
+fn maybe_mark_vulkan_black_fail_fast(state: &mut VulkanPresentMetricsState) {
+    if has_vulkan_present_fail_fast(state) {
+        return;
+    }
+    let threshold = vulkan_black_fail_fast_threshold_frames();
+    if threshold == 0
+        || state.external_present_deliveries < threshold
+        || state.queue_present_successes == 0
+        || state.source_sample_checks == 0
+        || state.swapchain_sample_checks == 0
+        || state.source_non_black_seen
+        || state.swapchain_non_black_seen
+    {
+        return;
+    }
+
+    state.black_fail_fast_error = Some(format!(
+        "Vulkan external-present fail-fast: output remained black for {} external-present frames (queue_present_attempts={}, queue_present_successes={}, source_non_black_seen={}, swapchain_non_black_seen={}, consecutive_tiny_source_frames={}, max_consecutive_tiny_source_frames={}); no automatic fallback will be attempted",
+        state.external_present_deliveries,
+        state.queue_present_attempts,
+        state.queue_present_successes,
+        state.source_non_black_seen,
+        state.swapchain_non_black_seen,
+        state.consecutive_tiny_source_frames,
+        state.max_consecutive_tiny_source_frames
+    ));
+}
+
+fn maybe_mark_vulkan_tiny_frame_fail_fast(state: &mut VulkanPresentMetricsState) {
+    if has_vulkan_present_fail_fast(state) {
+        return;
+    }
+    let threshold = vulkan_tiny_frame_fail_fast_threshold_frames();
+    if threshold == 0
+        || state.external_present_deliveries < threshold
+        || state.queue_present_successes == 0
+        || state.non_tiny_source_frame_seen
+        || state.consecutive_tiny_source_frames < threshold
+    {
+        return;
+    }
+
+    state.tiny_frame_fail_fast_error = Some(format!(
+        "Vulkan external-present fail-fast: source frame size remained tiny (<=1x1) for {} consecutive frames (external_present_deliveries={}, queue_present_attempts={}, queue_present_successes={}, source_non_black_seen={}, swapchain_non_black_seen={}, max_consecutive_tiny_source_frames={}); no automatic fallback will be attempted",
+        state.consecutive_tiny_source_frames,
+        state.external_present_deliveries,
+        state.queue_present_attempts,
+        state.queue_present_successes,
+        state.source_non_black_seen,
+        state.swapchain_non_black_seen,
+        state.max_consecutive_tiny_source_frames
+    ));
+}
+
+fn record_frame_delivery_metrics(
+    runtime: &HostRuntime,
+    using_vulkan_hw_render: bool,
+    delivery: &FrameDelivery,
+) {
+    let mut state = runtime.vulkan_present_metrics.lock();
+    match delivery {
+        FrameDelivery::ExternalPresent => {
+            if !using_vulkan_hw_render {
+                return;
+            }
+            state.external_present_deliveries = state.external_present_deliveries.saturating_add(1);
+            maybe_mark_vulkan_tiny_frame_fail_fast(&mut state);
+            maybe_mark_vulkan_black_fail_fast(&mut state);
+        }
+        FrameDelivery::CpuFrame(_) => {
+            state.cpu_frame_deliveries = state.cpu_frame_deliveries.saturating_add(1);
+        }
+        FrameDelivery::NoFrame | FrameDelivery::Error(_) => {}
+    }
+}
+
+fn vulkan_present_fail_fast_error(runtime: &HostRuntime) -> Option<String> {
+    let _ = runtime;
+    // Fail-fast gating is intentionally disabled for now so unhealthy runs
+    // continue and expose full diagnostic behavior instead of terminating early.
+    None
 }
 
 fn record_frame_performance(
@@ -2010,6 +2210,62 @@ fn record_frame_performance(
         sample_started_at: Some(now),
         ..PerformanceLogState::default()
     };
+}
+
+fn log_vulkan_present_metrics_summary(
+    runtime: &HostRuntime,
+    core_label: &str,
+    core_uses_hw_render: bool,
+    phase: &str,
+) {
+    let backend_kind = runtime.video_coordinator.lock().current_backend_kind();
+    let external_window_created = runtime
+        .hw_render_state
+        .lock()
+        .external_vulkan_window
+        .is_some();
+    let snapshot = runtime.vulkan_present_metrics.lock().clone();
+    let fail_fast_error = snapshot
+        .black_fail_fast_error
+        .as_deref()
+        .or(snapshot.tiny_frame_fail_fast_error.as_deref())
+        .unwrap_or("none");
+
+    let should_log = core_uses_hw_render
+        || backend_kind == VideoBackendKind::Vulkan
+        || external_window_created
+        || snapshot.queue_present_attempts > 0
+        || snapshot.queue_present_successes > 0
+        || snapshot.external_present_deliveries > 0
+        || snapshot.cpu_frame_deliveries > 0
+        || snapshot.source_sample_checks > 0
+        || snapshot.swapchain_sample_checks > 0
+        || vulkan_test_metrics_enabled();
+    if !should_log {
+        return;
+    }
+
+    info!(
+        target: "arcade_libretro::vulkan_metrics",
+        phase,
+        core = core_label,
+        backend = ?backend_kind,
+        core_uses_hw_render,
+        external_window_created,
+        queue_present_attempts = snapshot.queue_present_attempts,
+        queue_present_successes = snapshot.queue_present_successes,
+        external_present_deliveries = snapshot.external_present_deliveries,
+        cpu_frame_deliveries = snapshot.cpu_frame_deliveries,
+        source_non_black_seen = snapshot.source_non_black_seen,
+        swapchain_non_black_seen = snapshot.swapchain_non_black_seen,
+        non_tiny_source_frame_seen = snapshot.non_tiny_source_frame_seen,
+        consecutive_tiny_source_frames = snapshot.consecutive_tiny_source_frames,
+        max_consecutive_tiny_source_frames = snapshot.max_consecutive_tiny_source_frames,
+        source_sample_checks = snapshot.source_sample_checks,
+        swapchain_sample_checks = snapshot.swapchain_sample_checks,
+        fail_fast_error,
+        "vulkan_present_metrics"
+    );
 }
 
 impl Drop for LibretroHost {
@@ -2178,639 +2434,217 @@ fn frontend_windowing_summary_for(runtime: &HostRuntime) -> Option<String> {
     Some(parts.join(", "))
 }
 
-#[cfg(target_os = "linux")]
 impl ExternalVulkanWindow {
     fn create() -> std::result::Result<Self, String> {
-        let xlib = xlib::Xlib::open().map_err(|err| format!("failed to load Xlib: {err}"))?;
-        let display = unsafe { (xlib.XOpenDisplay)(std::ptr::null()) };
-        if display.is_null() {
-            return Err(String::from(
-                "failed to open X11 display for external Vulkan window",
-            ));
-        }
-
-        let screen = unsafe { (xlib.XDefaultScreen)(display) };
-        let root = unsafe { (xlib.XRootWindow)(display, screen) };
-        let black = unsafe { (xlib.XBlackPixel)(display, screen) };
-        let white = unsafe { (xlib.XWhitePixel)(display, screen) };
-        let width = unsafe { (xlib.XDisplayWidth)(display, screen).max(1) as u32 };
-        let height = unsafe { (xlib.XDisplayHeight)(display, screen).max(1) as u32 };
-        let window = unsafe {
-            (xlib.XCreateSimpleWindow)(display, root, 0, 0, width, height, 0, black, white)
-        };
-        if window == 0 {
-            unsafe {
-                (xlib.XCloseDisplay)(display);
-            }
-            return Err(String::from(
-                "failed to create X11 window for Vulkan presentation",
-            ));
-        }
-
         unsafe {
-            (xlib.XSelectInput)(
-                display,
-                window,
-                xlib::ExposureMask | xlib::StructureNotifyMask,
-            );
-        }
-        let title = CString::new("Personal Arcade N64 (Vulkan)")
-            .map_err(|_| String::from("failed to build X11 window title"))?;
-        unsafe {
-            (xlib.XStoreName)(display, window, title.as_ptr());
-        }
-        let overlay_window =
-            unsafe { (xlib.XCreateSimpleWindow)(display, window, 0, 0, 320, 36, 0, white, black) };
-        if overlay_window == 0 {
-            unsafe {
-                (xlib.XDestroyWindow)(display, window);
-                (xlib.XCloseDisplay)(display);
-            }
-            return Err(String::from(
-                "failed to create X11 overlay window for Vulkan presentation",
-            ));
-        }
-        let overlay_gc =
-            unsafe { (xlib.XCreateGC)(display, overlay_window, 0, std::ptr::null_mut()) };
-        if overlay_gc.is_null() {
-            unsafe {
-                (xlib.XDestroyWindow)(display, overlay_window);
-                (xlib.XDestroyWindow)(display, window);
-                (xlib.XCloseDisplay)(display);
-            }
-            return Err(String::from(
-                "failed to create X11 overlay graphics context",
-            ));
-        }
-        unsafe {
-            (xlib.XSetForeground)(display, overlay_gc, white);
-            (xlib.XSetBackground)(display, overlay_gc, black);
-            (xlib.XUnmapWindow)(display, overlay_window);
-        }
-        let wm_delete_name =
-            CString::new("WM_DELETE_WINDOW").map_err(|_| String::from("invalid WM_DELETE atom"))?;
-        let wm_delete = unsafe { (xlib.XInternAtom)(display, wm_delete_name.as_ptr(), 0) };
-        let net_wm_state_name = CString::new("_NET_WM_STATE")
-            .map_err(|_| String::from("invalid _NET_WM_STATE atom"))?;
-        let net_wm_state = unsafe { (xlib.XInternAtom)(display, net_wm_state_name.as_ptr(), 0) };
-        let net_wm_state_fullscreen_name = CString::new("_NET_WM_STATE_FULLSCREEN")
-            .map_err(|_| String::from("invalid _NET_WM_STATE_FULLSCREEN atom"))?;
-        let net_wm_state_fullscreen =
-            unsafe { (xlib.XInternAtom)(display, net_wm_state_fullscreen_name.as_ptr(), 0) };
-        let net_wm_state_above_name = CString::new("_NET_WM_STATE_ABOVE")
-            .map_err(|_| String::from("invalid _NET_WM_STATE_ABOVE atom"))?;
-        let net_wm_state_above =
-            unsafe { (xlib.XInternAtom)(display, net_wm_state_above_name.as_ptr(), 0) };
-        let net_wm_bypass_compositor_name = CString::new("_NET_WM_BYPASS_COMPOSITOR")
-            .map_err(|_| String::from("invalid _NET_WM_BYPASS_COMPOSITOR atom"))?;
-        let net_wm_bypass_compositor =
-            unsafe { (xlib.XInternAtom)(display, net_wm_bypass_compositor_name.as_ptr(), 0) };
-        if wm_delete != 0 {
-            let mut atom = wm_delete;
-            unsafe {
-                (xlib.XSetWMProtocols)(display, window, &mut atom, 1);
-            }
-        }
-        let mut external_window = Self {
-            xlib,
-            display,
-            window,
-            overlay_window,
-            overlay_gc,
-            wm_delete,
-            net_wm_state,
-            net_wm_state_fullscreen,
-            net_wm_state_above,
-            net_wm_bypass_compositor,
-            width,
-            height,
-            visible: false,
-        };
-        external_window.configure_fullscreen();
+            // Ensure NSApplication exists (idempotent).
+            let ns_app_class = class!(NSApplication);
+            let _: *mut Object = msg_send![ns_app_class, sharedApplication];
 
-        Ok(external_window)
+            // Get screen dimensions via CoreGraphics (avoids NSRect return from msg_send).
+            let display_id = CGMainDisplayID();
+            let screen_w = CGDisplayPixelsWide(display_id) as u32;
+            let screen_h = CGDisplayPixelsHigh(display_id) as u32;
+            let width = screen_w.max(640);
+            let height = screen_h.max(480);
+
+            let content_rect = NSRect {
+                origin: NSPoint { x: 0.0, y: 0.0 },
+                size: NSSize {
+                    width: width as f64,
+                    height: height as f64,
+                },
+            };
+
+            // NSBorderlessWindowMask = 0 — gives a frameless fullscreen window.
+            let style_mask: usize = 0;
+            // NSBackingStoreBuffered = 2.
+            let backing: usize = 2;
+
+            let ns_window_class = class!(NSWindow);
+            let ns_window: *mut Object = msg_send![ns_window_class, alloc];
+            let ns_window: *mut Object = msg_send![
+                ns_window,
+                initWithContentRect:content_rect
+                styleMask:style_mask
+                backing:backing
+                defer:NO
+            ];
+            if ns_window.is_null() {
+                return Err(String::from(
+                    "failed to create NSWindow for Vulkan presentation",
+                ));
+            }
+
+            // Create a CAMetalLayer (autoreleased — must retain).
+            let ca_metal_layer_class = class!(CAMetalLayer);
+            let metal_layer: *mut Object = msg_send![ca_metal_layer_class, layer];
+            if metal_layer.is_null() {
+                let _: () = msg_send![ns_window, release];
+                return Err(String::from("failed to create CAMetalLayer"));
+            }
+            let _: () = msg_send![metal_layer, retain];
+
+            // Attach the metal layer to the window's content view.
+            let content_view: *mut Object = msg_send![ns_window, contentView];
+            let _: () = msg_send![content_view, setWantsLayer: YES];
+            let _: () = msg_send![content_view, setLayer: metal_layer];
+
+            // Configure the window.
+            let title = CString::new("Personal Arcade N64 (Vulkan)").unwrap();
+            let ns_string_class = class!(NSString);
+            let ns_title: *mut Object =
+                msg_send![ns_string_class, stringWithUTF8String: title.as_ptr()];
+            let _: () = msg_send![ns_window, setTitle: ns_title];
+
+            let ns_color_class = class!(NSColor);
+            let black: *mut Object = msg_send![ns_color_class, blackColor];
+            let _: () = msg_send![ns_window, setBackgroundColor: black];
+
+            Ok(Self {
+                ns_window,
+                metal_layer,
+                width,
+                height,
+                visible: false,
+            })
+        }
     }
 
     fn descriptor(&self) -> ExternalVulkanWindowDescriptor {
-        ExternalVulkanWindowDescriptor::Xlib {
-            display: self.display,
-            window: self.window,
+        ExternalVulkanWindowDescriptor::Metal {
+            layer: self.metal_layer as *const c_void,
             width: self.width,
             height: self.height,
-        }
-    }
-
-    fn set_overlay_message(&mut self, message: Option<&str>) {
-        if self.overlay_window == 0 {
-            return;
-        }
-
-        let Some(message) = message.map(str::trim).filter(|message| !message.is_empty()) else {
-            unsafe {
-                (self.xlib.XUnmapWindow)(self.display, self.overlay_window);
-                (self.xlib.XFlush)(self.display);
-            }
-            return;
-        };
-
-        let max_chars = 72usize;
-        let sanitized = message
-            .chars()
-            .filter(|ch| *ch != '\0')
-            .take(max_chars)
-            .collect::<String>();
-        let Ok(text) = CString::new(sanitized.clone()) else {
-            return;
-        };
-        let overlay_width = ((sanitized.chars().count() as u32).saturating_mul(9) + 32)
-            .clamp(220, self.width.saturating_sub(24).max(220));
-        let overlay_height = 36u32;
-        let overlay_x = ((self.width.saturating_sub(overlay_width)) / 2) as i32;
-        let overlay_y = self
-            .height
-            .saturating_sub(overlay_height.saturating_add(28)) as i32;
-
-        unsafe {
-            (self.xlib.XMoveResizeWindow)(
-                self.display,
-                self.overlay_window,
-                overlay_x,
-                overlay_y,
-                overlay_width,
-                overlay_height,
-            );
-            (self.xlib.XMapRaised)(self.display, self.overlay_window);
-            (self.xlib.XClearWindow)(self.display, self.overlay_window);
-            (self.xlib.XDrawString)(
-                self.display,
-                self.overlay_window,
-                self.overlay_gc,
-                14,
-                23,
-                text.as_ptr(),
-                sanitized.len() as i32,
-            );
-            (self.xlib.XFlush)(self.display);
-        }
-    }
-
-    fn configure_fullscreen(&mut self) {
-        if self.net_wm_state != 0 {
-            let mut state_atoms = [0 as xlib::Atom; 2];
-            let mut state_count = 0;
-            if self.net_wm_state_fullscreen != 0 {
-                state_atoms[state_count] = self.net_wm_state_fullscreen;
-                state_count += 1;
-            }
-            if self.net_wm_state_above != 0 {
-                state_atoms[state_count] = self.net_wm_state_above;
-                state_count += 1;
-            }
-            if state_count > 0 {
-                unsafe {
-                    (self.xlib.XChangeProperty)(
-                        self.display,
-                        self.window,
-                        self.net_wm_state,
-                        xlib::XA_ATOM,
-                        32,
-                        xlib::PropModeReplace,
-                        state_atoms.as_ptr().cast(),
-                        state_count as i32,
-                    );
-                }
-            }
-        }
-        if self.net_wm_bypass_compositor != 0 {
-            let bypass = [1_u64];
-            unsafe {
-                (self.xlib.XChangeProperty)(
-                    self.display,
-                    self.window,
-                    self.net_wm_bypass_compositor,
-                    xlib::XA_CARDINAL,
-                    32,
-                    xlib::PropModeReplace,
-                    bypass.as_ptr().cast(),
-                    1,
-                );
-            }
-        }
-
-        unsafe {
-            (self.xlib.XMoveResizeWindow)(self.display, self.window, 0, 0, self.width, self.height);
-            (self.xlib.XFlush)(self.display);
-        }
-    }
-
-    fn show_fullscreen(&mut self) {
-        self.configure_fullscreen();
-        unsafe {
-            (self.xlib.XMapRaised)(self.display, self.window);
-            (self.xlib.XRaiseWindow)(self.display, self.window);
-            (self.xlib.XFlush)(self.display);
-        }
-    }
-
-    fn pump_events(&mut self) {
-        loop {
-            let pending = unsafe { (self.xlib.XPending)(self.display) };
-            if pending <= 0 {
-                break;
-            }
-            let mut event = std::mem::MaybeUninit::<xlib::XEvent>::uninit();
-            unsafe {
-                (self.xlib.XNextEvent)(self.display, event.as_mut_ptr());
-            }
-            let event = unsafe { event.assume_init() };
-            match event.get_type() {
-                xlib::ConfigureNotify => {
-                    let configure = unsafe { event.configure };
-                    self.width = configure.width.max(1) as u32;
-                    self.height = configure.height.max(1) as u32;
-                }
-                xlib::ClientMessage => {
-                    let client = unsafe { event.client_message };
-                    let data = client.data.as_longs();
-                    if self.wm_delete != 0 && data.first().copied() == Some(self.wm_delete as i64) {
-                        self.show_fullscreen();
-                    }
-                }
-                _ => {}
-            }
-        }
-    }
-
-    fn set_visible(&mut self, visible: bool) {
-        if visible {
-            if self.visible {
-                return;
-            }
-            self.show_fullscreen();
-            self.visible = true;
-        } else {
-            if !self.visible {
-                return;
-            }
-            unsafe {
-                (self.xlib.XUnmapWindow)(self.display, self.window);
-                (self.xlib.XUnmapWindow)(self.display, self.overlay_window);
-                (self.xlib.XFlush)(self.display);
-            }
-            self.visible = false;
-        }
-    }
-}
-
-#[cfg(target_os = "windows")]
-const EXTERNAL_VULKAN_WINDOW_CLASS_NAME: &[u8] = b"PersonalArcadeExternalVulkanWindow\0";
-
-#[cfg(target_os = "windows")]
-const EXTERNAL_VULKAN_OVERLAY_CLASS_NAME: &[u8] = b"STATIC\0";
-
-#[cfg(target_os = "windows")]
-fn external_vulkan_window_size(hwnd: HWND) -> (u32, u32) {
-    let mut rect = RECT {
-        left: 0,
-        top: 0,
-        right: 0,
-        bottom: 0,
-    };
-    if unsafe { GetClientRect(hwnd, &mut rect) } != 0 {
-        let width = (rect.right - rect.left).max(1) as u32;
-        let height = (rect.bottom - rect.top).max(1) as u32;
-        (width, height)
-    } else {
-        (1, 1)
-    }
-}
-
-#[cfg(target_os = "windows")]
-fn pump_external_vulkan_window_messages(hwnd: HWND) {
-    if hwnd.is_null() {
-        return;
-    }
-
-    let mut message = unsafe { std::mem::zeroed::<MSG>() };
-    while unsafe { PeekMessageA(&mut message, hwnd, 0, 0, PM_REMOVE) } != 0 {
-        unsafe {
-            TranslateMessage(&message);
-            DispatchMessageA(&message);
-        }
-    }
-}
-
-#[cfg(target_os = "windows")]
-unsafe extern "system" fn external_vulkan_window_proc(
-    hwnd: HWND,
-    message: u32,
-    wparam: WPARAM,
-    lparam: LPARAM,
-) -> LRESULT {
-    match message {
-        WM_CLOSE => {
-            unsafe {
-                ShowWindow(hwnd, SW_HIDE);
-            }
-            0
-        }
-        _ => unsafe { DefWindowProcA(hwnd, message, wparam, lparam) },
-    }
-}
-
-#[cfg(target_os = "windows")]
-fn register_external_vulkan_window_class(hinstance: HINSTANCE) -> std::result::Result<(), String> {
-    let class = WNDCLASSEXA {
-        cbSize: std::mem::size_of::<WNDCLASSEXA>() as u32,
-        style: 0,
-        lpfnWndProc: Some(external_vulkan_window_proc),
-        cbClsExtra: 0,
-        cbWndExtra: 0,
-        hInstance: hinstance,
-        hIcon: std::ptr::null_mut(),
-        hCursor: std::ptr::null_mut(),
-        hbrBackground: std::ptr::null_mut(),
-        lpszMenuName: std::ptr::null(),
-        lpszClassName: EXTERNAL_VULKAN_WINDOW_CLASS_NAME.as_ptr(),
-        hIconSm: std::ptr::null_mut(),
-    };
-    let atom = unsafe { RegisterClassExA(&class) };
-    if atom == 0 {
-        let error = unsafe { GetLastError() };
-        if error != ERROR_CLASS_ALREADY_EXISTS {
-            return Err(format!(
-                "failed to register Win32 window class for Vulkan presentation (GetLastError={error})"
-            ));
-        }
-    }
-    Ok(())
-}
-
-#[cfg(target_os = "windows")]
-impl ExternalVulkanWindow {
-    fn create() -> std::result::Result<Self, String> {
-        let hinstance = unsafe { GetModuleHandleA(std::ptr::null()) };
-        if hinstance.is_null() {
-            let error = unsafe { GetLastError() };
-            return Err(format!(
-                "failed to query Win32 module handle for Vulkan presentation window (GetLastError={error})"
-            ));
-        }
-        register_external_vulkan_window_class(hinstance)?;
-
-        let title = CString::new("Personal Arcade N64 (Vulkan)")
-            .map_err(|_| String::from("failed to build Win32 window title"))?;
-        let width = unsafe { GetSystemMetrics(SM_CXSCREEN) }.max(1) as u32;
-        let height = unsafe { GetSystemMetrics(SM_CYSCREEN) }.max(1) as u32;
-        let hwnd = unsafe {
-            CreateWindowExA(
-                WS_EX_TOPMOST,
-                EXTERNAL_VULKAN_WINDOW_CLASS_NAME.as_ptr(),
-                title.as_ptr().cast(),
-                WS_POPUP,
-                0,
-                0,
-                width as i32,
-                height as i32,
-                std::ptr::null_mut(),
-                std::ptr::null_mut(),
-                hinstance,
-                std::ptr::null(),
-            )
-        };
-        if hwnd.is_null() {
-            let error = unsafe { GetLastError() };
-            return Err(format!(
-                "failed to create Win32 window for Vulkan presentation (GetLastError={error})"
-            ));
-        }
-
-        let overlay_hwnd = unsafe {
-            CreateWindowExA(
-                0,
-                EXTERNAL_VULKAN_OVERLAY_CLASS_NAME.as_ptr(),
-                std::ptr::null(),
-                WS_CHILD,
-                0,
-                0,
-                300,
-                36,
-                hwnd,
-                std::ptr::null_mut(),
-                hinstance,
-                std::ptr::null(),
-            )
-        };
-        if overlay_hwnd.is_null() {
-            unsafe {
-                DestroyWindow(hwnd);
-            }
-            let error = unsafe { GetLastError() };
-            return Err(format!(
-                "failed to create Win32 overlay window for Vulkan presentation (GetLastError={error})"
-            ));
-        }
-        unsafe {
-            ShowWindow(overlay_hwnd, SW_HIDE);
-            ShowWindow(hwnd, SW_HIDE);
-        }
-
-        Ok(Self {
-            hinstance,
-            hwnd,
-            overlay_hwnd,
-            width,
-            height,
-            visible: false,
-        })
-    }
-
-    fn descriptor(&self) -> ExternalVulkanWindowDescriptor {
-        ExternalVulkanWindowDescriptor::Win32 {
-            hwnd: self.hwnd as vk::HWND,
-            hinstance: self.hinstance as vk::HINSTANCE,
-            width: self.width,
-            height: self.height,
-        }
-    }
-
-    fn set_overlay_message(&mut self, message: Option<&str>) {
-        if self.overlay_hwnd.is_null() {
-            return;
-        }
-        let Some(message) = message.map(str::trim).filter(|message| !message.is_empty()) else {
-            unsafe {
-                ShowWindow(self.overlay_hwnd, SW_HIDE);
-            }
-            return;
-        };
-
-        let max_chars = 72usize;
-        let sanitized = message
-            .chars()
-            .filter(|ch| *ch != '\0')
-            .take(max_chars)
-            .collect::<String>();
-        let Ok(text) = CString::new(sanitized) else {
-            return;
-        };
-        let overlay_width = ((text.as_bytes().len() as u32).saturating_mul(9) + 32)
-            .clamp(220, self.width.saturating_sub(24).max(220));
-        let overlay_height = 36u32;
-        let overlay_x = ((self.width.saturating_sub(overlay_width)) / 2) as i32;
-        let overlay_y = self
-            .height
-            .saturating_sub(overlay_height.saturating_add(28)) as i32;
-
-        unsafe {
-            MoveWindow(
-                self.overlay_hwnd,
-                overlay_x,
-                overlay_y,
-                overlay_width as i32,
-                overlay_height as i32,
-                1,
-            );
-            SetWindowTextA(self.overlay_hwnd, text.as_ptr().cast());
-            ShowWindow(self.overlay_hwnd, SW_SHOW);
-        }
-    }
-
-    fn show_fullscreen(&mut self) {
-        let width = unsafe { GetSystemMetrics(SM_CXSCREEN) }.max(1);
-        let height = unsafe { GetSystemMetrics(SM_CYSCREEN) }.max(1);
-        unsafe {
-            SetWindowPos(self.hwnd, HWND_TOPMOST, 0, 0, width, height, SWP_SHOWWINDOW);
-            ShowWindow(self.hwnd, SW_SHOW);
-            ShowWindow(self.hwnd, SW_SHOWMAXIMIZED);
-        }
-        (self.width, self.height) = external_vulkan_window_size(self.hwnd);
-        if vulkan_debug_enabled() {
-            info!(
-                target: "arcade_libretro::vulkan_debug",
-                "showing external Vulkan window {}x{}",
-                self.width,
-                self.height
-            );
-        }
-    }
-
-    fn pump_events(&mut self) {
-        pump_external_vulkan_window_messages(self.hwnd);
-        pump_external_vulkan_window_messages(self.overlay_hwnd);
-        (self.width, self.height) = external_vulkan_window_size(self.hwnd);
-    }
-
-    fn set_visible(&mut self, visible: bool) {
-        if visible {
-            if self.visible {
-                return;
-            }
-            self.show_fullscreen();
-            self.visible = true;
-        } else {
-            if !self.visible {
-                return;
-            }
-            unsafe {
-                ShowWindow(self.overlay_hwnd, SW_HIDE);
-                ShowWindow(self.hwnd, SW_HIDE);
-            }
-            self.visible = false;
-        }
-    }
-}
-
-#[cfg(not(any(target_os = "linux", target_os = "windows")))]
-impl ExternalVulkanWindow {
-    fn create() -> std::result::Result<Self, String> {
-        Err(String::from(
-            "external Vulkan presentation window is only implemented on Linux/X11 and Windows/Win32",
-        ))
-    }
-
-    fn descriptor(&self) -> ExternalVulkanWindowDescriptor {
-        ExternalVulkanWindowDescriptor::Unsupported {
-            width: 1,
-            height: 1,
         }
     }
 
     fn set_overlay_message(&mut self, _message: Option<&str>) {}
 
-    fn pump_events(&mut self) {}
+    fn pump_events(&mut self) {
+        // No-op on macOS: eframe/winit manages the NSApplication event loop
+        // and dispatches events to all NSWindows including this one.
+        // Explicitly draining NSApp events here would re-enter winit's
+        // event handler, causing a panic.
+    }
 
-    fn set_visible(&mut self, _visible: bool) {}
+    fn set_visible(&mut self, visible: bool) {
+        if visible {
+            if self.visible {
+                return;
+            }
+            unsafe {
+                let null: *mut Object = std::ptr::null_mut();
+                let _: () = msg_send![self.ns_window, makeKeyAndOrderFront: null];
+            }
+            self.visible = true;
+        } else {
+            if !self.visible {
+                return;
+            }
+            unsafe {
+                let null: *mut Object = std::ptr::null_mut();
+                let _: () = msg_send![self.ns_window, orderOut: null];
+            }
+            self.visible = false;
+        }
+    }
 }
 
 fn destroy_external_vulkan_window(window: ExternalVulkanWindow) {
-    #[cfg(target_os = "linux")]
     unsafe {
-        if !window.overlay_gc.is_null() {
-            (window.xlib.XFreeGC)(window.display, window.overlay_gc);
-        }
-        if window.overlay_window != 0 {
-            (window.xlib.XDestroyWindow)(window.display, window.overlay_window);
-        }
-        (window.xlib.XDestroyWindow)(window.display, window.window);
-        (window.xlib.XCloseDisplay)(window.display);
+        let _: () = msg_send![window.metal_layer, release];
+        let _: () = msg_send![window.ns_window, close];
     }
-    #[cfg(target_os = "windows")]
-    unsafe {
-        if !window.overlay_hwnd.is_null() {
-            DestroyWindow(window.overlay_hwnd);
-        }
-        if !window.hwnd.is_null() {
-            DestroyWindow(window.hwnd);
-        }
-    }
-    #[cfg(not(any(target_os = "linux", target_os = "windows")))]
-    let _ = window;
 }
 
 fn frontend_supports_external_vulkan_window(state: &HardwareRenderState) -> bool {
     let _ = state;
-    let Some(runtime) = active_runtime() else {
-        return false;
-    };
-    #[cfg(any(target_os = "linux", target_os = "windows"))]
-    let coordinator = runtime.video_coordinator.lock();
-    #[cfg(any(target_os = "linux", target_os = "windows"))]
-    let capabilities = coordinator.frontend_capabilities().clone();
-    #[cfg(target_os = "linux")]
-    {
-        capabilities
-            .window_handle_kind
-            .as_deref()
-            .is_some_and(|kind| kind == "Xlib")
-            && capabilities
-                .display_handle_kind
-                .as_deref()
-                .is_some_and(|kind| kind == "Xlib")
-    }
-    #[cfg(target_os = "windows")]
-    {
-        if std::env::var_os("ARCADE_WINDOWS_EXTERNAL_VULKAN_PRESENT").is_none() {
-            return false;
-        }
-        capabilities
-            .window_handle_kind
-            .as_deref()
-            .is_some_and(|kind| kind == "Win32")
-            && capabilities
-                .display_handle_kind
-                .as_deref()
-                .is_some_and(|kind| kind == "Windows")
-    }
-    #[cfg(not(any(target_os = "linux", target_os = "windows")))]
-    {
-        let _ = runtime;
-        false
-    }
+    let _ = active_runtime();
+    // macOS creates its own NSWindow — no frontend window handle needed.
+    true
 }
 
 fn vulkan_debug_enabled() -> bool {
     std::env::var_os("ARCADE_VULKAN_DEBUG").is_some()
+}
+
+fn vulkan_handoff_trace_enabled() -> bool {
+    env_flag_enabled("ARCADE_VULKAN_HANDOFF_TRACE")
+}
+
+fn vulkan_handoff_trace_should_log_callback(index: u64, width: u32, height: u32) -> bool {
+    index < 64 || index % 120 == 0 || width <= 1 || height <= 1
+}
+
+fn env_flag_enabled(name: &str) -> bool {
+    match std::env::var(name) {
+        Ok(value) => {
+            let normalized = value.trim().to_ascii_lowercase();
+            !matches!(normalized.as_str(), "0" | "false" | "off" | "no")
+        }
+        Err(_) => false,
+    }
+}
+
+fn vulkan_test_metrics_enabled() -> bool {
+    env_flag_enabled("ARCADE_VULKAN_TEST_METRICS")
+}
+
+fn vulkan_force_black_test_mode() -> bool {
+    env_flag_enabled("ARCADE_VULKAN_TEST_FORCE_BLACK")
+}
+
+fn vulkan_force_1x1_source_frame_test_mode() -> bool {
+    env_flag_enabled("ARCADE_VULKAN_TEST_FORCE_1X1")
+}
+
+fn vulkan_fail_fast_disabled() -> bool {
+    env_flag_enabled("ARCADE_VULKAN_DISABLE_FAIL_FAST")
+}
+
+fn vulkan_black_fail_fast_threshold_frames() -> u64 {
+    // Keep fail-fast below the known dynarec crash window seen in unhealthy
+    // black-frame runs so we surface an explicit Vulkan error first.
+    const DEFAULT_THRESHOLD_FRAMES: u64 = 240;
+    if vulkan_fail_fast_disabled() {
+        return 0;
+    }
+    match std::env::var("ARCADE_VULKAN_BLACK_FAIL_FAST_FRAMES") {
+        Ok(raw) => raw
+            .trim()
+            .parse::<u64>()
+            .unwrap_or(DEFAULT_THRESHOLD_FRAMES),
+        Err(_) => DEFAULT_THRESHOLD_FRAMES,
+    }
+}
+
+fn vulkan_tiny_frame_fail_fast_threshold_frames() -> u64 {
+    const DEFAULT_THRESHOLD_FRAMES: u64 = 120;
+    if vulkan_fail_fast_disabled() {
+        return 0;
+    }
+    match std::env::var("ARCADE_VULKAN_TINY_FRAME_FAIL_FAST_FRAMES") {
+        Ok(raw) => raw
+            .trim()
+            .parse::<u64>()
+            .unwrap_or(DEFAULT_THRESHOLD_FRAMES),
+        Err(_) => DEFAULT_THRESHOLD_FRAMES,
+    }
+}
+
+fn vulkan_should_sample_for_fail_fast(runtime: &HostRuntime, already_non_black: bool) -> bool {
+    let threshold = vulkan_black_fail_fast_threshold_frames();
+    if threshold == 0 || already_non_black {
+        return false;
+    }
+
+    let state = runtime.vulkan_present_metrics.lock();
+    if state.external_present_deliveries >= threshold {
+        return false;
+    }
+
+    state.external_present_deliveries < 8 || state.external_present_deliveries % 60 == 0
 }
 
 fn vulkan_force_fallback_idle() -> bool {
@@ -2837,11 +2671,10 @@ fn ensure_external_vulkan_window_for(
                 .clone();
             info!(
                 target: "arcade_libretro::vulkan_debug",
-                "external Vulkan window disabled renderer={:?} window_handle={:?} display_handle={:?} env_win32_external_present={}",
+                "external Vulkan window disabled renderer={:?} window_handle={:?} display_handle={:?}",
                 capabilities.renderer_name,
                 capabilities.window_handle_kind,
-                capabilities.display_handle_kind,
-                std::env::var_os("ARCADE_WINDOWS_EXTERNAL_VULKAN_PRESENT").is_some()
+                capabilities.display_handle_kind
             );
             state.external_vulkan_probe_logged = true;
         }
@@ -2920,10 +2753,11 @@ fn build_vulkan_instance_extensions(
 
     if external_surface {
         enabled_extensions.push(ash::vk::KHR_SURFACE_NAME);
-        #[cfg(target_os = "linux")]
-        enabled_extensions.push(ash::vk::KHR_XLIB_SURFACE_NAME);
-        #[cfg(target_os = "windows")]
-        enabled_extensions.push(ash::vk::KHR_WIN32_SURFACE_NAME);
+        push_extension_if_available(
+            &mut enabled_extensions,
+            &available_names,
+            ash::vk::EXT_METAL_SURFACE_NAME,
+        );
     }
 
     push_extension_if_available(
@@ -3019,7 +2853,10 @@ fn load_vulkan_entry() -> std::result::Result<ash::Entry, String> {
         };
 
         for candidate in macos_vulkan_loader_candidates() {
-            if attempted_paths.iter().any(|existing| existing == &candidate) {
+            if attempted_paths
+                .iter()
+                .any(|existing| existing == &candidate)
+            {
                 continue;
             }
             attempted_paths.push(candidate.clone());
@@ -3121,8 +2958,7 @@ impl VulkanInterfaceState {
             .enabled_extension_names(&instance_extensions);
         #[cfg(target_os = "macos")]
         if portability_enumeration_enabled {
-            create_info =
-                create_info.flags(vk::InstanceCreateFlags::ENUMERATE_PORTABILITY_KHR);
+            create_info = create_info.flags(vk::InstanceCreateFlags::ENUMERATE_PORTABILITY_KHR);
         }
 
         let instance = match unsafe { entry.create_instance(&create_info, None) } {
@@ -3140,8 +2976,7 @@ impl VulkanInterfaceState {
                             err,
                             app_info.api_version
                         );
-                        let fallback_app_info =
-                            default_app_info.api_version(vk::API_VERSION_1_0);
+                        let fallback_app_info = default_app_info.api_version(vk::API_VERSION_1_0);
                         let mut fallback_create_info = vk::InstanceCreateInfo::default()
                             .application_info(&fallback_app_info)
                             .enabled_extension_names(&instance_extensions);
@@ -3427,7 +3262,15 @@ fn prepare_vulkan_sync_for_frame(runtime: &HostRuntime) -> Result<()> {
     if vulkan.present.is_none() {
         let frames = vulkan.sync_frames.max(1);
         vulkan.sync_index = (vulkan.sync_index + 1) % frames;
-        vulkan.waiting_for_core_wait_sync = true;
+        #[cfg(target_os = "macos")]
+        {
+            // The macOS mupen64plus-next Vulkan path relies on non-blocking fallback sync.
+            vulkan.waiting_for_core_wait_sync = false;
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            vulkan.waiting_for_core_wait_sync = true;
+        }
         if vulkan_debug_enabled() {
             let debug_step = VULKAN_DEBUG_STEP_COUNTER.load(Ordering::Relaxed);
             if debug_step < 16 {
@@ -3467,7 +3310,7 @@ fn prepare_vulkan_sync_for_frame(runtime: &HostRuntime) -> Result<()> {
         match acquire_result {
             Ok((_, true))
                 if !retried_recreate
-                    && recreate_win32_vulkan_present_state(
+                    && recreate_vulkan_present_state(
                         vulkan,
                         external_window,
                         "vkAcquireNextImageKHR returned SUBOPTIMAL_KHR",
@@ -3486,8 +3329,8 @@ fn prepare_vulkan_sync_for_frame(runtime: &HostRuntime) -> Result<()> {
             }
             Err(err)
                 if !retried_recreate
-                    && win32_vulkan_present_requires_recreate(err)
-                    && recreate_win32_vulkan_present_state(
+                    && vulkan_present_requires_recreate(err)
+                    && recreate_vulkan_present_state(
                         vulkan,
                         external_window,
                         &format!("vkAcquireNextImageKHR returned {err:?}"),
@@ -3607,10 +3450,19 @@ fn create_vulkan_present_state(
         ));
     }
 
-    let debug_swapchain_readback_supported = vulkan_debug_enabled()
+    let vulkan_test_metrics = vulkan_test_metrics_enabled();
+    let fail_fast_sampling_enabled = vulkan_black_fail_fast_threshold_frames() > 0;
+    let debug_or_test_metrics =
+        vulkan_debug_enabled() || vulkan_test_metrics || fail_fast_sampling_enabled;
+    let debug_swapchain_readback_supported = debug_or_test_metrics
         && surface_capabilities
             .supported_usage_flags
             .contains(vk::ImageUsageFlags::TRANSFER_SRC);
+    if vulkan_test_metrics && !debug_swapchain_readback_supported {
+        return Err(String::from(
+            "Vulkan test metrics mode requires TRANSFER_SRC swapchain usage support",
+        ));
+    }
     let mut swapchain_usage = vk::ImageUsageFlags::COLOR_ATTACHMENT;
     if debug_swapchain_readback_supported {
         swapchain_usage |= vk::ImageUsageFlags::TRANSFER_SRC;
@@ -3846,35 +3698,13 @@ fn create_external_vulkan_surface(
     instance: &ash::Instance,
     external_window: ExternalVulkanWindowDescriptor,
 ) -> std::result::Result<vk::SurfaceKHR, String> {
-    #[cfg(not(any(target_os = "linux", target_os = "windows")))]
-    let _ = (entry, instance);
     match external_window {
-        #[cfg(target_os = "linux")]
-        ExternalVulkanWindowDescriptor::Xlib {
-            display, window, ..
-        } => {
-            let xlib_surface = ash::khr::xlib_surface::Instance::new(entry, instance);
-            let create_info = vk::XlibSurfaceCreateInfoKHR::default()
-                .dpy(display.cast())
-                .window(window);
-            unsafe { xlib_surface.create_xlib_surface(&create_info, None) }
-                .map_err(|err| format!("failed to create Vulkan Xlib surface: {err:?}"))
+        ExternalVulkanWindowDescriptor::Metal { layer, .. } => {
+            let metal_surface = ash::ext::metal_surface::Instance::new(entry, instance);
+            let create_info = vk::MetalSurfaceCreateInfoEXT::default().layer(layer.cast());
+            unsafe { metal_surface.create_metal_surface(&create_info, None) }
+                .map_err(|err| format!("failed to create Vulkan Metal surface: {err:?}"))
         }
-        #[cfg(target_os = "windows")]
-        ExternalVulkanWindowDescriptor::Win32 {
-            hwnd, hinstance, ..
-        } => {
-            let win32_surface = ash::khr::win32_surface::Instance::new(entry, instance);
-            let create_info = vk::Win32SurfaceCreateInfoKHR::default()
-                .hwnd(hwnd)
-                .hinstance(hinstance);
-            unsafe { win32_surface.create_win32_surface(&create_info, None) }
-                .map_err(|err| format!("failed to create Vulkan Win32 surface: {err:?}"))
-        }
-        #[cfg(not(any(target_os = "linux", target_os = "windows")))]
-        ExternalVulkanWindowDescriptor::Unsupported { .. } => Err(String::from(
-            "external Vulkan surfaces are unsupported on this platform",
-        )),
     }
 }
 
@@ -4108,6 +3938,7 @@ fn destroy_vulkan_present_state(device: &ash::Device, state: VulkanPresentState)
 }
 
 fn present_vulkan_image(
+    runtime: &HostRuntime,
     vulkan: &mut VulkanInterfaceState,
     source_size: (u32, u32),
     external_window: Option<ExternalVulkanWindowDescriptor>,
@@ -4119,7 +3950,13 @@ fn present_vulkan_image(
         return Ok(false);
     }
 
-    let debug_step = if vulkan_debug_enabled() {
+    let debug_enabled = vulkan_debug_enabled();
+    let test_metrics_enabled = vulkan_test_metrics_enabled();
+    let swapchain_non_black_seen = runtime
+        .vulkan_present_metrics
+        .lock()
+        .swapchain_non_black_seen;
+    let debug_step = if debug_enabled {
         Some(VULKAN_DEBUG_STEP_COUNTER.fetch_add(1, Ordering::Relaxed))
     } else {
         None
@@ -4180,7 +4017,14 @@ fn present_vulkan_image(
         let direct_image_view_sampling = should_sample_pending_vulkan_image_directly(&image);
         let retired_image_view = frame.transient_image_view.take();
         let debug_present_readback = present.debug_readback.as_ref().and_then(|debug| {
-            (vulkan_debug_enabled() && VULKAN_PRESENT_DEBUG_COUNTER.load(Ordering::Relaxed) < 8)
+            let should_sample_for_debug =
+                debug_enabled && VULKAN_PRESENT_DEBUG_COUNTER.load(Ordering::Relaxed) < 8;
+            let should_sample_for_test_metrics = test_metrics_enabled && !swapchain_non_black_seen;
+            let should_sample_for_fail_fast =
+                vulkan_should_sample_for_fail_fast(runtime, swapchain_non_black_seen);
+            (should_sample_for_debug
+                || should_sample_for_test_metrics
+                || should_sample_for_fail_fast)
                 .then_some((
                     frame.fence,
                     debug.staging_memory,
@@ -4459,6 +4303,7 @@ fn present_vulkan_image(
                 .wait_semaphores(std::slice::from_ref(&frame.render_semaphore))
                 .swapchains(std::slice::from_ref(&present.swapchain))
                 .image_indices(std::slice::from_ref(&image_index));
+            record_vulkan_queue_present_attempt(runtime);
             let present_result = present
                 .swapchain_loader
                 .queue_present(present.present_queue, &present_info);
@@ -4467,19 +4312,21 @@ fn present_vulkan_image(
     };
 
     match present_result {
-        Ok(true)
-            if recreate_win32_vulkan_present_state(
-                vulkan,
-                external_window,
-                "vkQueuePresentKHR returned SUBOPTIMAL_KHR",
-            )? =>
-        {
-            return Ok(false);
+        Ok(suboptimal) => {
+            record_vulkan_queue_present_success(runtime);
+            if suboptimal
+                && recreate_vulkan_present_state(
+                    vulkan,
+                    external_window,
+                    "vkQueuePresentKHR returned SUBOPTIMAL_KHR",
+                )?
+            {
+                return Ok(false);
+            }
         }
-        Ok(_) => {}
         Err(err)
-            if win32_vulkan_present_requires_recreate(err)
-                && recreate_win32_vulkan_present_state(
+            if vulkan_present_requires_recreate(err)
+                && recreate_vulkan_present_state(
                     vulkan,
                     external_window,
                     &format!("vkQueuePresentKHR returned {err:?}"),
@@ -4537,24 +4384,28 @@ fn present_vulkan_image(
             }
             let (checksum, non_black_pixels, first_rgba, center_rgba) =
                 summarize_rgba_debug_pixels_grid(&normalized, extent.width, extent.height);
-            let frame_index = VULKAN_PRESENT_DEBUG_COUNTER.fetch_add(1, Ordering::Relaxed);
-            info!(
-                target: "arcade_libretro::vulkan_debug",
-                "present readback frame={} size={}x{} format={:?} checksum=0x{checksum:016x} non_black_samples={}/64 first_rgba={:02x},{:02x},{:02x},{:02x} center_rgba={:02x},{:02x},{:02x},{:02x}",
-                frame_index,
-                extent.width,
-                extent.height,
-                format,
-                non_black_pixels,
-                first_rgba[0],
-                first_rgba[1],
-                first_rgba[2],
-                first_rgba[3],
-                center_rgba[0],
-                center_rgba[1],
-                center_rgba[2],
-                center_rgba[3],
-            );
+            let swapchain_non_black_seen = !vulkan_force_black_test_mode() && non_black_pixels > 0;
+            record_vulkan_swapchain_non_black_sample(runtime, swapchain_non_black_seen);
+            if debug_enabled {
+                let frame_index = VULKAN_PRESENT_DEBUG_COUNTER.fetch_add(1, Ordering::Relaxed);
+                info!(
+                    target: "arcade_libretro::vulkan_debug",
+                    "present readback frame={} size={}x{} format={:?} checksum=0x{checksum:016x} non_black_samples={}/64 first_rgba={:02x},{:02x},{:02x},{:02x} center_rgba={:02x},{:02x},{:02x},{:02x}",
+                    frame_index,
+                    extent.width,
+                    extent.height,
+                    format,
+                    non_black_pixels,
+                    first_rgba[0],
+                    first_rgba[1],
+                    first_rgba[2],
+                    first_rgba[3],
+                    center_rgba[0],
+                    center_rgba[1],
+                    center_rgba[2],
+                    center_rgba[3],
+                );
+            }
             vulkan.device.unmap_memory(staging_memory);
         }
     }
@@ -4562,93 +4413,70 @@ fn present_vulkan_image(
     Ok(true)
 }
 
-fn win32_vulkan_present_requires_recreate(result: vk::Result) -> bool {
-    #[cfg(target_os = "windows")]
-    {
-        matches!(
-            result,
-            vk::Result::ERROR_OUT_OF_DATE_KHR | vk::Result::ERROR_SURFACE_LOST_KHR
-        )
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        let _ = result;
-        false
-    }
+fn vulkan_present_requires_recreate(result: vk::Result) -> bool {
+    matches!(
+        result,
+        vk::Result::ERROR_OUT_OF_DATE_KHR | vk::Result::ERROR_SURFACE_LOST_KHR
+    )
 }
 
-fn recreate_win32_vulkan_present_state(
+fn recreate_vulkan_present_state(
     vulkan: &mut VulkanInterfaceState,
     external_window: Option<ExternalVulkanWindowDescriptor>,
     trigger: &str,
 ) -> Result<bool> {
-    #[cfg(target_os = "windows")]
-    {
-        let Some(ExternalVulkanWindowDescriptor::Win32 { .. }) = external_window else {
-            return Ok(false);
-        };
-        let Some(old_present) = vulkan.present.take() else {
-            return Ok(false);
-        };
+    let Some(external_window) = external_window else {
+        return Ok(false);
+    };
+    let Some(old_present) = vulkan.present.take() else {
+        return Ok(false);
+    };
 
-        warn!(
-            target: "arcade_libretro::vulkan_debug",
-            "recreating Win32 Vulkan present state after {trigger}"
-        );
+    warn!(
+        target: "arcade_libretro::vulkan_debug",
+        "recreating Vulkan present state after {trigger}"
+    );
 
-        wait_for_vulkan_device_idle(vulkan)?;
+    wait_for_vulkan_device_idle(vulkan)?;
 
-        let surface = create_external_vulkan_surface(
-            &vulkan._entry,
-            &vulkan.instance,
-            external_window.unwrap(),
-        )
-        .map_err(|err| anyhow!("failed to recreate Win32 Vulkan surface: {err}"))?;
-        let present_queue_family_index = old_present.present_queue_family_index;
-        destroy_vulkan_present_state(&vulkan.device, old_present);
+    let surface = create_external_vulkan_surface(&vulkan._entry, &vulkan.instance, external_window)
+        .map_err(|err| anyhow!("failed to recreate Vulkan surface: {err}"))?;
+    let present_queue_family_index = old_present.present_queue_family_index;
+    destroy_vulkan_present_state(&vulkan.device, old_present);
 
-        match create_vulkan_present_state(VulkanPresentConfig {
-            entry: &vulkan._entry,
-            instance: &vulkan.instance,
-            physical_device: vulkan.physical_device,
-            device: &vulkan.device,
-            surface,
-            external_window: external_window.unwrap(),
-            present_queue: vulkan.presentation_queue,
-            present_queue_family_index,
-        }) {
-            Ok(present) => {
-                if vulkan_debug_enabled() {
-                    info!(
-                        target: "arcade_libretro::vulkan_debug",
-                        "recreated Win32 Vulkan present state {}x{} images={}",
-                        present.extent.width,
-                        present.extent.height,
-                        present.images.len()
-                    );
-                }
-                vulkan.sync_index = 0;
-                vulkan.sync_frames = present.images.len().max(1) as u32;
-                vulkan.pending_images.clear();
-                vulkan.present = Some(present);
-                Ok(true)
+    match create_vulkan_present_state(VulkanPresentConfig {
+        entry: &vulkan._entry,
+        instance: &vulkan.instance,
+        physical_device: vulkan.physical_device,
+        device: &vulkan.device,
+        surface,
+        external_window,
+        present_queue: vulkan.presentation_queue,
+        present_queue_family_index,
+    }) {
+        Ok(present) => {
+            if vulkan_debug_enabled() {
+                info!(
+                    target: "arcade_libretro::vulkan_debug",
+                    "recreated Vulkan present state {}x{} images={}",
+                    present.extent.width,
+                    present.extent.height,
+                    present.images.len()
+                );
             }
-            Err(err) => {
-                let surface_loader =
-                    ash::khr::surface::Instance::new(&vulkan._entry, &vulkan.instance);
-                unsafe {
-                    surface_loader.destroy_surface(surface, None);
-                }
-                Err(anyhow!("failed to recreate Win32 Vulkan swapchain: {err}"))
-            }
+            vulkan.sync_index = 0;
+            vulkan.sync_frames = present.images.len().max(1) as u32;
+            vulkan.pending_images.clear();
+            vulkan.present = Some(present);
+            Ok(true)
         }
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        let _ = vulkan;
-        let _ = external_window;
-        let _ = trigger;
-        Ok(false)
+        Err(err) => {
+            let surface_loader = ash::khr::surface::Instance::new(&vulkan._entry, &vulkan.instance);
+            unsafe {
+                surface_loader.destroy_surface(surface, None);
+            }
+            Err(anyhow!("failed to recreate Vulkan swapchain: {err}"))
+        }
     }
 }
 
@@ -4680,6 +4508,15 @@ fn destroy_vulkan_interface_state(state: VulkanInterfaceState) {
     }
 }
 
+fn session_allows_external_vulkan_present(runtime: &HostRuntime) -> bool {
+    runtime
+        .video_coordinator
+        .lock()
+        .current_selection()
+        .map(|selection| selection.allows_external_present)
+        .unwrap_or(false)
+}
+
 fn ensure_vulkan_interface_state_for(runtime: &HostRuntime) -> std::result::Result<String, String> {
     let negotiation = {
         let state = runtime.hw_render_state.lock();
@@ -4688,7 +4525,11 @@ fn ensure_vulkan_interface_state_for(runtime: &HostRuntime) -> std::result::Resu
         }
         state.vulkan_negotiation
     };
-    let external_window = ensure_external_vulkan_window_for(runtime);
+    let external_window = if session_allows_external_vulkan_present(runtime) {
+        ensure_external_vulkan_window_for(runtime)
+    } else {
+        None
+    };
 
     let vulkan = VulkanInterfaceState::create(runtime, negotiation, external_window)?;
     let summary = vulkan.summary();
@@ -4822,10 +4663,33 @@ fn ensure_vulkan_readback_resources(
 }
 
 fn debug_readback_vulkan_source_image(
+    runtime: &HostRuntime,
     vulkan: &mut VulkanInterfaceState,
     frame_size: (u32, u32),
 ) -> Result<()> {
-    if !vulkan_debug_enabled() || VULKAN_SOURCE_IMAGE_DEBUG_COUNTER.load(Ordering::Relaxed) >= 8 {
+    let debug_enabled = vulkan_debug_enabled();
+    let test_metrics_enabled = vulkan_test_metrics_enabled();
+    let source_non_black_seen = runtime.vulkan_present_metrics.lock().source_non_black_seen;
+    let should_sample_for_debug =
+        debug_enabled && VULKAN_SOURCE_IMAGE_DEBUG_COUNTER.load(Ordering::Relaxed) < 8;
+    let should_sample_for_test_metrics = test_metrics_enabled && !source_non_black_seen;
+    let should_sample_for_fail_fast = vulkan.present.is_some()
+        && vulkan_should_sample_for_fail_fast(runtime, source_non_black_seen);
+    if !should_sample_for_debug && !should_sample_for_test_metrics && !should_sample_for_fail_fast {
+        return Ok(());
+    }
+    if frame_size.0 <= 1 || frame_size.1 <= 1 {
+        if vulkan_handoff_trace_enabled() {
+            let trace_index = VULKAN_HANDOFF_TRACE_COUNTER.fetch_add(1, Ordering::Relaxed);
+            if trace_index < 32 || trace_index % 60 == 0 {
+                info!(
+                    target: "arcade_libretro::vulkan_debug",
+                    "handoff trace: skipping source image probe for tiny frame={}x{}",
+                    frame_size.0,
+                    frame_size.1
+                );
+            }
+        }
         return Ok(());
     }
 
@@ -4854,11 +4718,13 @@ fn debug_readback_vulkan_source_image(
         vk::Format::R8G8B8A8_UNORM | vk::Format::R8G8B8A8_SRGB => false,
         vk::Format::B8G8R8A8_UNORM | vk::Format::B8G8R8A8_SRGB => true,
         _ => {
-            info!(
-                target: "arcade_libretro::vulkan_debug",
-                "source image debug readback skipped unsupported_format={:?}",
-                format
-            );
+            if debug_enabled {
+                info!(
+                    target: "arcade_libretro::vulkan_debug",
+                    "source image debug readback skipped unsupported_format={:?}",
+                    format
+                );
+            }
             return Ok(());
         }
     };
@@ -4990,24 +4856,28 @@ fn debug_readback_vulkan_source_image(
 
         let (checksum, non_black_pixels, first_rgba, center_rgba) =
             summarize_rgba_debug_pixels_grid(&pixels, frame_size.0, frame_size.1);
-        let frame_index = VULKAN_SOURCE_IMAGE_DEBUG_COUNTER.fetch_add(1, Ordering::Relaxed);
-        info!(
-            target: "arcade_libretro::vulkan_debug",
-            "source image readback frame={} size={}x{} format={:?} checksum=0x{checksum:016x} non_black_samples={}/64 first_rgba={:02x},{:02x},{:02x},{:02x} center_rgba={:02x},{:02x},{:02x},{:02x}",
-            frame_index,
-            frame_size.0,
-            frame_size.1,
-            format,
-            non_black_pixels,
-            first_rgba[0],
-            first_rgba[1],
-            first_rgba[2],
-            first_rgba[3],
-            center_rgba[0],
-            center_rgba[1],
-            center_rgba[2],
-            center_rgba[3],
-        );
+        let source_non_black_seen = !vulkan_force_black_test_mode() && non_black_pixels > 0;
+        record_vulkan_source_non_black_sample(runtime, source_non_black_seen);
+        if debug_enabled {
+            let frame_index = VULKAN_SOURCE_IMAGE_DEBUG_COUNTER.fetch_add(1, Ordering::Relaxed);
+            info!(
+                target: "arcade_libretro::vulkan_debug",
+                "source image readback frame={} size={}x{} format={:?} checksum=0x{checksum:016x} non_black_samples={}/64 first_rgba={:02x},{:02x},{:02x},{:02x} center_rgba={:02x},{:02x},{:02x},{:02x}",
+                frame_index,
+                frame_size.0,
+                frame_size.1,
+                format,
+                non_black_pixels,
+                first_rgba[0],
+                first_rgba[1],
+                first_rgba[2],
+                first_rgba[3],
+                center_rgba[0],
+                center_rgba[1],
+                center_rgba[2],
+                center_rgba[3],
+            );
+        }
     }
 
     Ok(())
@@ -5224,7 +5094,34 @@ unsafe extern "C" fn retro_vulkan_wait_sync_index(handle: *mut c_void) {
     };
     let Some(present) = vulkan.present.as_ref() else {
         let sync_index = vulkan.sync_index;
-        if vulkan_force_fallback_idle() {
+        #[cfg(target_os = "macos")]
+        {
+            if vulkan_force_fallback_idle() {
+                let wait_result = wait_for_vulkan_device_idle(vulkan);
+                if let Err(err) = wait_result {
+                    warn!(
+                        "libretro hw-render: wait_sync_index failed waiting for fallback queue idle: {err}"
+                    );
+                    record_runtime_load_error(format!(
+                        "wait_sync_index failed waiting for fallback queue idle: {err}"
+                    ));
+                }
+            }
+            if vulkan_debug_enabled() {
+                let debug_step = VULKAN_DEBUG_STEP_COUNTER.load(Ordering::Relaxed);
+                if debug_step < 16 {
+                    info!(
+                        target: "arcade_libretro::vulkan_debug",
+                        "wait_sync_index completed fallback step={} sync_index={} force_idle={}",
+                        debug_step,
+                        sync_index,
+                        vulkan_force_fallback_idle()
+                    );
+                }
+            }
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
             let wait_result = wait_for_vulkan_device_idle(vulkan);
             if let Err(err) = wait_result {
                 warn!(
@@ -5233,18 +5130,16 @@ unsafe extern "C" fn retro_vulkan_wait_sync_index(handle: *mut c_void) {
                 record_runtime_load_error(format!(
                     "wait_sync_index failed waiting for fallback queue idle: {err}"
                 ));
-            }
-        }
-        if vulkan_debug_enabled() {
-            let debug_step = VULKAN_DEBUG_STEP_COUNTER.load(Ordering::Relaxed);
-            if debug_step < 16 {
-                info!(
-                    target: "arcade_libretro::vulkan_debug",
-                    "wait_sync_index completed fallback step={} sync_index={} force_idle={}",
-                    debug_step,
-                    sync_index,
-                    vulkan_force_fallback_idle()
-                );
+            } else if vulkan_debug_enabled() {
+                let debug_step = VULKAN_DEBUG_STEP_COUNTER.load(Ordering::Relaxed);
+                if debug_step < 16 {
+                    info!(
+                        target: "arcade_libretro::vulkan_debug",
+                        "wait_sync_index completed fallback step={} sync_index={}",
+                        debug_step,
+                        sync_index
+                    );
+                }
             }
         }
         vulkan.waiting_for_core_wait_sync = false;
@@ -5565,6 +5460,9 @@ fn ensure_hw_render_target(target_size: (u32, u32)) -> Result<()> {
     if let Some(target) = state.target.as_mut() {
         target.width = width;
         target.height = height;
+        // Invalidate the emu-side FBO: it has a depth-stencil renderbuffer at the old size
+        // and must be recreated in the emu thread's context at the new size.
+        target.emu_ctx_framebuffer = None;
     } else {
         state.target = Some(HardwareRenderTarget {
             framebuffer,
@@ -5572,6 +5470,8 @@ fn ensure_hw_render_target(target_size: (u32, u32)) -> Result<()> {
             depth_stencil,
             width,
             height,
+            emu_ctx_framebuffer: None,
+            emu_game_texture: None,
         });
     }
     Ok(())
@@ -5582,6 +5482,7 @@ fn take_vulkan_render_frame(
     pending: PendingHardwareFrame,
 ) -> Result<Option<FrameBuffer>> {
     let frame_size = resolve_vulkan_frame_size(runtime, pending);
+    let source_probe_size = (pending.width.max(1), pending.height.max(1));
     if vulkan_debug_enabled()
         && (frame_size.0 != pending.width || frame_size.1 != pending.height)
         && VULKAN_READBACK_DEBUG_COUNTER.load(Ordering::Relaxed) < 16
@@ -5594,6 +5495,21 @@ fn take_vulkan_render_frame(
             frame_size.0,
             frame_size.1,
         );
+    }
+    if vulkan_handoff_trace_enabled() && (source_probe_size.0 <= 1 || source_probe_size.1 <= 1) {
+        let trace_index = VULKAN_HANDOFF_TRACE_COUNTER.fetch_add(1, Ordering::Relaxed);
+        if trace_index < 32 || trace_index % 60 == 0 {
+            info!(
+                target: "arcade_libretro::vulkan_debug",
+                "handoff trace: tiny callback frame pending={}x{} source_probe={}x{} resolved_readback={}x{}",
+                pending.width,
+                pending.height,
+                source_probe_size.0,
+                source_probe_size.1,
+                frame_size.0,
+                frame_size.1
+            );
+        }
     }
     wait_for_unsignaled_vulkan_image(runtime)?;
     let required_size = frame_size.0 as usize * frame_size.1 as usize * 4;
@@ -5608,8 +5524,8 @@ fn take_vulkan_render_frame(
             "Vulkan hardware-render frame requested before Vulkan interface setup"
         ));
     };
-    debug_readback_vulkan_source_image(vulkan, frame_size)?;
-    if present_vulkan_image(vulkan, frame_size, external_window)? {
+    debug_readback_vulkan_source_image(runtime, vulkan, source_probe_size)?;
+    if present_vulkan_image(runtime, vulkan, frame_size, external_window)? {
         return Ok(None);
     }
     if vulkan_force_fallback_idle() {
@@ -5753,7 +5669,16 @@ fn take_vulkan_render_frame(
             .map_err(|err| anyhow!("failed waiting for Vulkan readback fence: {err:?}"))?;
     }
 
-    let mut pixels = vec![0_u8; required_size];
+    // Allocate without zeroing: copy_from_slice below immediately overwrites every byte,
+    // so the zero-init in vec![0_u8; n] is pure waste (~1MB/frame at 640×480).
+    let mut pixels = {
+        let mut v = Vec::with_capacity(required_size);
+        #[allow(clippy::uninit_vec)]
+        unsafe {
+            v.set_len(required_size);
+        }
+        v
+    };
     unsafe {
         let mapped = vulkan
             .device
@@ -5862,6 +5787,10 @@ fn wait_for_unsignaled_vulkan_image(runtime: &HostRuntime) -> Result<()> {
         }
 
         if vulkan.waiting_for_core_wait_sync {
+            if vulkan.present.is_none() {
+                vulkan.waiting_for_core_wait_sync = false;
+                return Ok(());
+            }
             drop(state);
             if !logged_wait_sync && vulkan_debug_enabled() {
                 info!(
@@ -6005,7 +5934,181 @@ fn drain_frontend_gl_errors(runtime: &HostRuntime, stage: &str) {
     }
 }
 
-fn force_default_gl_framebuffer(_runtime: &HostRuntime) -> bool {
+fn capture_frontend_gl_state(runtime: &HostRuntime) -> Option<FrontendGlStateSnapshot> {
+    let Some(gl) = runtime.hw_render_state.lock().frontend_gl_context.clone() else {
+        return None;
+    };
+
+    unsafe {
+        let active_texture = gl.get_parameter_i32(glow::ACTIVE_TEXTURE);
+        let max_texture_units = gl
+            .get_parameter_i32(glow::MAX_COMBINED_TEXTURE_IMAGE_UNITS)
+            .clamp(1, 8);
+        let mut texture_units = Vec::with_capacity(max_texture_units as usize);
+        for unit in 0..max_texture_units {
+            gl.active_texture(glow::TEXTURE0 + unit as u32);
+            texture_units.push(FrontendGlTextureUnitState {
+                texture_2d: NonZeroU32::new(gl.get_parameter_i32(glow::TEXTURE_BINDING_2D) as u32)
+                    .map(glow::NativeTexture),
+                sampler: NonZeroU32::new(gl.get_parameter_i32(glow::SAMPLER_BINDING) as u32)
+                    .map(glow::NativeSampler),
+            });
+        }
+
+        gl.active_texture(active_texture as u32);
+
+        Some(FrontendGlStateSnapshot {
+            active_texture,
+            texture_units,
+            current_program: NonZeroU32::new(gl.get_parameter_i32(glow::CURRENT_PROGRAM) as u32)
+                .map(glow::NativeProgram),
+            vertex_array: NonZeroU32::new(gl.get_parameter_i32(glow::VERTEX_ARRAY_BINDING) as u32)
+                .map(glow::NativeVertexArray),
+            array_buffer: NonZeroU32::new(gl.get_parameter_i32(glow::ARRAY_BUFFER_BINDING) as u32)
+                .map(glow::NativeBuffer),
+            element_array_buffer: NonZeroU32::new(
+                gl.get_parameter_i32(glow::ELEMENT_ARRAY_BUFFER_BINDING) as u32,
+            )
+            .map(glow::NativeBuffer),
+            renderbuffer: NonZeroU32::new(gl.get_parameter_i32(glow::RENDERBUFFER_BINDING) as u32)
+                .map(glow::NativeRenderbuffer),
+            framebuffer: NonZeroU32::new(gl.get_parameter_i32(glow::FRAMEBUFFER_BINDING) as u32)
+                .map(glow::NativeFramebuffer),
+            read_framebuffer: NonZeroU32::new(
+                gl.get_parameter_i32(glow::READ_FRAMEBUFFER_BINDING) as u32,
+            )
+            .map(glow::NativeFramebuffer),
+            draw_framebuffer: NonZeroU32::new(
+                gl.get_parameter_i32(glow::DRAW_FRAMEBUFFER_BINDING) as u32,
+            )
+            .map(glow::NativeFramebuffer),
+            unpack_alignment: gl.get_parameter_i32(glow::UNPACK_ALIGNMENT),
+            pack_alignment: gl.get_parameter_i32(glow::PACK_ALIGNMENT),
+            unpack_row_length: gl.get_parameter_i32(glow::UNPACK_ROW_LENGTH),
+            pack_row_length: gl.get_parameter_i32(glow::PACK_ROW_LENGTH),
+            viewport: get_gl_int4(&gl, glow::VIEWPORT),
+            scissor_box: get_gl_int4(&gl, glow::SCISSOR_BOX),
+            blend_enabled: gl.is_enabled(glow::BLEND),
+            cull_face_enabled: gl.is_enabled(glow::CULL_FACE),
+            depth_test_enabled: gl.is_enabled(glow::DEPTH_TEST),
+            scissor_test_enabled: gl.is_enabled(glow::SCISSOR_TEST),
+            stencil_test_enabled: gl.is_enabled(glow::STENCIL_TEST),
+            blend_src_rgb: gl.get_parameter_i32(glow::BLEND_SRC_RGB),
+            blend_dst_rgb: gl.get_parameter_i32(glow::BLEND_DST_RGB),
+            blend_src_alpha: gl.get_parameter_i32(glow::BLEND_SRC_ALPHA),
+            blend_dst_alpha: gl.get_parameter_i32(glow::BLEND_DST_ALPHA),
+            blend_equation_rgb: gl.get_parameter_i32(glow::BLEND_EQUATION_RGB),
+            blend_equation_alpha: gl.get_parameter_i32(glow::BLEND_EQUATION_ALPHA),
+            color_mask: get_gl_bool4(&gl, glow::COLOR_WRITEMASK),
+            depth_mask: gl.get_parameter_bool(glow::DEPTH_WRITEMASK),
+            stencil_mask_front: gl.get_parameter_i32(glow::STENCIL_WRITEMASK),
+            stencil_mask_back: gl.get_parameter_i32(glow::STENCIL_BACK_WRITEMASK),
+        })
+    }
+}
+
+fn restore_frontend_gl_state(runtime: &HostRuntime, snapshot: &FrontendGlStateSnapshot) {
+    let Some(gl) = runtime.hw_render_state.lock().frontend_gl_context.clone() else {
+        return;
+    };
+
+    unsafe {
+        for (unit, state) in snapshot.texture_units.iter().enumerate() {
+            gl.active_texture(glow::TEXTURE0 + unit as u32);
+            gl.bind_texture(glow::TEXTURE_2D, state.texture_2d);
+            gl.bind_sampler(unit as u32, state.sampler);
+        }
+
+        gl.active_texture(snapshot.active_texture as u32);
+        gl.use_program(snapshot.current_program);
+        gl.bind_vertex_array(snapshot.vertex_array);
+        gl.bind_buffer(glow::ARRAY_BUFFER, snapshot.array_buffer);
+        gl.bind_buffer(glow::ELEMENT_ARRAY_BUFFER, snapshot.element_array_buffer);
+        gl.bind_renderbuffer(glow::RENDERBUFFER, snapshot.renderbuffer);
+        gl.bind_framebuffer(glow::FRAMEBUFFER, snapshot.framebuffer);
+        gl.bind_framebuffer(glow::READ_FRAMEBUFFER, snapshot.read_framebuffer);
+        gl.bind_framebuffer(glow::DRAW_FRAMEBUFFER, snapshot.draw_framebuffer);
+        gl.pixel_store_i32(glow::UNPACK_ALIGNMENT, snapshot.unpack_alignment);
+        gl.pixel_store_i32(glow::PACK_ALIGNMENT, snapshot.pack_alignment);
+        gl.pixel_store_i32(glow::UNPACK_ROW_LENGTH, snapshot.unpack_row_length);
+        gl.pixel_store_i32(glow::PACK_ROW_LENGTH, snapshot.pack_row_length);
+        set_gl_cap(&gl, glow::BLEND, snapshot.blend_enabled);
+        set_gl_cap(&gl, glow::CULL_FACE, snapshot.cull_face_enabled);
+        set_gl_cap(&gl, glow::DEPTH_TEST, snapshot.depth_test_enabled);
+        set_gl_cap(&gl, glow::SCISSOR_TEST, snapshot.scissor_test_enabled);
+        set_gl_cap(&gl, glow::STENCIL_TEST, snapshot.stencil_test_enabled);
+        gl.viewport(
+            snapshot.viewport[0],
+            snapshot.viewport[1],
+            snapshot.viewport[2],
+            snapshot.viewport[3],
+        );
+        gl.scissor(
+            snapshot.scissor_box[0],
+            snapshot.scissor_box[1],
+            snapshot.scissor_box[2],
+            snapshot.scissor_box[3],
+        );
+        gl.blend_func_separate(
+            snapshot.blend_src_rgb as u32,
+            snapshot.blend_dst_rgb as u32,
+            snapshot.blend_src_alpha as u32,
+            snapshot.blend_dst_alpha as u32,
+        );
+        gl.blend_equation_separate(
+            snapshot.blend_equation_rgb as u32,
+            snapshot.blend_equation_alpha as u32,
+        );
+        gl.color_mask(
+            snapshot.color_mask[0],
+            snapshot.color_mask[1],
+            snapshot.color_mask[2],
+            snapshot.color_mask[3],
+        );
+        gl.depth_mask(snapshot.depth_mask);
+        gl.stencil_mask_separate(glow::FRONT, snapshot.stencil_mask_front as u32);
+        gl.stencil_mask_separate(glow::BACK, snapshot.stencil_mask_back as u32);
+    }
+}
+
+fn set_gl_cap(gl: &glow::Context, cap: u32, enabled: bool) {
+    unsafe {
+        if enabled {
+            gl.enable(cap);
+        } else {
+            gl.disable(cap);
+        }
+    }
+}
+
+fn get_gl_int4(gl: &glow::Context, pname: u32) -> [i32; 4] {
+    let mut values = [0_i32; 4];
+    let _ = gl;
+    #[cfg(target_os = "macos")]
+    unsafe {
+        extern "C" {
+            fn glGetIntegerv(pname: u32, data: *mut i32);
+        }
+        glGetIntegerv(pname, values.as_mut_ptr());
+    }
+    values
+}
+
+fn get_gl_bool4(gl: &glow::Context, pname: u32) -> [bool; 4] {
+    let mut values = [0_u8; 4];
+    #[cfg(target_os = "macos")]
+    unsafe {
+        extern "C" {
+            fn glGetBooleanv(pname: u32, data: *mut u8);
+        }
+        let _ = gl;
+        glGetBooleanv(pname, values.as_mut_ptr());
+    }
+    values.map(|value| value != 0)
+}
+
+fn force_default_gl_framebuffer(runtime: &HostRuntime) -> bool {
+    let _ = runtime;
     std::env::var_os("ARCADE_GL_FORCE_DEFAULT_FRAMEBUFFER").is_some()
 }
 
@@ -6081,25 +6184,131 @@ fn read_opengl_render_frame(
     runtime: &HostRuntime,
     pending: PendingHardwareFrame,
 ) -> Result<FrameBuffer> {
-    let (gl, framebuffer) = {
+    let (gl, framebuffer, emu_ctx_framebuffer, color_texture, emu_game_texture) = {
         let state = runtime.hw_render_state.lock();
         let Some(gl) = state.frontend_gl_context.clone() else {
             return Err(anyhow!(
                 "hardware-render frame requested without an active GL context"
             ));
         };
-        let framebuffer = if force_default_gl_framebuffer(runtime) {
-            None
-        } else {
-            let Some(target) = state.target.as_ref() else {
-                return Err(anyhow!(
-                    "hardware-render frame requested before framebuffer setup"
-                ));
+        let (framebuffer, emu_ctx_framebuffer, color_texture, emu_game_texture) =
+            if force_default_gl_framebuffer(runtime) {
+                (None, None, None, None)
+            } else {
+                let Some(target) = state.target.as_ref() else {
+                    return Err(anyhow!(
+                        "hardware-render frame requested before framebuffer setup"
+                    ));
+                };
+                (
+                    Some(target.framebuffer),
+                    target.emu_ctx_framebuffer,
+                    Some(target.color_texture),
+                    target.emu_game_texture,
+                )
             };
-            Some(target.framebuffer)
-        };
-        (gl, framebuffer)
+        (
+            gl,
+            framebuffer,
+            emu_ctx_framebuffer,
+            color_texture,
+            emu_game_texture,
+        )
     };
+
+    // Fast path: if a previous scan found the core's game-frame texture (visible here because
+    // the core uses a shared GL context), read from it directly via a temporary FBO.
+    if let Some(game_tex) = emu_game_texture {
+        let mut pixels = vec![0_u8; pending.width as usize * pending.height as usize * 4];
+        if let Ok(temp_fbo) = unsafe { gl.create_framebuffer() } {
+            let mut fbo_complete = false;
+            unsafe {
+                gl.bind_framebuffer(glow::FRAMEBUFFER, Some(temp_fbo));
+                gl.framebuffer_texture_2d(
+                    glow::FRAMEBUFFER,
+                    glow::COLOR_ATTACHMENT0,
+                    glow::TEXTURE_2D,
+                    Some(game_tex),
+                    0,
+                );
+                if gl.check_framebuffer_status(glow::FRAMEBUFFER) == glow::FRAMEBUFFER_COMPLETE {
+                    fbo_complete = true;
+                    gl.read_buffer(glow::COLOR_ATTACHMENT0);
+                    gl.read_pixels(
+                        0,
+                        0,
+                        pending.width as i32,
+                        pending.height as i32,
+                        glow::RGBA,
+                        glow::UNSIGNED_BYTE,
+                        glow::PixelPackData::Slice(Some(&mut pixels)),
+                    );
+                }
+                gl.bind_framebuffer(glow::FRAMEBUFFER, None);
+                gl.delete_framebuffer(temp_fbo);
+            }
+            // Return whenever the FBO is complete — even if the first 64 pixels are dark
+            // (e.g. letterbox / sky row).  The non_black guard was too conservative and
+            // caused the fast path to fall through on frames where the bottom row is black.
+            if fbo_complete {
+                if std::env::var_os("LIBRETRO_TRACE_GL_READBACK").is_some() {
+                    static FAST_PATH_LOGGED: std::sync::atomic::AtomicBool =
+                        std::sync::atomic::AtomicBool::new(false);
+                    if !FAST_PATH_LOGGED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                        // Sample pixels at every 10% of height to show where content lives.
+                        let w = pending.width as usize;
+                        let h = pending.height as usize;
+                        for frac in [0, 10, 25, 50, 75, 90, 100_usize] {
+                            let y = ((h - 1) * frac / 100).min(h - 1);
+                            let cx = w / 2;
+                            let off = (y * w + cx) * 4;
+                            if off + 3 < pixels.len() {
+                                let p = &pixels[off..off + 4];
+                                eprintln!(
+                                    "  fast_path_sample y={y} (gl, {frac}%) cx={cx} rgba={:02x},{:02x},{:02x},{:02x}",
+                                    p[0], p[1], p[2], p[3]
+                                );
+                            }
+                        }
+                        let total_non_black = pixels
+                            .chunks_exact(4)
+                            .filter(|p| p[0] != 0 || p[1] != 0 || p[2] != 0)
+                            .count();
+                        let total = pixels.len() / 4;
+                        eprintln!(
+                            "  fast_path total_non_black={total_non_black}/{total} ({:.1}%)",
+                            total_non_black as f64 / total as f64 * 100.0
+                        );
+                    }
+                }
+                if pending.bottom_left_origin {
+                    let row_len = pending.width as usize * 4;
+                    let mut flipped =
+                        vec![0_u8; pending.width as usize * pending.height as usize * 4];
+                    for row in 0..pending.height as usize {
+                        let src_row = pending.height as usize - 1 - row;
+                        flipped[row * row_len..(row + 1) * row_len]
+                            .copy_from_slice(&pixels[src_row * row_len..(src_row + 1) * row_len]);
+                    }
+                    pixels = flipped;
+                }
+                // Force alpha: GL render textures commonly leave alpha undefined or zero.
+                // egui's from_rgba_unmultiplied premultiplies by alpha, so alpha=0 pixels
+                // would be rendered as transparent black even when RGB is non-zero.
+                for pixel in pixels.chunks_exact_mut(4) {
+                    pixel[3] = 255;
+                }
+                return Ok(FrameBuffer {
+                    width: pending.width,
+                    height: pending.height,
+                    pitch: pending.width as usize * 4,
+                    data: pixels,
+                    pixel_format: PixelFormat::Rgba8888,
+                });
+            }
+        }
+        // FBO was incomplete (texture deleted/invalidated) — fall through to normal path.
+    }
 
     let read_framebuffer = |framebuffer: Option<glow::Framebuffer>| -> Vec<u8> {
         let mut pixels = vec![0_u8; pending.width as usize * pending.height as usize * 4];
@@ -6121,26 +6330,201 @@ fn read_opengl_render_frame(
         pixels
     };
 
-    let mut pixels = unsafe {
-        let previous_framebuffer = gl.get_parameter_i32(glow::FRAMEBUFFER_BINDING);
-        let previous_framebuffer =
-            NonZeroU32::new(previous_framebuffer as u32).map(glow::NativeFramebuffer);
+    // Flush pending GPU work so read_pixels captures the completed frame.
+    unsafe { gl.finish() };
 
-        let pixels = read_framebuffer(framebuffer);
-        gl.bind_framebuffer(glow::FRAMEBUFFER, previous_framebuffer);
-        pixels
-    };
+    // Capture what the core left bound after retro_run() — some cores (e.g. mupen64plus-next
+    // + GLideN64) render into their own internal FBO rather than the one returned by
+    // get_current_framebuffer(), and leave that FBO bound when they call retro_video_refresh.
+    let raw_fbo_binding = unsafe { gl.get_parameter_i32(glow::FRAMEBUFFER_BINDING) };
+    let core_bound_framebuffer =
+        NonZeroU32::new(raw_fbo_binding as u32).map(glow::NativeFramebuffer);
+
+    if std::env::var_os("LIBRETRO_TRACE_GL_READBACK").is_some() {
+        let custom_fbo_id = framebuffer.map(|f| f.0.get()).unwrap_or(0);
+        eprintln!(
+            "gl readback fbo_on_entry={raw_fbo_binding} custom_fbo={custom_fbo_id} thread={:?}",
+            std::thread::current().id(),
+        );
+    }
+
+    let mut pixels = read_framebuffer(framebuffer);
+
+    // Restore whatever the core had bound (read_framebuffer changes the binding).
+    unsafe { gl.bind_framebuffer(glow::FRAMEBUFFER, core_bound_framebuffer) };
+
+    let (_, non_black_pixels, _) = summarize_rgba_debug_pixels(&pixels);
+
+    // If our dedicated FBO is empty, try the core's last-bound FBO (its internal render target).
+    if non_black_pixels == 0 {
+        if let Some(core_fbo) = core_bound_framebuffer {
+            if Some(core_fbo) != framebuffer {
+                let candidate = read_framebuffer(Some(core_fbo));
+                unsafe { gl.bind_framebuffer(glow::FRAMEBUFFER, core_bound_framebuffer) };
+                let (_, candidate_non_black, _) = summarize_rgba_debug_pixels(&candidate);
+                if candidate_non_black > 0 {
+                    if std::env::var_os("LIBRETRO_TRACE_GL_READBACK").is_some() {
+                        eprintln!(
+                            "gl readback switching to core-bound FBO {} non_black_samples={candidate_non_black}/64",
+                            core_fbo.0.get()
+                        );
+                    }
+                    pixels = candidate;
+                }
+            }
+        }
+    }
+
+    let (_, non_black_pixels, _) = summarize_rgba_debug_pixels(&pixels);
+
+    // Texture scan: when the dedicated FBO (texture 33) is empty and the core hasn't left a
+    // useful FBO bound, scan visible texture handles for game content.  When mupen64plus-next
+    // + GLideN64 uses a *shared* GL context (FBOs not shared, textures ARE shared), its
+    // render textures are visible from eframe's context.  We find the one with game content,
+    // cache it in target.emu_game_texture, and return it.  On subsequent frames the fast path
+    // at the top of this function uses the cached handle directly, skipping the scan.
+    if non_black_pixels == 0 && emu_game_texture.is_none() {
+        static TEXTURE_SCAN_DONE: std::sync::atomic::AtomicBool =
+            std::sync::atomic::AtomicBool::new(false);
+        let scan_first_time = !TEXTURE_SCAN_DONE.swap(true, std::sync::atomic::Ordering::Relaxed);
+
+        let known_tex_ids: [u32; 4] = [color_texture.map(|t| t.0.get()).unwrap_or(0), 35, 40, 41];
+
+        let trace = std::env::var_os("LIBRETRO_TRACE_GL_READBACK").is_some();
+        if trace && scan_first_time {
+            eprintln!("gl readback texture scan (shared-context, first frame only):");
+        }
+
+        let mut found_tex: Option<glow::NativeTexture> = None;
+        let mut found_pixels: Option<Vec<u8>> = None;
+
+        'scan: for tex_id in 1u32..=256 {
+            if known_tex_ids.contains(&tex_id) {
+                continue;
+            }
+            let Some(tex_nz) = NonZeroU32::new(tex_id) else {
+                continue;
+            };
+            let tex = glow::NativeTexture(tex_nz);
+            if !unsafe { gl.is_texture(tex) } {
+                continue;
+            }
+            // Only match textures whose dimensions equal the expected output size.  Small
+            // utility / noise / cache textures will be skipped here, avoiding false positives
+            // where the first 64 pixels of a tiny texture happen to be non-black.
+            // glow 0.16 doesn't expose glGetTexLevelParameteriv through its trait, so on macOS
+            // (which already links OpenGL.framework via build.rs) we call the C symbol directly.
+            #[cfg(target_os = "macos")]
+            let (tex_w, tex_h) = {
+                extern "C" {
+                    fn glGetTexLevelParameteriv(
+                        target: u32,
+                        level: i32,
+                        pname: u32,
+                        params: *mut i32,
+                    );
+                }
+                let mut w = 0i32;
+                let mut h = 0i32;
+                unsafe {
+                    gl.bind_texture(glow::TEXTURE_2D, Some(tex));
+                    glGetTexLevelParameteriv(glow::TEXTURE_2D, 0, glow::TEXTURE_WIDTH, &mut w);
+                    glGetTexLevelParameteriv(glow::TEXTURE_2D, 0, glow::TEXTURE_HEIGHT, &mut h);
+                    gl.bind_texture(glow::TEXTURE_2D, None);
+                }
+                (w as u32, h as u32)
+            };
+            #[cfg(not(target_os = "macos"))]
+            let (tex_w, tex_h) = (pending.width, pending.height);
+            if trace && scan_first_time && (tex_w > 0 || tex_h > 0) {
+                eprintln!("  tex={tex_id} size={tex_w}x{tex_h}");
+            }
+            // Accept textures whose width matches exactly and height is at least the output
+            // height.  GLideN64 often uses a slightly oversized render texture (e.g. 640×580
+            // for a 640×480 output); the extra rows are padding/unused.
+            if tex_w != pending.width || tex_h < pending.height {
+                continue;
+            }
+            // Attach to an FBO and read the full frame directly.  Skipping the 8×8 corner
+            // probe avoids false-rejects when the game uses a letterbox or dark edge at GL(0,0).
+            // The uniform-color check below is the real gate.
+            let fbo = match unsafe { gl.create_framebuffer() } {
+                Ok(f) => f,
+                Err(_) => continue,
+            };
+            let mut full_pixels = vec![0_u8; pending.width as usize * pending.height as usize * 4];
+            let fbo_ok = unsafe {
+                gl.bind_framebuffer(glow::FRAMEBUFFER, Some(fbo));
+                gl.framebuffer_texture_2d(
+                    glow::FRAMEBUFFER,
+                    glow::COLOR_ATTACHMENT0,
+                    glow::TEXTURE_2D,
+                    Some(tex),
+                    0,
+                );
+                let status = gl.check_framebuffer_status(glow::FRAMEBUFFER);
+                let ok = status == glow::FRAMEBUFFER_COMPLETE;
+                if ok {
+                    gl.read_buffer(glow::COLOR_ATTACHMENT0);
+                    gl.read_pixels(
+                        0,
+                        0,
+                        pending.width as i32,
+                        pending.height as i32,
+                        glow::RGBA,
+                        glow::UNSIGNED_BYTE,
+                        glow::PixelPackData::Slice(Some(&mut full_pixels)),
+                    );
+                } else if trace && scan_first_time {
+                    eprintln!("  tex={tex_id} fbo_incomplete=0x{status:x}");
+                }
+                gl.bind_framebuffer(glow::FRAMEBUFFER, None);
+                gl.delete_framebuffer(fbo);
+                ok
+            };
+            if fbo_ok {
+                let (_, full_non_black, _) = summarize_rgba_debug_pixels(&full_pixels);
+                // Reject uniform-color textures (all pixels same RGB) — these are solid
+                // clear targets (e.g. eframe's background color) rather than game renders.
+                let is_uniform = full_pixels.chunks_exact(4).all(|p| {
+                    p[0] == full_pixels[0] && p[1] == full_pixels[1] && p[2] == full_pixels[2]
+                });
+                if trace && scan_first_time {
+                    eprintln!(
+                        "  tex={tex_id} non_black={full_non_black} uniform={is_uniform} first=({},{},{},{})",
+                        full_pixels[0], full_pixels[1], full_pixels[2], full_pixels[3]
+                    );
+                }
+                if full_non_black > 0 && !is_uniform {
+                    if trace {
+                        eprintln!(
+                            "gl readback texture scan found game texture tex={tex_id} non_black={full_non_black}"
+                        );
+                    }
+                    found_tex = Some(tex);
+                    found_pixels = Some(full_pixels);
+                    break 'scan;
+                }
+            }
+        }
+        unsafe { gl.bind_framebuffer(glow::FRAMEBUFFER, core_bound_framebuffer) };
+
+        if let (Some(game_tex), Some(game_pixels)) = (found_tex, found_pixels) {
+            // Cache for subsequent frames so we skip the scan entirely.
+            if let Some(runtime_ref) = active_runtime() {
+                let mut state = runtime_ref.hw_render_state.lock();
+                if let Some(target) = state.target.as_mut() {
+                    target.emu_game_texture = Some(game_tex);
+                }
+            }
+            pixels = game_pixels;
+        }
+    }
 
     let (_, non_black_pixels, _) = summarize_rgba_debug_pixels(&pixels);
     if non_black_pixels == 0 {
-        let fallback_pixels = unsafe {
-            let previous_framebuffer = gl.get_parameter_i32(glow::FRAMEBUFFER_BINDING);
-            let previous_framebuffer =
-                NonZeroU32::new(previous_framebuffer as u32).map(glow::NativeFramebuffer);
-            let pixels = read_framebuffer(None);
-            gl.bind_framebuffer(glow::FRAMEBUFFER, previous_framebuffer);
-            pixels
-        };
+        let fallback_pixels = read_framebuffer(None);
+        unsafe { gl.bind_framebuffer(glow::FRAMEBUFFER, core_bound_framebuffer) };
         let (_, fallback_non_black_pixels, _) = summarize_rgba_debug_pixels(&fallback_pixels);
         if fallback_non_black_pixels > 0 {
             if std::env::var_os("LIBRETRO_TRACE_GL_READBACK").is_some() {
@@ -6149,6 +6533,97 @@ fn read_opengl_render_frame(
                 );
             }
             pixels = fallback_pixels;
+        }
+    }
+
+    // Diagnostic: inspect the emu-side FBO (the one we gave to get_current_framebuffer),
+    // but only if it is valid in the current (main) context.  After the is_framebuffer fix,
+    // emu_ctx_framebuffer may point to an FBO that lives in the core's shared context — trying
+    // to bind it here (main context) would be a GL error.
+    if std::env::var_os("LIBRETRO_TRACE_GL_READBACK").is_some() {
+        if let Some(emu_fbo) = emu_ctx_framebuffer {
+            let emu_fbo_valid = unsafe { gl.is_framebuffer(emu_fbo) };
+            if emu_fbo_valid {
+                unsafe {
+                    gl.bind_framebuffer(glow::FRAMEBUFFER, Some(emu_fbo));
+                    let attached_obj = gl.get_framebuffer_attachment_parameter_i32(
+                        glow::FRAMEBUFFER,
+                        glow::COLOR_ATTACHMENT0,
+                        glow::FRAMEBUFFER_ATTACHMENT_OBJECT_NAME,
+                    );
+                    let status = gl.check_framebuffer_status(glow::FRAMEBUFFER);
+                    eprintln!(
+                        "gl readback emu_fbo={} attached_obj={attached_obj} status=0x{status:x}",
+                        emu_fbo.0.get()
+                    );
+                }
+                let emu_pixels = read_framebuffer(Some(emu_fbo));
+                let (_, emu_non_black, first) = summarize_rgba_debug_pixels(&emu_pixels);
+                eprintln!(
+                    "gl readback emu_fbo_direct non_black={emu_non_black}/64 first_rgba={:02x},{:02x},{:02x},{:02x}",
+                    first[0], first[1], first[2], first[3]
+                );
+                unsafe { gl.bind_framebuffer(glow::FRAMEBUFFER, core_bound_framebuffer) };
+            } else {
+                eprintln!(
+                    "gl readback emu_fbo={} not valid in main context (shared-context FBO — skipping direct read)",
+                    emu_fbo.0.get()
+                );
+            }
+        }
+    }
+
+    // Brute-force scan: find which FBO actually contains game content.
+    // Only log on the first invocation to avoid flooding the console.
+    if std::env::var_os("LIBRETRO_TRACE_GL_READBACK").is_some() {
+        static SCAN_DONE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+        if !SCAN_DONE.swap(true, std::sync::atomic::Ordering::Relaxed) {
+            eprintln!("gl readback fbo scan (first frame only):");
+            for fbo_id in 1u32..=64 {
+                if let Some(fbo_nz) = NonZeroU32::new(fbo_id) {
+                    let fbo = glow::NativeFramebuffer(fbo_nz);
+                    let is_fbo = unsafe { gl.is_framebuffer(fbo) };
+                    if !is_fbo {
+                        continue;
+                    }
+                    unsafe { gl.bind_framebuffer(glow::FRAMEBUFFER, Some(fbo)) };
+                    let status = unsafe { gl.check_framebuffer_status(glow::FRAMEBUFFER) };
+                    if status != glow::FRAMEBUFFER_COMPLETE {
+                        eprintln!("  fbo={fbo_id} status=0x{status:x} (incomplete)");
+                        continue;
+                    }
+                    let attached_obj = unsafe {
+                        gl.get_framebuffer_attachment_parameter_i32(
+                            glow::FRAMEBUFFER,
+                            glow::COLOR_ATTACHMENT0,
+                            glow::FRAMEBUFFER_ATTACHMENT_OBJECT_NAME,
+                        )
+                    };
+                    let mut scan_pixels = vec![0u8; 8 * 8 * 4];
+                    unsafe {
+                        gl.read_buffer(glow::COLOR_ATTACHMENT0);
+                        gl.read_pixels(
+                            0,
+                            0,
+                            8,
+                            8,
+                            glow::RGBA,
+                            glow::UNSIGNED_BYTE,
+                            glow::PixelPackData::Slice(Some(&mut scan_pixels)),
+                        );
+                    }
+                    let non_black = scan_pixels
+                        .chunks_exact(4)
+                        .filter(|p| p[0] != 0 || p[1] != 0 || p[2] != 0)
+                        .count();
+                    eprintln!(
+                        "  fbo={fbo_id} attached_obj={attached_obj} non_black={non_black}/64 \
+                        first=({},{},{},{})",
+                        scan_pixels[0], scan_pixels[1], scan_pixels[2], scan_pixels[3]
+                    );
+                }
+            }
+            unsafe { gl.bind_framebuffer(glow::FRAMEBUFFER, core_bound_framebuffer) };
         }
     }
 
@@ -6240,24 +6715,72 @@ fn configure_environment_context(
         context.requested_hw_context_type = None;
         context.last_load_error = None;
         context.last_negotiation_interface = None;
-        if vulkan_debug_enabled() && core_name.eq_ignore_ascii_case("parallel_n64") {
-            let gfx = context
-                .variables
-                .get("parallel-n64-gfxplugin")
-                .and_then(|value| value.to_str().ok())
-                .unwrap_or("<unset>");
-            let cpucore = context
-                .variables
-                .get("parallel-n64-cpucore")
-                .and_then(|value| value.to_str().ok())
-                .unwrap_or("<unset>");
-            info!(
-                target: "arcade_libretro::vulkan_debug",
-                "configured parallel_n64 core vars backend={:?} parallel-n64-gfxplugin={} parallel-n64-cpucore={}",
-                backend,
-                gfx,
-                cpucore
-            );
+        let should_log_core_vars = vulkan_debug_enabled()
+            || vulkan_handoff_trace_enabled()
+            || env_flag_enabled("ARCADE_PARALLEL_RDP_SAFE_DIAG")
+            || std::env::var_os("LIBRETRO_TRACE_VARIABLES").is_some();
+        if should_log_core_vars {
+            if core_name.eq_ignore_ascii_case("parallel_n64") {
+                let gfx = context
+                    .variables
+                    .get("parallel-n64-gfxplugin")
+                    .and_then(|value| value.to_str().ok())
+                    .unwrap_or("<unset>");
+                let rsp = context
+                    .variables
+                    .get("parallel-n64-rspplugin")
+                    .and_then(|value| value.to_str().ok())
+                    .unwrap_or("<unset>");
+                let cpucore = context
+                    .variables
+                    .get("parallel-n64-cpucore")
+                    .and_then(|value| value.to_str().ok())
+                    .unwrap_or("<unset>");
+                let virefresh = context
+                    .variables
+                    .get("parallel-n64-virefresh")
+                    .and_then(|value| value.to_str().ok())
+                    .unwrap_or("<unset>");
+                let upscaling = context
+                    .variables
+                    .get("parallel-n64-parallel-rdp-upscaling")
+                    .and_then(|value| value.to_str().ok())
+                    .unwrap_or("<unset>");
+                info!(
+                    target: "arcade_libretro::core_loader",
+                    "configured parallel_n64 core vars backend={:?} parallel-n64-gfxplugin={} parallel-n64-rspplugin={} parallel-n64-cpucore={} parallel-n64-virefresh={} parallel-n64-parallel-rdp-upscaling={}",
+                    backend,
+                    gfx,
+                    rsp,
+                    cpucore,
+                    virefresh,
+                    upscaling
+                );
+            } else if core_name.eq_ignore_ascii_case("mupen64plus_next") {
+                let rdp = context
+                    .variables
+                    .get("mupen64plus-rdp-plugin")
+                    .and_then(|value| value.to_str().ok())
+                    .unwrap_or("<unset>");
+                let rsp = context
+                    .variables
+                    .get("mupen64plus-rsp-plugin")
+                    .and_then(|value| value.to_str().ok())
+                    .unwrap_or("<unset>");
+                let cpucore = context
+                    .variables
+                    .get("mupen64plus-cpucore")
+                    .and_then(|value| value.to_str().ok())
+                    .unwrap_or("<unset>");
+                info!(
+                    target: "arcade_libretro::core_loader",
+                    "configured mupen64plus_next core vars backend={:?} mupen64plus-rdp-plugin={} mupen64plus-rsp-plugin={} mupen64plus-cpucore={}",
+                    backend,
+                    rdp,
+                    rsp,
+                    cpucore
+                );
+            }
         }
     }
     runtime.hw_render_state.lock().vulkan_negotiation = None;
@@ -6631,7 +7154,9 @@ this core binary is likely built without Vulkan hardware-render support",
                 .get(key)
                 .map(|value| value.as_ptr())
                 .unwrap_or(std::ptr::null());
-            if vulkan_debug_enabled() && key.starts_with("parallel-n64-") {
+            if vulkan_debug_enabled()
+                && (key.starts_with("parallel-n64-") || key.starts_with("mupen64plus-"))
+            {
                 let printable = context
                     .variables
                     .get(key)
@@ -6645,7 +7170,7 @@ this core binary is likely built without Vulkan hardware-render support",
                 );
             }
             if std::env::var_os("LIBRETRO_TRACE_VARIABLES").is_some()
-                && key.starts_with("parallel-n64-")
+                && (key.starts_with("parallel-n64-") || key.starts_with("mupen64plus-"))
             {
                 let printable = context
                     .variables
@@ -6812,7 +7337,9 @@ this core binary is likely built without Vulkan hardware-render support",
                 return false;
             };
             let mut context = runtime.environment_context.lock();
-            if vulkan_debug_enabled() && key.starts_with("parallel-n64-") {
+            if vulkan_debug_enabled()
+                && (key.starts_with("parallel-n64-") || key.starts_with("mupen64plus-"))
+            {
                 info!(
                     target: "arcade_libretro::vulkan_debug",
                     "SET_VARIABLE key={} value={}",
@@ -6821,7 +7348,7 @@ this core binary is likely built without Vulkan hardware-render support",
                 );
             }
             if std::env::var_os("LIBRETRO_TRACE_VARIABLES").is_some()
-                && key.starts_with("parallel-n64-")
+                && (key.starts_with("parallel-n64-") || key.starts_with("mupen64plus-"))
             {
                 eprintln!(
                     "env SET_VARIABLE key={key} value={}",
@@ -6846,13 +7373,126 @@ unsafe extern "C" fn retro_hw_get_current_framebuffer() -> usize {
         if force_default_gl_framebuffer(runtime) {
             return 0;
         }
-        runtime
-            .hw_render_state
-            .lock()
-            .target
-            .as_ref()
-            .map(|target| target.framebuffer.0.get() as usize)
-            .unwrap_or(0)
+        #[cfg(not(target_os = "macos"))]
+        {
+            return runtime
+                .hw_render_state
+                .lock()
+                .target
+                .as_ref()
+                .map(|target| target.framebuffer.0.get() as usize)
+                .unwrap_or(0);
+        }
+
+        // Extract state without holding the lock across GL calls.
+        let (gl, cached_emu_fbo, color_texture, width, height) = {
+            let state = runtime.hw_render_state.lock();
+            let Some(gl) = state.frontend_gl_context.clone() else {
+                return 0;
+            };
+            let Some(target) = state.target.as_ref() else {
+                return 0;
+            };
+            (
+                gl,
+                target.emu_ctx_framebuffer,
+                target.color_texture,
+                target.width,
+                target.height,
+            )
+        };
+
+        // Fast path: if a cached emu-side FBO exists AND is valid in the CURRENT GL context,
+        // return it immediately.  The validity check is critical: mupen64plus-next (and other
+        // cores) may use a shared GL context for rendering that is different from the frontend's
+        // main context.  FBOs are NOT shared between GL contexts in a share group — so
+        // is_framebuffer() returns false when called from a different context than the one that
+        // created the FBO.  When this happens we fall through and create a new emu-side FBO in
+        // the current (shared) context, attaching the same color_texture (which IS shared).
+        // That way GLideN64 renders into color_texture 33 on the shared context, and the
+        // frontend reads it back from FBO 1 (main context) which also wraps color_texture 33.
+        if let Some(emu_fbo) = cached_emu_fbo {
+            if unsafe { gl.is_framebuffer(emu_fbo) } {
+                return emu_fbo.0.get() as usize;
+            }
+            // Context mismatch — recreate in the current context below.
+            if std::env::var_os("LIBRETRO_TRACE_GL_READBACK").is_some() {
+                eprintln!(
+                    "get_current_framebuffer: cached FBO {} invalid in current context (context switch?), recreating on thread {:?}",
+                    emu_fbo.0.get(),
+                    std::thread::current().id(),
+                );
+            }
+        }
+
+        // Slow path: lazily create the emu-side FBO in whatever GL context is current on
+        // this thread (the emu thread's shared context for cores like mupen64plus-next).
+        // gl is just a collection of function pointers — it works on any thread that has a
+        // GL context current.  color_texture is a shared object (textures are shared across
+        // contexts in the same share group), so it is valid here even though the FBO that
+        // wraps it in the main context is not.
+        let emu_fbo = match unsafe { gl.create_framebuffer() } {
+            Ok(fbo) => fbo,
+            Err(err) => {
+                if std::env::var_os("LIBRETRO_TRACE_GL_READBACK").is_some() {
+                    eprintln!("get_current_framebuffer: failed to create emu-side FBO: {err}");
+                }
+                return 0;
+            }
+        };
+
+        unsafe {
+            gl.bind_framebuffer(glow::FRAMEBUFFER, Some(emu_fbo));
+            gl.framebuffer_texture_2d(
+                glow::FRAMEBUFFER,
+                glow::COLOR_ATTACHMENT0,
+                glow::TEXTURE_2D,
+                Some(color_texture),
+                0,
+            );
+            gl.draw_buffer(glow::COLOR_ATTACHMENT0);
+
+            // Depth-stencil: renderbuffers are not shared between GL contexts, so create a
+            // new one in the emu thread's context.  We don't track this for cleanup because
+            // it is lightweight and tied to the core's session lifetime.
+            if let Ok(depth_stencil) = gl.create_renderbuffer() {
+                gl.bind_renderbuffer(glow::RENDERBUFFER, Some(depth_stencil));
+                gl.renderbuffer_storage(
+                    glow::RENDERBUFFER,
+                    glow::DEPTH24_STENCIL8,
+                    width as i32,
+                    height as i32,
+                );
+                gl.framebuffer_renderbuffer(
+                    glow::FRAMEBUFFER,
+                    glow::DEPTH_STENCIL_ATTACHMENT,
+                    glow::RENDERBUFFER,
+                    Some(depth_stencil),
+                );
+                gl.bind_renderbuffer(glow::RENDERBUFFER, None);
+            }
+
+            gl.bind_framebuffer(glow::FRAMEBUFFER, None);
+        }
+
+        if std::env::var_os("LIBRETRO_TRACE_GL_READBACK").is_some() {
+            eprintln!(
+                "get_current_framebuffer: created emu-side FBO {} for color_texture {} on thread {:?}",
+                emu_fbo.0.get(),
+                color_texture.0.get(),
+                std::thread::current().id(),
+            );
+        }
+
+        // Cache the emu-side FBO so subsequent calls return immediately.
+        {
+            let mut state = runtime.hw_render_state.lock();
+            if let Some(target) = state.target.as_mut() {
+                target.emu_ctx_framebuffer = Some(emu_fbo);
+            }
+        }
+
+        emu_fbo.0.get() as usize
     })
     .unwrap_or(0)
 }
@@ -7239,23 +7879,140 @@ unsafe extern "C" fn retro_video_refresh(
         return;
     }
 
-    if data as usize == RETRO_HW_FRAME_BUFFER_VALID {
-        let Some(runtime) = active_runtime() else {
+    #[cfg(not(target_os = "macos"))]
+    {
+        if data as usize == RETRO_HW_FRAME_BUFFER_VALID {
+            let Some(runtime) = active_runtime() else {
+                return;
+            };
+            let bottom_left_origin = runtime
+                .hw_render_state
+                .lock()
+                .callbacks
+                .map(|callbacks| callbacks.bottom_left_origin)
+                .unwrap_or(true);
+            let mut state = runtime.callback_state.lock();
+            state.latest_hw_frame = Some(PendingHardwareFrame {
+                width,
+                height,
+                bottom_left_origin,
+            });
             return;
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        let hw_callback = data as usize == RETRO_HW_FRAME_BUFFER_VALID;
+        let callback_trace_index = if vulkan_handoff_trace_enabled() {
+            Some(VULKAN_VIDEO_REFRESH_TRACE_COUNTER.fetch_add(1, Ordering::Relaxed))
+        } else {
+            None
         };
-        let bottom_left_origin = runtime
-            .hw_render_state
-            .lock()
-            .callbacks
-            .map(|callbacks| callbacks.bottom_left_origin)
-            .unwrap_or(true);
-        let mut state = runtime.callback_state.lock();
-        state.latest_hw_frame = Some(PendingHardwareFrame {
-            width,
-            height,
-            bottom_left_origin,
-        });
-        return;
+        if let Some(index) = callback_trace_index
+            .filter(|index| vulkan_handoff_trace_should_log_callback(*index, width, height))
+        {
+            info!(
+                target: "arcade_libretro::vulkan_debug",
+                "handoff trace: retro_video_refresh raw idx={} hw={} data={:p} width={} height={} pitch={}",
+                index,
+                hw_callback,
+                data,
+                width,
+                height,
+                pitch
+            );
+        }
+
+        if hw_callback {
+            let Some(runtime) = active_runtime() else {
+                return;
+            };
+            if std::env::var_os("LIBRETRO_TRACE_GL_READBACK").is_some() {
+                let (fbo, emu_fbo) = {
+                    let state = runtime.hw_render_state.lock();
+                    let fbo = state
+                        .frontend_gl_context
+                        .as_ref()
+                        .map(|gl| unsafe { gl.get_parameter_i32(glow::FRAMEBUFFER_BINDING) })
+                        .unwrap_or(-1);
+                    let emu_fbo = state
+                        .target
+                        .as_ref()
+                        .and_then(|t| t.emu_ctx_framebuffer)
+                        .map(|f| f.0.get() as i32)
+                        .unwrap_or(0);
+                    (fbo, emu_fbo)
+                };
+                let (eframe_ctx_id, current_ctx_id) = {
+                    (
+                        runtime.hw_render_state.lock().eframe_gl_ctx_id,
+                        current_gl_ctx_id(),
+                    )
+                };
+                eprintln!(
+                    "retro_video_refresh HW thread={:?} FRAMEBUFFER_BINDING={fbo} emu_ctx_fbo={emu_fbo} \
+                     ctx: current=0x{current_ctx_id:x} eframe=0x{eframe_ctx_id:x} same_ctx={}",
+                    std::thread::current().id(),
+                    current_ctx_id == eframe_ctx_id || eframe_ctx_id == 0,
+                );
+            }
+            let (bottom_left_origin, gl, is_vulkan_hw_context) = {
+                let state = runtime.hw_render_state.lock();
+                let blo = state
+                    .callbacks
+                    .map(|callbacks| callbacks.bottom_left_origin)
+                    .unwrap_or(true);
+                let gl = state.frontend_gl_context.clone();
+                let is_vulkan = state.context_type == Some(RETRO_HW_CONTEXT_VULKAN);
+                (blo, gl, is_vulkan)
+            };
+            if let Some(gl) = gl {
+                unsafe { gl.finish() };
+            }
+            let (source_width, source_height) = if vulkan_force_1x1_source_frame_test_mode() {
+                (1, 1)
+            } else {
+                (width, height)
+            };
+            if is_vulkan_hw_context {
+                if let Some(index) = callback_trace_index.filter(|index| {
+                    vulkan_handoff_trace_should_log_callback(*index, source_width, source_height)
+                }) {
+                    info!(
+                        target: "arcade_libretro::vulkan_debug",
+                        "handoff trace: retro_video_refresh hw idx={} raw={}x{} stored={}x{} pitch={} forced_1x1={}",
+                        index,
+                        width,
+                        height,
+                        source_width,
+                        source_height,
+                        pitch,
+                        vulkan_force_1x1_source_frame_test_mode()
+                    );
+                }
+                if vulkan_handoff_trace_enabled() && (source_width <= 1 || source_height <= 1) {
+                    let trace_index = VULKAN_HANDOFF_TRACE_COUNTER.fetch_add(1, Ordering::Relaxed);
+                    if trace_index < 32 || trace_index % 60 == 0 {
+                        info!(
+                            target: "arcade_libretro::vulkan_debug",
+                            "handoff trace: retro_video_refresh hw tiny idx={} source={}x{}",
+                            trace_index,
+                            source_width,
+                            source_height
+                        );
+                    }
+                }
+                record_vulkan_source_frame_size(&runtime, source_width, source_height);
+            }
+            let mut state = runtime.callback_state.lock();
+            state.latest_hw_frame = Some(PendingHardwareFrame {
+                width: source_width,
+                height: source_height,
+                bottom_left_origin,
+            });
+            return;
+        }
     }
 
     if data.is_null() || pitch == 0 {
@@ -7588,32 +8345,12 @@ mod tests {
         let candidates = host.resolve_core_candidates("fceumm");
         assert!(!candidates.is_empty());
         assert_eq!(candidates[0].parent(), Some(host.core_root()));
-
-        #[cfg(target_os = "windows")]
-        assert_eq!(
-            candidates
-                .iter()
-                .map(|path| path.file_name().and_then(|f| f.to_str()).unwrap_or(""))
-                .collect::<Vec<_>>(),
-            vec!["fceumm_libretro.dll", "fceumm.dll"]
-        );
-
-        #[cfg(target_os = "macos")]
         assert_eq!(
             candidates
                 .iter()
                 .map(|path| path.file_name().and_then(|f| f.to_str()).unwrap_or(""))
                 .collect::<Vec<_>>(),
             vec!["fceumm_libretro.dylib"]
-        );
-
-        #[cfg(not(any(target_os = "windows", target_os = "macos")))]
-        assert_eq!(
-            candidates
-                .iter()
-                .map(|path| path.file_name().and_then(|f| f.to_str()).unwrap_or(""))
-                .collect::<Vec<_>>(),
-            vec!["fceumm_libretro.so"]
         );
     }
 
@@ -7647,8 +8384,8 @@ mod tests {
                 FrontendCapabilities {
                     renderer_name: Some(String::from("eframe_glow")),
                     gl_context: None,
-                    window_handle_kind: Some(String::from("Xlib")),
-                    display_handle_kind: Some(String::from("Xlib")),
+                    window_handle_kind: Some(String::from("AppKit")),
+                    display_handle_kind: Some(String::from("AppKit")),
                 },
             );
         runtime
@@ -7674,8 +8411,8 @@ mod tests {
                 FrontendCapabilities {
                     renderer_name: Some(String::from("eframe_non_gl")),
                     gl_context: None,
-                    window_handle_kind: Some(String::from("Xlib")),
-                    display_handle_kind: Some(String::from("Xlib")),
+                    window_handle_kind: Some(String::from("AppKit")),
+                    display_handle_kind: Some(String::from("AppKit")),
                 },
             );
         assert!(!hardware_render_preflight_available_for_core(
@@ -7695,16 +8432,16 @@ mod tests {
                 FrontendCapabilities {
                     renderer_name: Some(String::from("eframe_glow")),
                     gl_context: None,
-                    window_handle_kind: Some(String::from("Xlib")),
-                    display_handle_kind: Some(String::from("Xlib")),
+                    window_handle_kind: Some(String::from("AppKit")),
+                    display_handle_kind: Some(String::from("AppKit")),
                 },
             );
 
         let message = vulkan_unimplemented_message(Some(&runtime));
 
         assert!(message.contains("renderer=eframe_glow"));
-        assert!(message.contains("window_handle=Xlib"));
-        assert!(message.contains("display_handle=Xlib"));
+        assert!(message.contains("window_handle=AppKit"));
+        assert!(message.contains("display_handle=AppKit"));
         assert!(
             message.contains("basic Vulkan bootstrap")
                 || message.contains("RETRO_ENVIRONMENT_GET_HW_RENDER_INTERFACE")

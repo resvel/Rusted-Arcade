@@ -13,11 +13,8 @@ use arcade_domain::{
     SYSTEM_DEFAULT_MAPPING_KEY,
 };
 
-#[cfg(all(feature = "gamepad", not(target_os = "windows")))]
+#[cfg(feature = "gamepad")]
 use gilrs::{Axis, Button, GamepadId};
-
-#[cfg(all(feature = "gamepad", target_os = "windows"))]
-use crate::gamepad_backend::WindowsGamepadSnapshot;
 use crate::{
     app::NativeArcadeUiApp,
     state::{ControllerMappingCacheKey, MappingEditorScope, MenuFocusRegion, MenuNavDirection},
@@ -411,7 +408,7 @@ impl NativeArcadeUiApp {
     }
 
     pub(crate) fn active_detected_gamepad_identity(&mut self) -> Option<DetectedPadIdentity> {
-        #[cfg(all(feature = "gamepad", not(target_os = "windows")))]
+        #[cfg(feature = "gamepad")]
         {
             let gilrs = self.gilrs.as_ref()?;
             let mut connected = gilrs
@@ -420,20 +417,13 @@ impl NativeArcadeUiApp {
                 .collect::<Vec<_>>();
             connected.sort_by(|left, right| left.0.to_string().cmp(&right.0.to_string()));
             let (id, gamepad) = connected.into_iter().next()?;
-            return Some(build_detected_pad_identity(id, &gamepad));
+            Some(build_detected_pad_identity(id, &gamepad))
         }
 
-        #[cfg(all(feature = "gamepad", target_os = "windows"))]
+        #[cfg(not(feature = "gamepad"))]
         {
-            return self
-                .capture_gamepad_state()
-                .into_iter()
-                .next()
-                .map(|capture| capture.identity);
+            None
         }
-
-        #[allow(unreachable_code)]
-        None
     }
 
     pub(crate) fn invalidate_gamepad_mapping_cache_for_system(&mut self, system: &str) {
@@ -509,7 +499,7 @@ impl NativeArcadeUiApp {
         }
     }
 
-    #[cfg(all(feature = "gamepad", not(target_os = "windows")))]
+    #[cfg(feature = "gamepad")]
     fn capture_gamepad_state(&mut self) -> Vec<GamepadCapture> {
         let Some(gilrs) = self.gilrs.as_mut() else {
             self.state.input_debug.clear();
@@ -619,82 +609,6 @@ impl NativeArcadeUiApp {
             captures.push(GamepadCapture {
                 port: port as u32,
                 identity: build_detected_pad_identity(id, &gamepad),
-                state,
-            });
-        }
-
-        self.state.input_debug = input_debug;
-        captures
-    }
-
-    #[cfg(all(feature = "gamepad", target_os = "windows"))]
-    fn capture_gamepad_state(&mut self) -> Vec<GamepadCapture> {
-        let Some(runtime) = self.gamepad_runtime.as_mut() else {
-            self.state.input_debug.clear();
-            return Vec::new();
-        };
-
-        let snapshots = runtime.captures();
-        let mut captures = Vec::with_capacity(snapshots.len().min(MAX_GAMEPAD_PLAYERS as usize));
-        let mut input_debug = String::new();
-
-        for (port, snapshot) in snapshots
-            .into_iter()
-            .take(MAX_GAMEPAD_PLAYERS as usize)
-            .enumerate()
-        {
-            let state = CanonicalPadState {
-                dpad_up: direction_active(
-                    snapshot.dpad_up,
-                    snapshot.raw_dpad_y,
-                    snapshot.raw_left_y,
-                    false,
-                ),
-                dpad_down: direction_active(
-                    snapshot.dpad_down,
-                    snapshot.raw_dpad_y,
-                    snapshot.raw_left_y,
-                    true,
-                ),
-                dpad_left: direction_active(
-                    snapshot.dpad_left,
-                    snapshot.raw_dpad_x,
-                    snapshot.raw_left_x,
-                    false,
-                ),
-                dpad_right: direction_active(
-                    snapshot.dpad_right,
-                    snapshot.raw_dpad_x,
-                    snapshot.raw_left_x,
-                    true,
-                ),
-                south: snapshot.south,
-                east: snapshot.east,
-                north: snapshot.north,
-                west: snapshot.west,
-                left_shoulder: snapshot.left_shoulder,
-                right_shoulder: snapshot.right_shoulder,
-                guide: snapshot.guide,
-                left_trigger: snapshot.left_trigger,
-                right_trigger: snapshot.right_trigger,
-                select: snapshot.select,
-                start: snapshot.start,
-                left_thumb: snapshot.left_thumb,
-                right_thumb: snapshot.right_thumb,
-                left_x: snapshot.left_x,
-                left_y: snapshot.left_y,
-                right_x: snapshot.right_x,
-                right_y: snapshot.right_y,
-            };
-
-            debug_windows_gamepad_capture(&snapshot, &state);
-            if input_debug.is_empty() && std::env::var_os("ARCADE_INPUT_DEBUG").is_some() {
-                input_debug = format_windows_gamepad_capture_debug_line(&snapshot, &state);
-            }
-
-            captures.push(GamepadCapture {
-                port: port as u32,
-                identity: snapshot.identity,
                 state,
             });
         }
@@ -997,9 +911,7 @@ impl NativeArcadeUiApp {
             | MenuFocusRegion::ManageScrapeSystems
             | MenuFocusRegion::ManageScrapeActions
             | MenuFocusRegion::ManageList
-            | MenuFocusRegion::SettingsAppConfigCore
             | MenuFocusRegion::SettingsAppConfigUpscaling
-            | MenuFocusRegion::SettingsAppConfigProfile
             | MenuFocusRegion::SettingsAppConfigSave
             | MenuFocusRegion::SettingsCoverSettings => {}
             MenuFocusRegion::Grid => {
@@ -1109,9 +1021,7 @@ impl NativeArcadeUiApp {
             | MenuFocusRegion::ManageScrapeSystems
             | MenuFocusRegion::ManageScrapeActions
             | MenuFocusRegion::ManageList
-            | MenuFocusRegion::SettingsAppConfigCore
             | MenuFocusRegion::SettingsAppConfigUpscaling
-            | MenuFocusRegion::SettingsAppConfigProfile
             | MenuFocusRegion::SettingsAppConfigSave
             | MenuFocusRegion::SettingsCoverSettings => {}
         }
@@ -1321,9 +1231,7 @@ impl NativeArcadeUiApp {
             | MenuFocusRegion::FiltersAlpha
             | MenuFocusRegion::ControllerMappingToggle
             | MenuFocusRegion::Grid
-            | MenuFocusRegion::SettingsAppConfigCore
             | MenuFocusRegion::SettingsAppConfigUpscaling
-            | MenuFocusRegion::SettingsAppConfigProfile
             | MenuFocusRegion::SettingsAppConfigSave
             | MenuFocusRegion::SettingsCoverSettings => {
                 self.state.menu_nav.focus_region = MenuFocusRegion::ManageHeader;
@@ -1380,9 +1288,7 @@ impl NativeArcadeUiApp {
             | MenuFocusRegion::FiltersAlpha
             | MenuFocusRegion::ControllerMappingToggle
             | MenuFocusRegion::Grid
-            | MenuFocusRegion::SettingsAppConfigCore
             | MenuFocusRegion::SettingsAppConfigUpscaling
-            | MenuFocusRegion::SettingsAppConfigProfile
             | MenuFocusRegion::SettingsAppConfigSave
             | MenuFocusRegion::SettingsCoverSettings => {
                 self.state.menu_nav.focus_region = MenuFocusRegion::ManageHeader;
@@ -1407,9 +1313,7 @@ impl NativeArcadeUiApp {
             | MenuFocusRegion::FiltersAlpha
             | MenuFocusRegion::ControllerMappingToggle
             | MenuFocusRegion::Grid
-            | MenuFocusRegion::SettingsAppConfigCore
             | MenuFocusRegion::SettingsAppConfigUpscaling
-            | MenuFocusRegion::SettingsAppConfigProfile
             | MenuFocusRegion::SettingsAppConfigSave
             | MenuFocusRegion::SettingsCoverSettings => MenuFocusRegion::ManageHeader,
         };
@@ -1433,40 +1337,21 @@ impl NativeArcadeUiApp {
         match self.state.menu_nav.focus_region {
             MenuFocusRegion::TopNav => match direction {
                 MenuNavDirection::Down => {
-                    self.state.menu_nav.focus_region = MenuFocusRegion::SettingsAppConfigCore;
+                    self.state.menu_nav.focus_region = MenuFocusRegion::SettingsAppConfigUpscaling;
                 }
                 _ => self
                     .state
                     .menu_nav
                     .move_top_nav(direction, self.state.current_view),
             },
-            MenuFocusRegion::SettingsAppConfigCore => match direction {
+            MenuFocusRegion::SettingsAppConfigUpscaling => match direction {
                 MenuNavDirection::Up => {
                     self.state
                         .menu_nav
                         .focus_top_nav_for_view(self.state.current_view);
                 }
                 MenuNavDirection::Down => {
-                    self.state.menu_nav.focus_region = MenuFocusRegion::SettingsAppConfigUpscaling;
-                }
-                MenuNavDirection::Left => {
-                    self.state.menu_nav.settings_app_core_index = self
-                        .state
-                        .menu_nav
-                        .settings_app_core_index
-                        .saturating_sub(1);
-                }
-                MenuNavDirection::Right => {
-                    self.state.menu_nav.settings_app_core_index =
-                        (self.state.menu_nav.settings_app_core_index + 1).min(1);
-                }
-            },
-            MenuFocusRegion::SettingsAppConfigUpscaling => match direction {
-                MenuNavDirection::Up => {
-                    self.state.menu_nav.focus_region = MenuFocusRegion::SettingsAppConfigCore;
-                }
-                MenuNavDirection::Down => {
-                    self.state.menu_nav.focus_region = MenuFocusRegion::SettingsAppConfigProfile;
+                    self.state.menu_nav.focus_region = MenuFocusRegion::SettingsAppConfigSave;
                 }
                 MenuNavDirection::Left => {
                     self.state.menu_nav.settings_app_upscaling_index = self
@@ -1480,28 +1365,9 @@ impl NativeArcadeUiApp {
                         (self.state.menu_nav.settings_app_upscaling_index + 1).min(3);
                 }
             },
-            MenuFocusRegion::SettingsAppConfigProfile => match direction {
-                MenuNavDirection::Up => {
-                    self.state.menu_nav.focus_region = MenuFocusRegion::SettingsAppConfigUpscaling;
-                }
-                MenuNavDirection::Down => {
-                    self.state.menu_nav.focus_region = MenuFocusRegion::SettingsAppConfigSave;
-                }
-                MenuNavDirection::Left => {
-                    self.state.menu_nav.settings_app_profile_index = self
-                        .state
-                        .menu_nav
-                        .settings_app_profile_index
-                        .saturating_sub(1);
-                }
-                MenuNavDirection::Right => {
-                    self.state.menu_nav.settings_app_profile_index =
-                        (self.state.menu_nav.settings_app_profile_index + 1).min(1);
-                }
-            },
             MenuFocusRegion::SettingsAppConfigSave => match direction {
                 MenuNavDirection::Up => {
-                    self.state.menu_nav.focus_region = MenuFocusRegion::SettingsAppConfigProfile;
+                    self.state.menu_nav.focus_region = MenuFocusRegion::SettingsAppConfigUpscaling;
                 }
                 MenuNavDirection::Down => {
                     self.state.menu_nav.focus_region = MenuFocusRegion::SettingsCoverSettings;
@@ -1526,7 +1392,7 @@ impl NativeArcadeUiApp {
                 }
             },
             _ => {
-                self.state.menu_nav.focus_region = MenuFocusRegion::SettingsAppConfigCore;
+                self.state.menu_nav.focus_region = MenuFocusRegion::SettingsAppConfigUpscaling;
             }
         }
     }
@@ -1537,14 +1403,6 @@ impl NativeArcadeUiApp {
                 let view = self.state.menu_nav.selected_top_nav_view();
                 self.navigate_to_view(view);
             }
-            MenuFocusRegion::SettingsAppConfigCore => {
-                self.state.manage.settings_n64_preferred_core =
-                    if self.state.menu_nav.settings_app_core_index == 1 {
-                        String::from("parallel_n64")
-                    } else {
-                        String::from("mupen64plus_next")
-                    };
-            }
             MenuFocusRegion::SettingsAppConfigUpscaling => {
                 self.state.manage.settings_n64_parallel_rdp_upscaling =
                     match self.state.menu_nav.settings_app_upscaling_index {
@@ -1552,14 +1410,6 @@ impl NativeArcadeUiApp {
                         2 => String::from("4x"),
                         3 => String::from("8x"),
                         _ => String::from("1x"),
-                    };
-            }
-            MenuFocusRegion::SettingsAppConfigProfile => {
-                self.state.manage.settings_n64_parallel_profile =
-                    if self.state.menu_nav.settings_app_profile_index == 1 {
-                        String::from("performance")
-                    } else {
-                        String::from("balanced")
                     };
             }
             MenuFocusRegion::SettingsAppConfigSave => {
@@ -1581,7 +1431,7 @@ impl NativeArcadeUiApp {
                 }
             }
             _ => {
-                self.state.menu_nav.focus_region = MenuFocusRegion::SettingsAppConfigCore;
+                self.state.menu_nav.focus_region = MenuFocusRegion::SettingsAppConfigUpscaling;
             }
         }
     }
@@ -1589,12 +1439,8 @@ impl NativeArcadeUiApp {
     fn step_back_settings_focus(&mut self) {
         self.state.menu_nav.focus_region = match self.state.menu_nav.focus_region {
             MenuFocusRegion::TopNav => MenuFocusRegion::TopNav,
-            MenuFocusRegion::SettingsAppConfigCore => MenuFocusRegion::TopNav,
-            MenuFocusRegion::SettingsAppConfigUpscaling => MenuFocusRegion::SettingsAppConfigCore,
-            MenuFocusRegion::SettingsAppConfigProfile => {
-                MenuFocusRegion::SettingsAppConfigUpscaling
-            }
-            MenuFocusRegion::SettingsAppConfigSave => MenuFocusRegion::SettingsAppConfigProfile,
+            MenuFocusRegion::SettingsAppConfigUpscaling => MenuFocusRegion::TopNav,
+            MenuFocusRegion::SettingsAppConfigSave => MenuFocusRegion::SettingsAppConfigUpscaling,
             MenuFocusRegion::SettingsCoverSettings => MenuFocusRegion::SettingsAppConfigSave,
             _ => MenuFocusRegion::TopNav,
         };
@@ -1759,7 +1605,7 @@ fn action_to_retro_binding(system: &str, action: &str) -> Option<RetroActionBind
     }
 }
 
-#[cfg(all(feature = "gamepad", not(target_os = "windows")))]
+#[cfg(feature = "gamepad")]
 fn build_detected_pad_identity(id: GamepadId, gamepad: &gilrs::Gamepad<'_>) -> DetectedPadIdentity {
     let vendor_id = gamepad.vendor_id().map(|value| format!("{value:04x}"));
     let product_id = gamepad.product_id().map(|value| format!("{value:04x}"));
@@ -1782,7 +1628,7 @@ fn build_detected_pad_identity(id: GamepadId, gamepad: &gilrs::Gamepad<'_>) -> D
     }
 }
 
-#[cfg(all(feature = "gamepad", not(target_os = "windows")))]
+#[cfg(feature = "gamepad")]
 fn is_playable_gamepad(gamepad: &gilrs::Gamepad<'_>) -> bool {
     [
         gamepad.button_code(Button::South),
@@ -1808,7 +1654,7 @@ fn is_playable_gamepad(gamepad: &gilrs::Gamepad<'_>) -> bool {
         .is_some()
 }
 
-#[cfg(all(feature = "gamepad", not(target_os = "windows")))]
+#[cfg(feature = "gamepad")]
 fn button_down(gamepad: &gilrs::Gamepad<'_>, button: Button) -> bool {
     gamepad
         .button_data(button)
@@ -1816,7 +1662,7 @@ fn button_down(gamepad: &gilrs::Gamepad<'_>, button: Button) -> bool {
         .unwrap_or_else(|| gamepad.is_pressed(button))
 }
 
-#[cfg(all(feature = "gamepad", not(target_os = "windows")))]
+#[cfg(feature = "gamepad")]
 fn gamepad_has_dpad_buttons(gamepad: &gilrs::Gamepad<'_>) -> bool {
     [
         Button::DPadUp,
@@ -1828,7 +1674,7 @@ fn gamepad_has_dpad_buttons(gamepad: &gilrs::Gamepad<'_>) -> bool {
     .any(|button| gamepad.button_code(button).is_some())
 }
 
-#[cfg(all(feature = "gamepad", not(target_os = "windows")))]
+#[cfg(feature = "gamepad")]
 fn dpad_direction_active(
     gamepad: &gilrs::Gamepad<'_>,
     button: Button,
@@ -1876,7 +1722,7 @@ fn normalized_axis(value: f32) -> f32 {
     value.clamp(0.0, 1.0)
 }
 
-#[cfg(all(feature = "gamepad", not(target_os = "windows")))]
+#[cfg(feature = "gamepad")]
 fn debug_gamepad_capture(
     gamepad: &gilrs::Gamepad<'_>,
     has_dpad_buttons: bool,
@@ -1928,7 +1774,7 @@ fn debug_gamepad_capture(
     );
 }
 
-#[cfg(all(feature = "gamepad", not(target_os = "windows")))]
+#[cfg(feature = "gamepad")]
 fn format_gamepad_capture_debug_line(
     gamepad: &gilrs::Gamepad<'_>,
     has_dpad_buttons: bool,
@@ -1957,70 +1803,9 @@ fn format_gamepad_capture_debug_line(
     )
 }
 
-#[cfg(all(feature = "gamepad", not(target_os = "windows")))]
+#[cfg(feature = "gamepad")]
 fn normalize_vertical_axis(value: f32) -> f32 {
     value
-}
-
-#[cfg(all(feature = "gamepad", target_os = "windows"))]
-fn debug_windows_gamepad_capture(snapshot: &WindowsGamepadSnapshot, state: &CanonicalPadState) {
-    if std::env::var_os("ARCADE_INPUT_DEBUG").is_none() {
-        return;
-    }
-
-    let dpad_button_activity =
-        snapshot.dpad_up || snapshot.dpad_down || snapshot.dpad_left || snapshot.dpad_right;
-    let left_stick_activity = snapshot.raw_left_x.abs() >= DIGITAL_FALLBACK_THRESHOLD
-        || snapshot.raw_left_y.abs() >= DIGITAL_FALLBACK_THRESHOLD;
-    let mapped_direction_activity =
-        state.dpad_up || state.dpad_down || state.dpad_left || state.dpad_right;
-
-    if !dpad_button_activity && !left_stick_activity && !mapped_direction_activity {
-        return;
-    }
-
-    debug!(
-        target: "arcade_input",
-        name = %snapshot.identity.name,
-        has_dpad_buttons = snapshot.has_dpad_buttons,
-        dpad_up_pressed = snapshot.dpad_up,
-        dpad_down_pressed = snapshot.dpad_down,
-        dpad_left_pressed = snapshot.dpad_left,
-        dpad_right_pressed = snapshot.dpad_right,
-        raw_dpad_x = snapshot.raw_dpad_x,
-        raw_dpad_y = snapshot.raw_dpad_y,
-        raw_left_x = snapshot.raw_left_x,
-        raw_left_y = snapshot.raw_left_y,
-        mapped_up = state.dpad_up,
-        mapped_down = state.dpad_down,
-        mapped_left = state.dpad_left,
-        mapped_right = state.dpad_right,
-        "gamepad directional capture"
-    );
-}
-
-#[cfg(all(feature = "gamepad", target_os = "windows"))]
-fn format_windows_gamepad_capture_debug_line(
-    snapshot: &WindowsGamepadSnapshot,
-    state: &CanonicalPadState,
-) -> String {
-    format!(
-        "INPUT {} | btns U{} D{} L{} R{} | has_btns {} | dpad ({:.2},{:.2}) | stick ({:.2},{:.2}) | mapped U{} D{} L{} R{}",
-        snapshot.identity.name,
-        if snapshot.dpad_up { 1 } else { 0 },
-        if snapshot.dpad_down { 1 } else { 0 },
-        if snapshot.dpad_left { 1 } else { 0 },
-        if snapshot.dpad_right { 1 } else { 0 },
-        if snapshot.has_dpad_buttons { 1 } else { 0 },
-        snapshot.raw_dpad_x,
-        snapshot.raw_dpad_y,
-        snapshot.raw_left_x,
-        snapshot.raw_left_y,
-        if state.dpad_up { 1 } else { 0 },
-        if state.dpad_down { 1 } else { 0 },
-        if state.dpad_left { 1 } else { 0 },
-        if state.dpad_right { 1 } else { 0 },
-    )
 }
 
 fn system_supports_native_analog(system: &str) -> bool {
@@ -2085,14 +1870,14 @@ mod tests {
         assert!(direction_active(false, 0.0, -0.7, false));
     }
 
-    #[cfg(all(feature = "gamepad", not(target_os = "windows")))]
+    #[cfg(feature = "gamepad")]
     #[test]
     fn dpad_direction_active_uses_axis_when_buttons_are_not_available() {
         assert!(dpad_direction_active_from_parts(false, 1.0, 0.0, true));
         assert!(dpad_direction_active_from_parts(false, -1.0, 0.0, false));
     }
 
-    #[cfg(all(feature = "gamepad", not(target_os = "windows")))]
+    #[cfg(feature = "gamepad")]
     #[test]
     fn normalize_vertical_axis_keeps_non_windows_convention() {
         assert_eq!(normalize_vertical_axis(0.75), 0.75);
@@ -2148,7 +1933,7 @@ mod tests {
         );
     }
 
-    #[cfg(all(feature = "gamepad", not(target_os = "windows")))]
+    #[cfg(feature = "gamepad")]
     fn dpad_direction_active_from_parts(
         has_dpad_buttons: bool,
         dpad_axis_value: f32,

@@ -1,8 +1,12 @@
 use eframe::egui;
 use egui::Color32;
+use std::sync::atomic::{AtomicU64, Ordering};
+use tracing::info;
 
 use crate::app::NativeArcadeUiApp;
 use crate::render::fit_size_to_aspect;
+
+static PLAY_DRAW_DEBUG_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 impl NativeArcadeUiApp {
     pub(crate) fn draw_play(&mut self, ctx: &egui::Context, ui: &mut egui::Ui) {
@@ -41,15 +45,53 @@ impl NativeArcadeUiApp {
             );
             let image_rect = egui::Rect::from_min_size(min, fitted);
             let uv = egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0));
+            if std::env::var_os("ARCADE_VULKAN_DEBUG").is_some() {
+                let draw_index = PLAY_DRAW_DEBUG_COUNTER.fetch_add(1, Ordering::Relaxed);
+                if draw_index < 32 {
+                    info!(
+                        target: "arcade_ui::video_debug",
+                        "play draw frame={} texture_id={:?} texture_size={:.0}x{:.0} panel_rect=({:.1},{:.1})-({:.1},{:.1}) image_rect=({:.1},{:.1})-({:.1},{:.1}) target_aspect={:.3} source_aspect={:.3}",
+                        draw_index,
+                        texture.id(),
+                        source_size.x,
+                        source_size.y,
+                        rect.min.x,
+                        rect.min.y,
+                        rect.max.x,
+                        rect.max.y,
+                        image_rect.min.x,
+                        image_rect.min.y,
+                        image_rect.max.x,
+                        image_rect.max.y,
+                        target_aspect,
+                        source_aspect,
+                    );
+                }
+            }
             ui.painter()
                 .image(texture.id(), image_rect, uv, Color32::WHITE);
         } else {
+            if std::env::var_os("ARCADE_VULKAN_DEBUG").is_some() {
+                let draw_index = PLAY_DRAW_DEBUG_COUNTER.fetch_add(1, Ordering::Relaxed);
+                if draw_index < 32 {
+                    info!(
+                        target: "arcade_ui::video_debug",
+                        "play draw frame={} missing_texture panel_rect=({:.1},{:.1})-({:.1},{:.1}) external_vulkan={}",
+                        draw_index,
+                        rect.min.x,
+                        rect.min.y,
+                        rect.max.x,
+                        rect.max.y,
+                        self.host.using_external_vulkan_present_window(),
+                    );
+                }
+            }
             ui.allocate_ui_with_layout(
                 rect.size(),
                 egui::Layout::centered_and_justified(egui::Direction::LeftToRight),
                 |ui| {
                     if self.host.using_external_vulkan_present_window() {
-                        ui.label("Rendering in external Vulkan game window...");
+                        ui.label("Rendering in external game window...");
                     } else {
                         ui.label("Loading game frame...");
                     }

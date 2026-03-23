@@ -47,17 +47,20 @@ impl NativeArcadeUiApp {
             );
         }
 
-        let upload_rgba: &[u8] = if direct_rgba {
-            &frame.data[..required_len]
-        } else {
-            &self.assets.play_frame_rgba
-        };
         let reuse_texture = self.state.play.last_frame_size == Some((frame.width, frame.height))
             && self.assets.last_frame_texture.is_some();
+
+        // Debug logging — scoped so the borrow of frame.data ends before we move it below.
         if std::env::var_os("ARCADE_VULKAN_DEBUG").is_some() {
+            let upload_rgba: &[u8] = if direct_rgba {
+                &frame.data[..required_len]
+            } else {
+                &self.assets.play_frame_rgba
+            };
             let frame_index = UI_FRAME_UPLOAD_DEBUG_COUNTER.fetch_add(1, Ordering::Relaxed);
             if frame_index < 16 {
-                let (checksum, non_black_pixels, first_rgba) = summarize_rgba_debug_pixels(upload_rgba);
+                let (checksum, non_black_pixels, first_rgba) =
+                    summarize_rgba_debug_pixels(upload_rgba);
                 info!(
                     target: "arcade_ui::video_debug",
                     "upload frame={} action={} size={}x{} src_pitch={} pixel_format={:?} checksum=0x{checksum:016x} non_black_samples={}/64 first_rgba={:02x},{:02x},{:02x},{:02x}",
@@ -75,7 +78,29 @@ impl NativeArcadeUiApp {
                 );
             }
         }
-        let image = ColorImage::from_rgba_unmultiplied(size, upload_rgba);
+
+        // For direct RGBA frames (Vulkan path, alpha forced to 255) we reinterpret the
+        // Vec<u8> as Vec<Color32> without copying.  Color32 is [u8;4] with identical
+        // RGBA layout, and premul with alpha=255 is a no-op — so this is both correct
+        // and faster than from_rgba_unmultiplied (avoids allocation + premul loop).
+        let image = if direct_rgba {
+            let rgba_bytes = frame.data;
+            let pixel_count = size[0] * size[1];
+            // SAFETY: Color32 is 4 bytes, align 1, same as [u8;4].  len == pixel_count * 4.
+            // capacity % 4 == 0 because we allocate with_capacity(width*height*4).
+            let pixels: Vec<egui::Color32> = unsafe {
+                debug_assert_eq!(rgba_bytes.len(), pixel_count * 4);
+                debug_assert_eq!(rgba_bytes.capacity() % 4, 0);
+                let len = rgba_bytes.len() / 4;
+                let cap = rgba_bytes.capacity() / 4;
+                let ptr = rgba_bytes.as_ptr() as *mut egui::Color32;
+                std::mem::forget(rgba_bytes);
+                Vec::from_raw_parts(ptr, len, cap)
+            };
+            ColorImage { size, pixels }
+        } else {
+            ColorImage::from_rgba_unmultiplied(size, &self.assets.play_frame_rgba)
+        };
 
         match &mut self.assets.last_frame_texture {
             Some(texture)

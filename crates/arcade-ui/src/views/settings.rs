@@ -4,12 +4,6 @@ use crate::app::NativeArcadeUiApp;
 
 impl NativeArcadeUiApp {
     pub(crate) fn sync_settings_navigation_indices(&mut self) {
-        self.state.menu_nav.settings_app_core_index =
-            if self.state.manage.settings_n64_preferred_core == "parallel_n64" {
-                1
-            } else {
-                0
-            };
         self.state.menu_nav.settings_app_upscaling_index = match self
             .state
             .manage
@@ -21,12 +15,6 @@ impl NativeArcadeUiApp {
             "8x" => 3,
             _ => 0,
         };
-        self.state.menu_nav.settings_app_profile_index =
-            if self.state.manage.settings_n64_parallel_profile == "performance" {
-                1
-            } else {
-                0
-            };
         self.state.menu_nav.settings_cover_action_index =
             self.state.menu_nav.settings_cover_action_index.min(1);
     }

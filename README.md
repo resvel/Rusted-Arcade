@@ -211,8 +211,8 @@ Core binary extension is platform-specific (`.so` on Linux, `.dll` on Windows, `
 - `genesis_plus_gx_libretro`
 - `gambatte_libretro`
 - `mgba_libretro`
-- `mupen64plus_next_libretro`
 - `parallel_n64_libretro`
+- `mupen64plus_next_libretro`
 - `fbneo_libretro`
 - `mame2003_libretro`
 - `mame2003_plus_libretro`
@@ -227,24 +227,10 @@ Core binary extension is platform-specific (`.so` on Linux, `.dll` on Windows, `
   - OpenGL-backed frontend integration and software frame delivery are the intended first working modes.
   - Vulkan/MoltenVK in the embedded host is experimental and requires Vulkan-capable core binaries.
   - `wgpu`/Metal is opt-in experimental only: set `ARCADE_MACOS_RENDERER=wgpu` (or `metal`) to run eframe through `wgpu` on macOS (`WGPU_BACKEND=metal` is auto-set if absent).
-  - `parallel_n64` defaults to the Vulkan backend on macOS.
-  - This Vulkan experiment requires a working Vulkan loader + MoltenVK installation on macOS.
-  - Recommended install path: `brew install vulkan-loader molten-vk vulkan-tools` (loader path can be overridden with `ARCADE_VULKAN_LOADER=/absolute/path/to/libMoltenVK.dylib`).
-  - Set `ARCADE_MACOS_EXPERIMENTAL_VULKAN=0` to force `parallel_n64` back to the OpenGL path.
-  - macOS `parallel_n64` Vulkan defaults are tuned for headroom: `gfxplugin-accuracy=high` at `1x` upscaling, `medium` above `1x`, and ParaLLEl VI extras disabled (`vi-aa`, `vi-bilinear`, `dither-filter`, `divot-filter`, `gamma-dither`).
-  - Settings now include `Parallel Preset` for N64 `parallel_n64`:
-    - `balanced` (default): current headroom defaults.
-    - `performance`: more aggressive quality reduction (`gfxplugin-accuracy=medium` at `1x`, `low` above `1x`) while keeping ParaLLEl VI extras disabled.
-  - Fallback sync behavior: per-frame Vulkan idle waits are disabled by default for better performance/pacing in fallback readback mode.
-  - Override fallback sync with `ARCADE_VULKAN_FORCE_FALLBACK_IDLE=1` (enable conservative waits) or `=0` (force disable).
-  - Build and install a Vulkan-capable `parallel_n64` core with `./scripts/build_parallel_n64_macos_vulkan.sh`.
-  - Current Apple Silicon caveat: this build path disables dynarec/NEON asm in `parallel_n64` to keep the paraLLEl Vulkan experiment linkable.
-  - Current caveat: hardware-render cores in the host still rely on OpenGL frontend integration, so this mode can force software fallback for those cores.
-- `parallel_n64` is the current exception:
-  - Linux/X11 uses the high-performance external Vulkan presentation window path.
-  - Windows defaults to the working software fallback with `parallel-n64-gfxplugin=angrylion`.
-  - Setting `ARCADE_WINDOWS_EXTERNAL_VULKAN_PRESENT=1` switches Windows back to the experimental `parallel` Vulkan path with ParaLLEl-RDP upscaling.
-  - `LIBRETRO_PARALLEL_N64_GL_FALLBACK=1` forces the software fallback explicitly.
+  - N64 is single-path on macOS and always uses `mupen64plus_next`.
+  - N64 settings expose only internal resolution (`1x`, `2x`, `4x`, `8x`).
+  - macOS N64 is locked to the working `mupen64plus_next + ParaLLEl/Vulkan` path.
+  - `GLideN64`/OpenGL is not the supported embedded N64 runtime path on macOS.
 - Arcade launches are validated before start:
   - CPS3 titles are blocked until the required assets are installed.
   - Shared arcade BIOS files are resolved from `bios_root` and `rom_root` arcade directories (see macOS arcade quick setup above).
@@ -268,9 +254,11 @@ Core binary extension is platform-specific (`.so` on Linux, `.dll` on Windows, `
 
 ### Current N64 runtime path
 
-- `parallel_n64` launches successfully in the native app.
-- libretro Vulkan negotiation is implemented far enough to run the core.
-- On Linux/X11 the host uses:
+- macOS:
+  - active N64 core is `mupen64plus_next`
+  - active renderer path is `ParaLLEl` over Vulkan
+  - upstream macOS builds currently run as `Cached Interpreter`
+- On Linux/X11 the host uses `parallel_n64` with:
   - core-owned Vulkan device creation
   - external X11 Vulkan presentation window
   - direct external GPU presentation
@@ -285,15 +273,17 @@ Core binary extension is platform-specific (`.so` on Linux, `.dll` on Windows, `
 - Executable-local config and asset path layout for packaged builds
 - Manage view and runtime config persistence for cover scraping
 - Native write-side ROM management flow
-- `parallel_n64` Vulkan bring-up
+- Linux `parallel_n64` Vulkan bring-up
+- macOS `mupen64plus_next` ParaLLEl/Vulkan path
 - Linux external Vulkan presentation window
 - Linux direct external presentation instead of UI texture readback
 - Configurable ParaLLEl upscale
 
 ### Remaining work
 
+- Linux `parallel_n64` Vulkan parity/regression coverage
+- macOS gameplay-speed polish on the upstream cached-interpreter `mupen64plus_next + ParaLLEl` path
 - Windows `parallel_n64` Vulkan parity and stability in the opt-in external-present path
-- Final gameplay-speed polish for `parallel_n64`
 - Adaptive 60/30 presentation policy for heavier Linux scenes
 - Runtime validation of `4x` and `8x` upscale modes
 - Additional UX polish for the external Vulkan window lifecycle if needed
