@@ -49,8 +49,8 @@ pub(super) fn default_core_variables_for(
         if backend == VideoBackendKind::Vulkan {
             insert_core_variable(&mut variables, "mupen64plus-rdp-plugin", "parallel");
             insert_core_variable(&mut variables, "@mupen64plus-rdp-plugin", "parallel");
-            // Favor the working ParaLLEl-RDP video path, but keep HLE RSP for speed.
-            insert_core_variable(&mut variables, "mupen64plus-rsp-plugin", "hle");
+            // ParaLLEl-RDP requires the Parallel RSP (LLE); HLE is incompatible.
+            insert_core_variable(&mut variables, "mupen64plus-rsp-plugin", "parallel");
             #[cfg(target_os = "macos")]
             {
                 // Upstream macOS builds disable dynarec, so the only remaining CPU-side
@@ -430,7 +430,7 @@ mod tests {
 
         assert_eq!(rdp.to_str().expect("utf8"), "parallel");
         assert_eq!(legacy_rdp.to_str().expect("utf8"), "parallel");
-        assert_eq!(rsp.to_str().expect("utf8"), "hle");
+        assert_eq!(rsp.to_str().expect("utf8"), "parallel");
         assert_eq!(upscaling.to_str().expect("utf8"), "1x");
         assert_eq!(sync.to_str().expect("utf8"), "false");
         assert_eq!(ssaa.to_str().expect("utf8"), "false");

@@ -1468,6 +1468,8 @@ impl NativeArcadeUiApp {
                     self.assets = crate::assets::AssetCache::new(
                         self.services.config().paths.rom_root.as_path(),
                     );
+                    self.host
+                        .update_core_variables(&self.services.config().emulation);
                 }
                 self.sync_settings_navigation_indices();
                 self.state.manage.status_message = if outcome.restart_required {

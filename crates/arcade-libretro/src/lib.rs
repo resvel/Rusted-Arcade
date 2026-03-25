@@ -170,6 +170,8 @@ struct EnvironmentContext {
     requested_hw_context_type: Option<u32>,
     last_load_error: Option<String>,
     last_negotiation_interface: Option<(u32, u32)>,
+    loaded_core_name: Option<String>,
+    loaded_backend: Option<VideoBackendKind>,
 }
 
 #[derive(Clone, Copy)]
@@ -1964,6 +1966,20 @@ impl LibretroHost {
         reset_vulkan_present_metrics(&self.runtime);
         clear_active_runtime(&self.runtime);
         Ok(())
+    }
+
+    /// Push updated emulation settings to the running core so they take effect
+    /// on the next frame without restarting the game.
+    pub fn update_core_variables(&self, emulation: &EmulationConfig) {
+        let mut context = self.runtime.environment_context.lock();
+        let Some(core_name) = context.loaded_core_name.clone() else {
+            return;
+        };
+        let Some(backend) = context.loaded_backend else {
+            return;
+        };
+        context.variables = default_core_variables_for(&core_name, backend, emulation);
+        context.variables_updated = true;
     }
 
     fn ensure_audio_output_started(&self, preferred_sample_rate_hz: Option<u32>) -> Result<()> {
@@ -6715,6 +6731,8 @@ fn configure_environment_context(
         context.requested_hw_context_type = None;
         context.last_load_error = None;
         context.last_negotiation_interface = None;
+        context.loaded_core_name = Some(core_name.to_string());
+        context.loaded_backend = Some(backend);
         let should_log_core_vars = vulkan_debug_enabled()
             || vulkan_handoff_trace_enabled()
             || env_flag_enabled("ARCADE_PARALLEL_RDP_SAFE_DIAG")
