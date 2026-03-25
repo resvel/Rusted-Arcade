@@ -1968,9 +1968,10 @@ impl LibretroHost {
         Ok(())
     }
 
-    /// Push updated emulation settings to the running core so they take effect
-    /// on the next frame without restarting the game.
-    pub fn update_core_variables(&self, emulation: &EmulationConfig) {
+    /// Push updated emulation settings so they take effect on the next game
+    /// launch (and on the next frame if a game is already running).
+    pub fn update_core_variables(&mut self, emulation: &EmulationConfig) {
+        self.emulation = emulation.clone();
         let mut context = self.runtime.environment_context.lock();
         let Some(core_name) = context.loaded_core_name.clone() else {
             return;
