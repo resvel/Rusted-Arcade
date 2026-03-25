@@ -13,15 +13,24 @@ pub const SUPPORTED_CORES: &[&str] = &[
     "mame2003_plus",
 ];
 
-#[cfg(target_os = "macos")]
-const DEFAULT_N64_CORE: &str = "mupen64plus_next";
 #[cfg(not(target_os = "macos"))]
 const DEFAULT_N64_CORE: &str = "parallel_n64";
-
-#[cfg(target_os = "macos")]
-const ALLOWLIST_N64: &[&str] = &["mupen64plus_next"];
 #[cfg(not(target_os = "macos"))]
 const ALLOWLIST_N64: &[&str] = &["parallel_n64", "mupen64plus_next"];
+
+#[cfg(target_os = "macos")]
+fn default_n64_core() -> &'static str {
+    "mupen64plus_next"
+}
+
+#[cfg(target_os = "macos")]
+fn allowlist_n64() -> &'static [&'static str] {
+    if crate::platform::is_running_under_rosetta() {
+        &["parallel_n64", "mupen64plus_next"]
+    } else {
+        &["mupen64plus_next"]
+    }
+}
 
 fn default_core(system: &str) -> &'static str {
     match system {
@@ -30,7 +39,10 @@ fn default_core(system: &str) -> &'static str {
         "GENESIS" => "genesis_plus_gx",
         "GB" => "gambatte",
         "GBA" => "mgba",
+        #[cfg(not(target_os = "macos"))]
         "N64" => DEFAULT_N64_CORE,
+        #[cfg(target_os = "macos")]
+        "N64" => default_n64_core(),
         "ARCADE" => "fbneo",
         _ => "fceumm",
     }
@@ -43,7 +55,10 @@ fn allowlist(system: &str) -> &'static [&'static str] {
         "GENESIS" => &["genesis_plus_gx"],
         "GB" => &["gambatte"],
         "GBA" => &["mgba"],
+        #[cfg(not(target_os = "macos"))]
         "N64" => ALLOWLIST_N64,
+        #[cfg(target_os = "macos")]
+        "N64" => allowlist_n64(),
         "ARCADE" => &["fbneo", "mame2003", "mame2003_plus"],
         _ => &["fceumm"],
     }

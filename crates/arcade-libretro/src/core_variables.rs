@@ -1,5 +1,4 @@
 use super::*;
-#[cfg(not(target_os = "macos"))]
 use arcade_domain::N64ParallelProfile;
 
 pub(super) fn default_core_variables_for(
@@ -12,7 +11,7 @@ pub(super) fn default_core_variables_for(
     if core_name == "mupen64plus_next" {
         insert_core_variable(&mut variables, "mupen64plus-cpucore", "dynamic_recompiler");
         insert_core_variable(&mut variables, "mupen64plus-rsp-plugin", "hle");
-        insert_core_variable(&mut variables, "mupen64plus-aspect", "4:3");
+        insert_core_variable(&mut variables, "mupen64plus-aspect", emulation.n64.aspect_ratio.as_core_value());
         insert_core_variable(&mut variables, "mupen64plus-BilinearMode", "3point");
         insert_core_variable(&mut variables, "mupen64plus-MultiSampling", "0");
         insert_core_variable(&mut variables, "mupen64plus-EnableFBEmulation", "True");
@@ -69,33 +68,37 @@ pub(super) fn default_core_variables_for(
             insert_core_variable(
                 &mut variables,
                 "mupen64plus-parallel-rdp-synchronous",
-                "false",
+                emulation.n64.parallel_rdp_synchronous.as_core_value(),
             );
             insert_core_variable(
                 &mut variables,
                 "mupen64plus-parallel-rdp-super-sampled-read-back",
-                "false",
+                emulation.n64.parallel_rdp_super_sampled_read_back.as_core_value(),
             );
-            insert_core_variable(&mut variables, "mupen64plus-parallel-rdp-vi-aa", "disabled");
+            insert_core_variable(
+                &mut variables,
+                "mupen64plus-parallel-rdp-vi-aa",
+                emulation.n64.parallel_rdp_vi_aa.as_core_value(),
+            );
             insert_core_variable(
                 &mut variables,
                 "mupen64plus-parallel-rdp-vi-bilinear",
-                "disabled",
+                emulation.n64.parallel_rdp_vi_bilinear.as_core_value(),
             );
             insert_core_variable(
                 &mut variables,
                 "mupen64plus-parallel-rdp-dither-filter",
-                "disabled",
+                emulation.n64.parallel_rdp_dither_filter.as_core_value(),
             );
             insert_core_variable(
                 &mut variables,
                 "mupen64plus-parallel-rdp-divot-filter",
-                "disabled",
+                emulation.n64.parallel_rdp_divot_filter.as_core_value(),
             );
             insert_core_variable(
                 &mut variables,
                 "mupen64plus-parallel-rdp-gamma-dither",
-                "disabled",
+                emulation.n64.parallel_rdp_gamma_dither.as_core_value(),
             );
         }
 
@@ -103,23 +106,34 @@ pub(super) fn default_core_variables_for(
     }
 
     if core_name == "parallel_n64" {
+        let rosetta = arcade_domain::is_running_under_rosetta();
+
         match backend {
             VideoBackendKind::Software => {
                 insert_core_variable(&mut variables, "parallel-n64-gfxplugin", "angrylion");
                 #[cfg(target_os = "macos")]
-                insert_core_variable(&mut variables, "parallel-n64-cpucore", "cached_interpreter");
+                if !rosetta {
+                    insert_core_variable(
+                        &mut variables,
+                        "parallel-n64-cpucore",
+                        "cached_interpreter",
+                    );
+                }
             }
             VideoBackendKind::OpenGl | VideoBackendKind::Vulkan => {
                 #[cfg(target_os = "macos")]
-                let gfx_plugin = if backend == VideoBackendKind::OpenGl {
-                    // macOS safety default: keep the OpenGL backend on angrylion until the
+                let gfx_plugin = if rosetta {
+                    // Under Rosetta the x86_64 parallel backend works via Vulkan/MoltenVK.
+                    "parallel"
+                } else if backend == VideoBackendKind::OpenGl {
+                    // Native arm64 safety default: keep the OpenGL backend on angrylion until the
                     // rice/gln64 handoff path is fully stable across launch/exit cycles.
                     "angrylion"
                 } else {
                     "parallel"
                 };
                 #[cfg(target_os = "macos")]
-                if backend == VideoBackendKind::OpenGl {
+                if !rosetta && backend == VideoBackendKind::OpenGl {
                     insert_core_variable(
                         &mut variables,
                         "parallel-n64-cpucore",
@@ -132,8 +146,16 @@ pub(super) fn default_core_variables_for(
                 if backend == VideoBackendKind::OpenGl {
                     insert_core_variable(&mut variables, "parallel-n64-rspplugin", "parallel");
                 }
-                #[cfg(not(target_os = "macos"))]
                 if backend == VideoBackendKind::Vulkan {
+                    #[cfg(target_os = "macos")]
+                    if rosetta {
+                        insert_core_variable(
+                            &mut variables,
+                            "parallel-n64-rspplugin",
+                            "parallel",
+                        );
+                    }
+                    #[cfg(not(target_os = "macos"))]
                     insert_core_variable(&mut variables, "parallel-n64-rspplugin", "parallel");
                 }
                 let upscaling = emulation.n64.parallel_rdp_upscaling.as_core_value();
@@ -142,13 +164,24 @@ pub(super) fn default_core_variables_for(
                     "parallel-n64-parallel-rdp-upscaling",
                     upscaling,
                 );
+                #[cfg(target_os = "macos")]
+                let can_apply_performance_preset = rosetta;
                 #[cfg(not(target_os = "macos"))]
-                if backend == VideoBackendKind::Vulkan
+                let can_apply_performance_preset = true;
+
+                if can_apply_performance_preset
+                    && backend == VideoBackendKind::Vulkan
                     && emulation.n64.parallel_profile == N64ParallelProfile::Performance
                 {
                     apply_parallel_n64_performance_preset(&mut variables, upscaling);
                 }
             }
+        }
+        // Under Rosetta the x86_64 core can use dynarec; explicitly request it so
+        // the choice is visible in core variable logs.
+        #[cfg(target_os = "macos")]
+        if rosetta && !variables.contains_key("parallel-n64-cpucore") {
+            insert_core_variable(&mut variables, "parallel-n64-cpucore", "dynamic_recompiler");
         }
         if let Some(cpucore_override) =
             effective_parallel_n64_cpucore_override(backend, parallel_n64_cpucore_override())
@@ -281,7 +314,6 @@ fn apply_parallel_n64_env_overrides(variables: &mut HashMap<String, CString>) {
     }
 }
 
-#[cfg(not(target_os = "macos"))]
 fn apply_parallel_n64_performance_preset(
     variables: &mut HashMap<String, CString>,
     upscaling: &str,

@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use arcade_data::Database;
-use arcade_domain::AppConfig;
+use arcade_domain::{resolve_arch_core_root, AppConfig};
 use arcade_libretro::LibretroHost;
 use arcade_services::NativeServices;
 use arcade_ui::NativeArcadeUiApp;
@@ -118,16 +118,23 @@ fn main() -> Result<()> {
     let config_path = std::env::args().nth(1).map(PathBuf::from);
     let (config, config_path) = AppConfig::load_or_create(config_path.as_deref())?;
 
+    let effective_core_root = resolve_arch_core_root(&config.paths.core_root);
+
     info!("Using config: {}", config_path.display());
     info!("ROM root: {}", config.paths.rom_root.display());
     info!("DB path: {}", config.paths.db_path.display());
     info!("Core root: {}", config.paths.core_root.display());
+    info!("Effective core root: {}", effective_core_root.display());
     info!("BIOS root: {}", config.paths.bios_root.display());
+    info!(
+        "Rosetta: {}",
+        arcade_domain::is_running_under_rosetta()
+    );
 
     let db = Database::open(&config)?;
     let services = NativeServices::bootstrap(config.clone(), config_path.clone(), db)?;
     let host = LibretroHost::new(
-        config.paths.core_root.clone(),
+        effective_core_root,
         config.paths.bios_root.clone(),
         config.paths.save_state_root.clone(),
         config.emulation.clone(),

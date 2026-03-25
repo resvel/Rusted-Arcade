@@ -1,0 +1,101 @@
+[2m2026-03-24T20:37:52.477356Z[0m [32m INFO[0m [2marcade_app[0m[2m:[0m Using macOS default renderer: wgpu (Metal). Set ARCADE_MACOS_RENDERER=glow to use OpenGL.
+[2m2026-03-24T20:37:52.480926Z[0m [32m INFO[0m [2marcade_app[0m[2m:[0m Using config: /Users/jules/native/target/x86_64-apple-darwin/debug/config.toml
+[2m2026-03-24T20:37:52.480947Z[0m [32m INFO[0m [2marcade_app[0m[2m:[0m ROM root: /Users/jules/native/target/x86_64-apple-darwin/debug/roms
+[2m2026-03-24T20:37:52.480955Z[0m [32m INFO[0m [2marcade_app[0m[2m:[0m DB path: /Users/jules/native/target/x86_64-apple-darwin/debug/data/arcade.db
+[2m2026-03-24T20:37:52.480962Z[0m [32m INFO[0m [2marcade_app[0m[2m:[0m Core root: /Users/jules/native/target/x86_64-apple-darwin/debug/cores
+[2m2026-03-24T20:37:52.480969Z[0m [32m INFO[0m [2marcade_app[0m[2m:[0m Effective core root: /Users/jules/native/target/x86_64-apple-darwin/debug/cores/x86_64
+[2m2026-03-24T20:37:52.480975Z[0m [32m INFO[0m [2marcade_app[0m[2m:[0m BIOS root: /Users/jules/native/target/x86_64-apple-darwin/debug/bios
+[2m2026-03-24T20:37:52.480984Z[0m [32m INFO[0m [2marcade_app[0m[2m:[0m Rosetta: true
+[2m2026-03-24T20:37:52.492869Z[0m [32m INFO[0m [2meframe[0m[2m:[0m Both the glow and wgpu renderers are available. Using wgpu.
+[2m2026-03-24T20:38:00.011510Z[0m [32m INFO[0m [2marcade_libretro::core_loader[0m[2m:[0m loading core binary core=mupen64plus_next path=/Users/jules/native/target/x86_64-apple-darwin/debug/cores/x86_64/mupen64plus_next_libretro.dylib modified_unix_secs=1774287880 size_bytes=7637864
+mupen64plus: Using full mem base
+Selected HLE RSP with Angrylion, falling back to Parallel RSP!
+mupen64plus: [EmuThread] M64CMD_ROM_OPEN
+mupen64plus: failed to load ROM
+mupen64plus: Using full mem base
+Selected HLE RSP with Angrylion, falling back to Parallel RSP!
+mupen64plus: [EmuThread] M64CMD_ROM_OPEN
+mupen64plus: Goodname: Doom 64 (U) (V1.0) [o1]
+mupen64plus: Name: Doom64              
+mupen64plus: MD5: 7497ADADADA89230827C06E4BFFBBBD8
+mupen64plus: CRC: A83E101A E937B69D
+mupen64plus: Imagetype: .v64 (byteswapped)
+mupen64plus: Rom size: 16777216 bytes (or 16 Mb or 128 Megabits)
+mupen64plus: ClockRate = 3A07F5F
+mupen64plus: Version: 1447
+mupen64plus: Manufacturer: Nintendo
+mupen64plus: Cartridge_ID: 4D44
+mupen64plus: Country: USA
+mupen64plus: PC = 80000400
+mupen64plus: Save type: 5
+mupen64plus: [EmuThread] M64CMD_ROM_GET_HEADER
+[INFO]: Layer count: 0
+[INFO]: Enabling instance extension: VK_EXT_debug_utils.
+[INFO]: Using Vulkan GPU: Apple M1
+[INFO]: Enabling device extension: VK_KHR_swapchain.
+[INFO]: Enabling device extension: VK_KHR_sampler_mirror_clamp_to_edge.
+[INFO]: Enabling device extension: VK_EXT_calibrated_timestamps.
+[INFO]: Enabling device extension: VK_KHR_image_format_list.
+[INFO]: Enabling device extension: VK_KHR_shader_float_controls.
+[INFO]: Enabling device extension: VK_KHR_8bit_storage.
+[INFO]: Enabling device extension: VK_KHR_16bit_storage.
+[INFO]: Enabling device extension: VK_KHR_shader_float16_int8.
+[INFO]: Enabling device extension: VK_EXT_subgroup_size_control.
+[INFO]: Enabling device extension: VK_EXT_host_query_reset.
+[INFO]: Enabling device extension: VK_EXT_shader_demote_to_helper_invocation.
+[INFO]: Enabling device extension: VK_EXT_scalar_block_layout.
+[INFO]: Enabling device extension: VK_KHR_uniform_buffer_standard_layout.
+[INFO]: Enabling device extension: VK_KHR_timeline_semaphore.
+[INFO]: Enabling device extension: VK_EXT_memory_budget.
+[INFO]: Enabling device extension: VK_EXT_texture_compression_astc_hdr.
+[INFO]: Enabling device extension: VK_KHR_synchronization2.
+[INFO]: Enabling device extension: VK_EXT_pipeline_creation_cache_control.
+[INFO]: Enabling device extension: VK_KHR_format_feature_flags2.
+[2m2026-03-24T20:38:00.234918Z[0m [32m INFO[0m [2marcade_ui::actions::launch[0m[2m:[0m Started play session [3msystem[0m[2m=[0mN64 [3mrom_id[0m[2m=[0me9324d51-01fd-49a9-aed5-06633dd4d6dd [3mrom_path[0m[2m=[0m/Users/jules/native/target/x86_64-apple-darwin/debug/roms/n64/Doom 64 (U) (V1.0) [!].V64 [3mcore[0m[2m=[0mmupen64plus_next
+mupen64plus: [EmuThread] M64CMD_EXECUTE
+mupen64plus: Game controller 0 (Standard controller) has a Memory pak plugged in
+mupen64plus: Game controller 1 (Standard controller) has nothing plugged in
+mupen64plus: Game controller 2 (Standard controller) has nothing plugged in
+mupen64plus: Game controller 3 (Standard controller) has nothing plugged in
+mupen64plus: Using CIC type X102
+[WARN]: Emulating events as pipeline barriers on Metal emulation.
+Using 3 sync frames for parallel-RDP.
+VK_EXT_external_memory_host is not supported by this device. Application might run slower because of this.
+Using 2x upscaling!
+paraLLEl-RDP: Using RDRAM size of 8388608 bytes.
+[WARN]: VK_EXT_external_memory_host not supported or failed, falling back to a slower path.
+[INFO]: Enabling upscaling: 2x.
+[INFO]: Enabling 8 and 16-bit integer arithmetic support for more efficient shaders!
+mupen64plus: Initializing 4 RDRAM modules for a total of 8 MB
+mupen64plus: Starting R4300 emulator: Dynamic Recompiler
+mupen64plus: Init new dynarec
+[WARN]: Stalled compile (compute, bce85ae45518e39d): thread 0 - 17326.542 us (mode: sync, success: yes).
+[WARN]: Stalled compile (compute, 26f589c01dff5a82): thread 0 - 5949.625 us (mode: sync, success: yes).
+[WARN]: Stalled compile (graphics, 9a7968ef0ab84692): thread 0 - 8131.209 us (mode: sync, success: yes).
+[WARN]: Stalled compile (compute, 593745764e446555): thread 0 - 5132.125 us (mode: sync, success: yes).
+[WARN]: Stalled compile (compute, fd45ee6f56defa2b): thread 0 - 35615.667 us (mode: sync, success: yes).
+[WARN]: Stalled compile (compute, f6ece6dbc5268380): thread 0 - 6185.208 us (mode: sync, success: yes).
+[2m2026-03-24T20:38:05.763647Z[0m [32m INFO[0m [2marcade_ui::perf[0m[2m:[0m play_tick system=N64 core=mupen64plus_next ticks=180 tick_hz=43.1 avg_gap_ms=23.20 avg_work_ms=8.70 avg_frames_per_tick=1.37
+[2m2026-03-24T20:38:10.010495Z[0m [32m INFO[0m [2marcade_ui::perf[0m[2m:[0m play_tick system=N64 core=mupen64plus_next ticks=180 tick_hz=42.8 avg_gap_ms=23.38 avg_work_ms=11.52 avg_frames_per_tick=1.26
+[2m2026-03-24T20:38:14.276913Z[0m [32m INFO[0m [2marcade_ui::perf[0m[2m:[0m play_tick system=N64 core=mupen64plus_next ticks=180 tick_hz=42.3 avg_gap_ms=23.64 avg_work_ms=12.28 avg_frames_per_tick=1.23
+[2m2026-03-24T20:38:18.394746Z[0m [32m INFO[0m [2marcade_ui::perf[0m[2m:[0m play_tick system=N64 core=mupen64plus_next ticks=180 tick_hz=43.6 avg_gap_ms=22.94 avg_work_ms=11.80 avg_frames_per_tick=1.26
+[2m2026-03-24T20:38:22.523920Z[0m [32m INFO[0m [2marcade_ui::perf[0m[2m:[0m play_tick system=N64 core=mupen64plus_next ticks=180 tick_hz=43.7 avg_gap_ms=22.88 avg_work_ms=11.52 avg_frames_per_tick=1.31
+[2m2026-03-24T20:38:26.608273Z[0m [32m INFO[0m [2marcade_ui::perf[0m[2m:[0m play_tick system=N64 core=mupen64plus_next ticks=180 tick_hz=44.1 avg_gap_ms=22.69 avg_work_ms=11.43 avg_frames_per_tick=1.28
+[2m2026-03-24T20:38:30.824291Z[0m [32m INFO[0m [2marcade_ui::perf[0m[2m:[0m play_tick system=N64 core=mupen64plus_next ticks=180 tick_hz=42.6 avg_gap_ms=23.49 avg_work_ms=11.86 avg_frames_per_tick=1.25
+[2m2026-03-24T20:38:35.038278Z[0m [32m INFO[0m [2marcade_ui::perf[0m[2m:[0m play_tick system=N64 core=mupen64plus_next ticks=180 tick_hz=42.9 avg_gap_ms=23.33 avg_work_ms=12.56 avg_frames_per_tick=1.26
+[2m2026-03-24T20:38:39.195525Z[0m [32m INFO[0m [2marcade_ui::perf[0m[2m:[0m play_tick system=N64 core=mupen64plus_next ticks=180 tick_hz=43.2 avg_gap_ms=23.17 avg_work_ms=12.08 avg_frames_per_tick=1.23
+[2m2026-03-24T20:38:43.443276Z[0m [32m INFO[0m [2marcade_ui::perf[0m[2m:[0m play_tick system=N64 core=mupen64plus_next ticks=180 tick_hz=42.5 avg_gap_ms=23.53 avg_work_ms=12.48 avg_frames_per_tick=1.25
+[2m2026-03-24T20:38:47.607432Z[0m [32m INFO[0m [2marcade_ui::perf[0m[2m:[0m play_tick system=N64 core=mupen64plus_next ticks=180 tick_hz=43.2 avg_gap_ms=23.14 avg_work_ms=12.18 avg_frames_per_tick=1.24
+[2m2026-03-24T20:38:51.676246Z[0m [32m INFO[0m [2marcade_ui::perf[0m[2m:[0m play_tick system=N64 core=mupen64plus_next ticks=180 tick_hz=44.3 avg_gap_ms=22.57 avg_work_ms=11.06 avg_frames_per_tick=1.28
+[2m2026-03-24T20:38:55.940916Z[0m [32m INFO[0m [2marcade_ui::perf[0m[2m:[0m play_tick system=N64 core=mupen64plus_next ticks=180 tick_hz=42.2 avg_gap_ms=23.71 avg_work_ms=11.98 avg_frames_per_tick=1.24
+[2m2026-03-24T20:39:00.005221Z[0m [32m INFO[0m [2marcade_ui::perf[0m[2m:[0m play_tick system=N64 core=mupen64plus_next ticks=180 tick_hz=44.3 avg_gap_ms=22.59 avg_work_ms=11.29 avg_frames_per_tick=1.28
+[WARN]: Stalled compile (compute, 8bb459c9fba50b38): thread 0 - 93350.375 us (mode: fail-on-compile-required, success: yes).
+[2m2026-03-24T20:39:04.079075Z[0m [32m INFO[0m [2marcade_ui::perf[0m[2m:[0m play_tick system=N64 core=mupen64plus_next ticks=180 tick_hz=45.1 avg_gap_ms=22.20 avg_work_ms=9.78 avg_frames_per_tick=1.31
+[WARN]: Stalled compile (compute, 64950e01d8adbad4): thread 0 - 51329.000 us (mode: fail-on-compile-required, success: yes).
+[2m2026-03-24T20:39:08.130547Z[0m [32m INFO[0m [2marcade_ui::perf[0m[2m:[0m play_tick system=N64 core=mupen64plus_next ticks=180 tick_hz=45.0 avg_gap_ms=22.23 avg_work_ms=6.42 avg_frames_per_tick=1.33
+[2m2026-03-24T20:39:12.074987Z[0m [32m INFO[0m [2marcade_ui::perf[0m[2m:[0m play_tick system=N64 core=mupen64plus_next ticks=180 tick_hz=45.6 avg_gap_ms=21.94 avg_work_ms=8.62 avg_frames_per_tick=1.31
+[2m2026-03-24T20:39:14.588017Z[0m [32m INFO[0m [2marcade_libretro::vulkan_metrics[0m[2m:[0m vulkan_present_metrics [3mphase[0m[2m=[0m"final" [3mcore[0m[2m=[0m"mupen64plus_next_libretro" [3mbackend[0m[2m=[0mVulkan [3mcore_uses_hw_render[0m[2m=[0mtrue [3mexternal_window_created[0m[2m=[0mfalse [3mqueue_present_attempts[0m[2m=[0m0 [3mqueue_present_successes[0m[2m=[0m0 [3mexternal_present_deliveries[0m[2m=[0m0 [3mcpu_frame_deliveries[0m[2m=[0m4048 [3msource_non_black_seen[0m[2m=[0mfalse [3mswapchain_non_black_seen[0m[2m=[0mfalse [3mnon_tiny_source_frame_seen[0m[2m=[0mtrue [3mconsecutive_tiny_source_frames[0m[2m=[0m0 [3mmax_consecutive_tiny_source_frames[0m[2m=[0m2 [3msource_sample_checks[0m[2m=[0m0 [3mswapchain_sample_checks[0m[2m=[0m0 [3mfail_fast_error[0m[2m=[0m"none"
+mupen64plus: Stopping emulation.
+mupen64plus: R4300 emulator finished.
+mupen64plus: Rom closed.
+plugin_start_gfx

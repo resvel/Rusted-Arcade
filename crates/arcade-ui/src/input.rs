@@ -912,6 +912,22 @@ impl NativeArcadeUiApp {
             | MenuFocusRegion::ManageScrapeActions
             | MenuFocusRegion::ManageList
             | MenuFocusRegion::SettingsAppConfigUpscaling
+            | MenuFocusRegion::SettingsAppConfigParallelProfile
+            | MenuFocusRegion::SettingsAppConfigSynchronous
+            | MenuFocusRegion::SettingsAppConfigSsReadBack
+            | MenuFocusRegion::SettingsAppConfigViAa
+            | MenuFocusRegion::SettingsAppConfigViBilinear
+            | MenuFocusRegion::SettingsAppConfigDitherFilter
+            | MenuFocusRegion::SettingsAppConfigDivotFilter
+            | MenuFocusRegion::SettingsAppConfigGammaDither
+            | MenuFocusRegion::SettingsAppConfigCountPerOp
+            | MenuFocusRegion::SettingsAppConfigFbEmulation
+            | MenuFocusRegion::SettingsAppConfigCopyColorToRdram
+            | MenuFocusRegion::SettingsAppConfigFrameDuplication
+            | MenuFocusRegion::SettingsAppConfigFramerate
+            | MenuFocusRegion::SettingsAppConfigViRefresh
+            | MenuFocusRegion::SettingsAppConfigCountPerOpDenomPot
+            | MenuFocusRegion::SettingsAppConfigAspectRatio
             | MenuFocusRegion::SettingsAppConfigSave
             | MenuFocusRegion::SettingsCoverSettings => {}
             MenuFocusRegion::Grid => {
@@ -1022,6 +1038,22 @@ impl NativeArcadeUiApp {
             | MenuFocusRegion::ManageScrapeActions
             | MenuFocusRegion::ManageList
             | MenuFocusRegion::SettingsAppConfigUpscaling
+            | MenuFocusRegion::SettingsAppConfigParallelProfile
+            | MenuFocusRegion::SettingsAppConfigSynchronous
+            | MenuFocusRegion::SettingsAppConfigSsReadBack
+            | MenuFocusRegion::SettingsAppConfigViAa
+            | MenuFocusRegion::SettingsAppConfigViBilinear
+            | MenuFocusRegion::SettingsAppConfigDitherFilter
+            | MenuFocusRegion::SettingsAppConfigDivotFilter
+            | MenuFocusRegion::SettingsAppConfigGammaDither
+            | MenuFocusRegion::SettingsAppConfigCountPerOp
+            | MenuFocusRegion::SettingsAppConfigFbEmulation
+            | MenuFocusRegion::SettingsAppConfigCopyColorToRdram
+            | MenuFocusRegion::SettingsAppConfigFrameDuplication
+            | MenuFocusRegion::SettingsAppConfigFramerate
+            | MenuFocusRegion::SettingsAppConfigViRefresh
+            | MenuFocusRegion::SettingsAppConfigCountPerOpDenomPot
+            | MenuFocusRegion::SettingsAppConfigAspectRatio
             | MenuFocusRegion::SettingsAppConfigSave
             | MenuFocusRegion::SettingsCoverSettings => {}
         }
@@ -1232,6 +1264,22 @@ impl NativeArcadeUiApp {
             | MenuFocusRegion::ControllerMappingToggle
             | MenuFocusRegion::Grid
             | MenuFocusRegion::SettingsAppConfigUpscaling
+            | MenuFocusRegion::SettingsAppConfigParallelProfile
+            | MenuFocusRegion::SettingsAppConfigSynchronous
+            | MenuFocusRegion::SettingsAppConfigSsReadBack
+            | MenuFocusRegion::SettingsAppConfigViAa
+            | MenuFocusRegion::SettingsAppConfigViBilinear
+            | MenuFocusRegion::SettingsAppConfigDitherFilter
+            | MenuFocusRegion::SettingsAppConfigDivotFilter
+            | MenuFocusRegion::SettingsAppConfigGammaDither
+            | MenuFocusRegion::SettingsAppConfigCountPerOp
+            | MenuFocusRegion::SettingsAppConfigFbEmulation
+            | MenuFocusRegion::SettingsAppConfigCopyColorToRdram
+            | MenuFocusRegion::SettingsAppConfigFrameDuplication
+            | MenuFocusRegion::SettingsAppConfigFramerate
+            | MenuFocusRegion::SettingsAppConfigViRefresh
+            | MenuFocusRegion::SettingsAppConfigCountPerOpDenomPot
+            | MenuFocusRegion::SettingsAppConfigAspectRatio
             | MenuFocusRegion::SettingsAppConfigSave
             | MenuFocusRegion::SettingsCoverSettings => {
                 self.state.menu_nav.focus_region = MenuFocusRegion::ManageHeader;
@@ -1289,6 +1337,22 @@ impl NativeArcadeUiApp {
             | MenuFocusRegion::ControllerMappingToggle
             | MenuFocusRegion::Grid
             | MenuFocusRegion::SettingsAppConfigUpscaling
+            | MenuFocusRegion::SettingsAppConfigParallelProfile
+            | MenuFocusRegion::SettingsAppConfigSynchronous
+            | MenuFocusRegion::SettingsAppConfigSsReadBack
+            | MenuFocusRegion::SettingsAppConfigViAa
+            | MenuFocusRegion::SettingsAppConfigViBilinear
+            | MenuFocusRegion::SettingsAppConfigDitherFilter
+            | MenuFocusRegion::SettingsAppConfigDivotFilter
+            | MenuFocusRegion::SettingsAppConfigGammaDither
+            | MenuFocusRegion::SettingsAppConfigCountPerOp
+            | MenuFocusRegion::SettingsAppConfigFbEmulation
+            | MenuFocusRegion::SettingsAppConfigCopyColorToRdram
+            | MenuFocusRegion::SettingsAppConfigFrameDuplication
+            | MenuFocusRegion::SettingsAppConfigFramerate
+            | MenuFocusRegion::SettingsAppConfigViRefresh
+            | MenuFocusRegion::SettingsAppConfigCountPerOpDenomPot
+            | MenuFocusRegion::SettingsAppConfigAspectRatio
             | MenuFocusRegion::SettingsAppConfigSave
             | MenuFocusRegion::SettingsCoverSettings => {
                 self.state.menu_nav.focus_region = MenuFocusRegion::ManageHeader;
@@ -1314,6 +1378,22 @@ impl NativeArcadeUiApp {
             | MenuFocusRegion::ControllerMappingToggle
             | MenuFocusRegion::Grid
             | MenuFocusRegion::SettingsAppConfigUpscaling
+            | MenuFocusRegion::SettingsAppConfigParallelProfile
+            | MenuFocusRegion::SettingsAppConfigSynchronous
+            | MenuFocusRegion::SettingsAppConfigSsReadBack
+            | MenuFocusRegion::SettingsAppConfigViAa
+            | MenuFocusRegion::SettingsAppConfigViBilinear
+            | MenuFocusRegion::SettingsAppConfigDitherFilter
+            | MenuFocusRegion::SettingsAppConfigDivotFilter
+            | MenuFocusRegion::SettingsAppConfigGammaDither
+            | MenuFocusRegion::SettingsAppConfigCountPerOp
+            | MenuFocusRegion::SettingsAppConfigFbEmulation
+            | MenuFocusRegion::SettingsAppConfigCopyColorToRdram
+            | MenuFocusRegion::SettingsAppConfigFrameDuplication
+            | MenuFocusRegion::SettingsAppConfigFramerate
+            | MenuFocusRegion::SettingsAppConfigViRefresh
+            | MenuFocusRegion::SettingsAppConfigCountPerOpDenomPot
+            | MenuFocusRegion::SettingsAppConfigAspectRatio
             | MenuFocusRegion::SettingsAppConfigSave
             | MenuFocusRegion::SettingsCoverSettings => MenuFocusRegion::ManageHeader,
         };
@@ -1351,7 +1431,8 @@ impl NativeArcadeUiApp {
                         .focus_top_nav_for_view(self.state.current_view);
                 }
                 MenuNavDirection::Down => {
-                    self.state.menu_nav.focus_region = MenuFocusRegion::SettingsAppConfigSave;
+                    self.state.menu_nav.focus_region =
+                        MenuFocusRegion::SettingsAppConfigParallelProfile;
                 }
                 MenuNavDirection::Left => {
                     self.state.menu_nav.settings_app_upscaling_index = self
@@ -1365,9 +1446,344 @@ impl NativeArcadeUiApp {
                         (self.state.menu_nav.settings_app_upscaling_index + 1).min(3);
                 }
             },
+            MenuFocusRegion::SettingsAppConfigParallelProfile => match direction {
+                MenuNavDirection::Up => {
+                    self.state.menu_nav.focus_region =
+                        MenuFocusRegion::SettingsAppConfigUpscaling;
+                }
+                MenuNavDirection::Down => {
+                    self.state.menu_nav.focus_region =
+                        MenuFocusRegion::SettingsAppConfigSynchronous;
+                }
+                MenuNavDirection::Left => {
+                    self.state.menu_nav.settings_app_parallel_profile_index = self
+                        .state
+                        .menu_nav
+                        .settings_app_parallel_profile_index
+                        .saturating_sub(1);
+                }
+                MenuNavDirection::Right => {
+                    self.state.menu_nav.settings_app_parallel_profile_index =
+                        (self.state.menu_nav.settings_app_parallel_profile_index + 1).min(1);
+                }
+            },
+            MenuFocusRegion::SettingsAppConfigSynchronous => match direction {
+                MenuNavDirection::Up => {
+                    self.state.menu_nav.focus_region =
+                        MenuFocusRegion::SettingsAppConfigParallelProfile;
+                }
+                MenuNavDirection::Down => {
+                    self.state.menu_nav.focus_region =
+                        MenuFocusRegion::SettingsAppConfigSsReadBack;
+                }
+                MenuNavDirection::Left => {
+                    self.state.menu_nav.settings_app_synchronous_index = self
+                        .state
+                        .menu_nav
+                        .settings_app_synchronous_index
+                        .saturating_sub(1);
+                }
+                MenuNavDirection::Right => {
+                    self.state.menu_nav.settings_app_synchronous_index =
+                        (self.state.menu_nav.settings_app_synchronous_index + 1).min(1);
+                }
+            },
+            MenuFocusRegion::SettingsAppConfigSsReadBack => match direction {
+                MenuNavDirection::Up => {
+                    self.state.menu_nav.focus_region =
+                        MenuFocusRegion::SettingsAppConfigSynchronous;
+                }
+                MenuNavDirection::Down => {
+                    self.state.menu_nav.focus_region =
+                        MenuFocusRegion::SettingsAppConfigViAa;
+                }
+                MenuNavDirection::Left => {
+                    self.state.menu_nav.settings_app_ss_read_back_index = self
+                        .state
+                        .menu_nav
+                        .settings_app_ss_read_back_index
+                        .saturating_sub(1);
+                }
+                MenuNavDirection::Right => {
+                    self.state.menu_nav.settings_app_ss_read_back_index =
+                        (self.state.menu_nav.settings_app_ss_read_back_index + 1).min(1);
+                }
+            },
+            MenuFocusRegion::SettingsAppConfigViAa => match direction {
+                MenuNavDirection::Up => {
+                    self.state.menu_nav.focus_region =
+                        MenuFocusRegion::SettingsAppConfigSsReadBack;
+                }
+                MenuNavDirection::Down => {
+                    self.state.menu_nav.focus_region =
+                        MenuFocusRegion::SettingsAppConfigViBilinear;
+                }
+                MenuNavDirection::Left => {
+                    self.state.menu_nav.settings_app_vi_aa_index = self
+                        .state
+                        .menu_nav
+                        .settings_app_vi_aa_index
+                        .saturating_sub(1);
+                }
+                MenuNavDirection::Right => {
+                    self.state.menu_nav.settings_app_vi_aa_index =
+                        (self.state.menu_nav.settings_app_vi_aa_index + 1).min(1);
+                }
+            },
+            MenuFocusRegion::SettingsAppConfigViBilinear => match direction {
+                MenuNavDirection::Up => {
+                    self.state.menu_nav.focus_region =
+                        MenuFocusRegion::SettingsAppConfigViAa;
+                }
+                MenuNavDirection::Down => {
+                    self.state.menu_nav.focus_region =
+                        MenuFocusRegion::SettingsAppConfigDitherFilter;
+                }
+                MenuNavDirection::Left => {
+                    self.state.menu_nav.settings_app_vi_bilinear_index = self
+                        .state
+                        .menu_nav
+                        .settings_app_vi_bilinear_index
+                        .saturating_sub(1);
+                }
+                MenuNavDirection::Right => {
+                    self.state.menu_nav.settings_app_vi_bilinear_index =
+                        (self.state.menu_nav.settings_app_vi_bilinear_index + 1).min(1);
+                }
+            },
+            MenuFocusRegion::SettingsAppConfigDitherFilter => match direction {
+                MenuNavDirection::Up => {
+                    self.state.menu_nav.focus_region =
+                        MenuFocusRegion::SettingsAppConfigViBilinear;
+                }
+                MenuNavDirection::Down => {
+                    self.state.menu_nav.focus_region =
+                        MenuFocusRegion::SettingsAppConfigDivotFilter;
+                }
+                MenuNavDirection::Left => {
+                    self.state.menu_nav.settings_app_dither_filter_index = self
+                        .state
+                        .menu_nav
+                        .settings_app_dither_filter_index
+                        .saturating_sub(1);
+                }
+                MenuNavDirection::Right => {
+                    self.state.menu_nav.settings_app_dither_filter_index =
+                        (self.state.menu_nav.settings_app_dither_filter_index + 1).min(1);
+                }
+            },
+            MenuFocusRegion::SettingsAppConfigDivotFilter => match direction {
+                MenuNavDirection::Up => {
+                    self.state.menu_nav.focus_region =
+                        MenuFocusRegion::SettingsAppConfigDitherFilter;
+                }
+                MenuNavDirection::Down => {
+                    self.state.menu_nav.focus_region =
+                        MenuFocusRegion::SettingsAppConfigGammaDither;
+                }
+                MenuNavDirection::Left => {
+                    self.state.menu_nav.settings_app_divot_filter_index = self
+                        .state
+                        .menu_nav
+                        .settings_app_divot_filter_index
+                        .saturating_sub(1);
+                }
+                MenuNavDirection::Right => {
+                    self.state.menu_nav.settings_app_divot_filter_index =
+                        (self.state.menu_nav.settings_app_divot_filter_index + 1).min(1);
+                }
+            },
+            MenuFocusRegion::SettingsAppConfigGammaDither => match direction {
+                MenuNavDirection::Up => {
+                    self.state.menu_nav.focus_region =
+                        MenuFocusRegion::SettingsAppConfigDivotFilter;
+                }
+                MenuNavDirection::Down => {
+                    self.state.menu_nav.focus_region =
+                        MenuFocusRegion::SettingsAppConfigCountPerOp;
+                }
+                MenuNavDirection::Left => {
+                    self.state.menu_nav.settings_app_gamma_dither_index = self
+                        .state
+                        .menu_nav
+                        .settings_app_gamma_dither_index
+                        .saturating_sub(1);
+                }
+                MenuNavDirection::Right => {
+                    self.state.menu_nav.settings_app_gamma_dither_index =
+                        (self.state.menu_nav.settings_app_gamma_dither_index + 1).min(1);
+                }
+            },
+            MenuFocusRegion::SettingsAppConfigCountPerOp => match direction {
+                MenuNavDirection::Up => {
+                    self.state.menu_nav.focus_region =
+                        MenuFocusRegion::SettingsAppConfigGammaDither;
+                }
+                MenuNavDirection::Down => {
+                    self.state.menu_nav.focus_region =
+                        MenuFocusRegion::SettingsAppConfigFbEmulation;
+                }
+                MenuNavDirection::Left => {
+                    self.state.menu_nav.settings_app_count_per_op_index = self
+                        .state
+                        .menu_nav
+                        .settings_app_count_per_op_index
+                        .saturating_sub(1);
+                }
+                MenuNavDirection::Right => {
+                    self.state.menu_nav.settings_app_count_per_op_index =
+                        (self.state.menu_nav.settings_app_count_per_op_index + 1).min(3);
+                }
+            },
+            MenuFocusRegion::SettingsAppConfigFbEmulation => match direction {
+                MenuNavDirection::Up => {
+                    self.state.menu_nav.focus_region =
+                        MenuFocusRegion::SettingsAppConfigCountPerOp;
+                }
+                MenuNavDirection::Down => {
+                    self.state.menu_nav.focus_region =
+                        MenuFocusRegion::SettingsAppConfigCopyColorToRdram;
+                }
+                MenuNavDirection::Left => {
+                    self.state.menu_nav.settings_app_fb_emulation_index = self
+                        .state
+                        .menu_nav
+                        .settings_app_fb_emulation_index
+                        .saturating_sub(1);
+                }
+                MenuNavDirection::Right => {
+                    self.state.menu_nav.settings_app_fb_emulation_index =
+                        (self.state.menu_nav.settings_app_fb_emulation_index + 1).min(1);
+                }
+            },
+            MenuFocusRegion::SettingsAppConfigCopyColorToRdram => match direction {
+                MenuNavDirection::Up => {
+                    self.state.menu_nav.focus_region =
+                        MenuFocusRegion::SettingsAppConfigFbEmulation;
+                }
+                MenuNavDirection::Down => {
+                    self.state.menu_nav.focus_region =
+                        MenuFocusRegion::SettingsAppConfigFrameDuplication;
+                }
+                MenuNavDirection::Left => {
+                    self.state.menu_nav.settings_app_copy_color_to_rdram_index = self
+                        .state
+                        .menu_nav
+                        .settings_app_copy_color_to_rdram_index
+                        .saturating_sub(1);
+                }
+                MenuNavDirection::Right => {
+                    self.state.menu_nav.settings_app_copy_color_to_rdram_index =
+                        (self.state.menu_nav.settings_app_copy_color_to_rdram_index + 1).min(2);
+                }
+            },
+            MenuFocusRegion::SettingsAppConfigFrameDuplication => match direction {
+                MenuNavDirection::Up => {
+                    self.state.menu_nav.focus_region =
+                        MenuFocusRegion::SettingsAppConfigCopyColorToRdram;
+                }
+                MenuNavDirection::Down => {
+                    self.state.menu_nav.focus_region =
+                        MenuFocusRegion::SettingsAppConfigFramerate;
+                }
+                MenuNavDirection::Left => {
+                    self.state.menu_nav.settings_app_frame_duplication_index = self
+                        .state
+                        .menu_nav
+                        .settings_app_frame_duplication_index
+                        .saturating_sub(1);
+                }
+                MenuNavDirection::Right => {
+                    self.state.menu_nav.settings_app_frame_duplication_index =
+                        (self.state.menu_nav.settings_app_frame_duplication_index + 1).min(1);
+                }
+            },
+            MenuFocusRegion::SettingsAppConfigFramerate => match direction {
+                MenuNavDirection::Up => {
+                    self.state.menu_nav.focus_region =
+                        MenuFocusRegion::SettingsAppConfigFrameDuplication;
+                }
+                MenuNavDirection::Down => {
+                    self.state.menu_nav.focus_region =
+                        MenuFocusRegion::SettingsAppConfigViRefresh;
+                }
+                MenuNavDirection::Left => {
+                    self.state.menu_nav.settings_app_framerate_index = self
+                        .state
+                        .menu_nav
+                        .settings_app_framerate_index
+                        .saturating_sub(1);
+                }
+                MenuNavDirection::Right => {
+                    self.state.menu_nav.settings_app_framerate_index =
+                        (self.state.menu_nav.settings_app_framerate_index + 1).min(1);
+                }
+            },
+            MenuFocusRegion::SettingsAppConfigViRefresh => match direction {
+                MenuNavDirection::Up => {
+                    self.state.menu_nav.focus_region =
+                        MenuFocusRegion::SettingsAppConfigFramerate;
+                }
+                MenuNavDirection::Down => {
+                    self.state.menu_nav.focus_region =
+                        MenuFocusRegion::SettingsAppConfigCountPerOpDenomPot;
+                }
+                MenuNavDirection::Left => {
+                    self.state.menu_nav.settings_app_vi_refresh_index = self
+                        .state
+                        .menu_nav
+                        .settings_app_vi_refresh_index
+                        .saturating_sub(1);
+                }
+                MenuNavDirection::Right => {
+                    self.state.menu_nav.settings_app_vi_refresh_index =
+                        (self.state.menu_nav.settings_app_vi_refresh_index + 1).min(2);
+                }
+            },
+            MenuFocusRegion::SettingsAppConfigCountPerOpDenomPot => match direction {
+                MenuNavDirection::Up => {
+                    self.state.menu_nav.focus_region =
+                        MenuFocusRegion::SettingsAppConfigViRefresh;
+                }
+                MenuNavDirection::Down => {
+                    self.state.menu_nav.focus_region =
+                        MenuFocusRegion::SettingsAppConfigAspectRatio;
+                }
+                MenuNavDirection::Left => {
+                    self.state.menu_nav.settings_app_count_per_op_denom_pot_index = self
+                        .state
+                        .menu_nav
+                        .settings_app_count_per_op_denom_pot_index
+                        .saturating_sub(1);
+                }
+                MenuNavDirection::Right => {
+                    self.state.menu_nav.settings_app_count_per_op_denom_pot_index =
+                        (self.state.menu_nav.settings_app_count_per_op_denom_pot_index + 1).min(4);
+                }
+            },
+            MenuFocusRegion::SettingsAppConfigAspectRatio => match direction {
+                MenuNavDirection::Up => {
+                    self.state.menu_nav.focus_region =
+                        MenuFocusRegion::SettingsAppConfigCountPerOpDenomPot;
+                }
+                MenuNavDirection::Down => {
+                    self.state.menu_nav.focus_region =
+                        MenuFocusRegion::SettingsAppConfigSave;
+                }
+                MenuNavDirection::Left => {
+                    self.state.menu_nav.settings_app_aspect_ratio_index =
+                        self.state.menu_nav.settings_app_aspect_ratio_index
+                            .saturating_sub(1);
+                }
+                MenuNavDirection::Right => {
+                    self.state.menu_nav.settings_app_aspect_ratio_index =
+                        (self.state.menu_nav.settings_app_aspect_ratio_index + 1).min(2);
+                }
+            },
             MenuFocusRegion::SettingsAppConfigSave => match direction {
                 MenuNavDirection::Up => {
-                    self.state.menu_nav.focus_region = MenuFocusRegion::SettingsAppConfigUpscaling;
+                    self.state.menu_nav.focus_region =
+                        MenuFocusRegion::SettingsAppConfigAspectRatio;
                 }
                 MenuNavDirection::Down => {
                     self.state.menu_nav.focus_region = MenuFocusRegion::SettingsCoverSettings;
@@ -1412,6 +1828,126 @@ impl NativeArcadeUiApp {
                         _ => String::from("1x"),
                     };
             }
+            MenuFocusRegion::SettingsAppConfigParallelProfile => {
+                self.state.manage.settings_n64_parallel_profile =
+                    match self.state.menu_nav.settings_app_parallel_profile_index {
+                        1 => String::from("performance"),
+                        _ => String::from("balanced"),
+                    };
+            }
+            MenuFocusRegion::SettingsAppConfigSynchronous => {
+                self.state.manage.settings_n64_parallel_rdp_synchronous =
+                    match self.state.menu_nav.settings_app_synchronous_index {
+                        1 => String::from("true"),
+                        _ => String::from("false"),
+                    };
+            }
+            MenuFocusRegion::SettingsAppConfigSsReadBack => {
+                self.state.manage.settings_n64_parallel_rdp_super_sampled_read_back =
+                    match self.state.menu_nav.settings_app_ss_read_back_index {
+                        1 => String::from("true"),
+                        _ => String::from("false"),
+                    };
+            }
+            MenuFocusRegion::SettingsAppConfigViAa => {
+                self.state.manage.settings_n64_parallel_rdp_vi_aa =
+                    match self.state.menu_nav.settings_app_vi_aa_index {
+                        1 => String::from("enabled"),
+                        _ => String::from("disabled"),
+                    };
+            }
+            MenuFocusRegion::SettingsAppConfigViBilinear => {
+                self.state.manage.settings_n64_parallel_rdp_vi_bilinear =
+                    match self.state.menu_nav.settings_app_vi_bilinear_index {
+                        1 => String::from("enabled"),
+                        _ => String::from("disabled"),
+                    };
+            }
+            MenuFocusRegion::SettingsAppConfigDitherFilter => {
+                self.state.manage.settings_n64_parallel_rdp_dither_filter =
+                    match self.state.menu_nav.settings_app_dither_filter_index {
+                        1 => String::from("enabled"),
+                        _ => String::from("disabled"),
+                    };
+            }
+            MenuFocusRegion::SettingsAppConfigDivotFilter => {
+                self.state.manage.settings_n64_parallel_rdp_divot_filter =
+                    match self.state.menu_nav.settings_app_divot_filter_index {
+                        1 => String::from("enabled"),
+                        _ => String::from("disabled"),
+                    };
+            }
+            MenuFocusRegion::SettingsAppConfigGammaDither => {
+                self.state.manage.settings_n64_parallel_rdp_gamma_dither =
+                    match self.state.menu_nav.settings_app_gamma_dither_index {
+                        1 => String::from("enabled"),
+                        _ => String::from("disabled"),
+                    };
+            }
+            MenuFocusRegion::SettingsAppConfigCountPerOp => {
+                self.state.manage.settings_n64_count_per_op =
+                    match self.state.menu_nav.settings_app_count_per_op_index {
+                        1 => String::from("1"),
+                        2 => String::from("2"),
+                        3 => String::from("3"),
+                        _ => String::from("0"),
+                    };
+            }
+            MenuFocusRegion::SettingsAppConfigFbEmulation => {
+                self.state.manage.settings_n64_fb_emulation =
+                    match self.state.menu_nav.settings_app_fb_emulation_index {
+                        1 => String::from("False"),
+                        _ => String::from("True"),
+                    };
+            }
+            MenuFocusRegion::SettingsAppConfigCopyColorToRdram => {
+                self.state.manage.settings_n64_copy_color_to_rdram =
+                    match self.state.menu_nav.settings_app_copy_color_to_rdram_index {
+                        1 => String::from("Async"),
+                        2 => String::from("Sync"),
+                        _ => String::from("Off"),
+                    };
+            }
+            MenuFocusRegion::SettingsAppConfigFrameDuplication => {
+                self.state.manage.settings_n64_frame_duplication =
+                    match self.state.menu_nav.settings_app_frame_duplication_index {
+                        1 => String::from("True"),
+                        _ => String::from("False"),
+                    };
+            }
+            MenuFocusRegion::SettingsAppConfigFramerate => {
+                self.state.manage.settings_n64_framerate =
+                    match self.state.menu_nav.settings_app_framerate_index {
+                        1 => String::from("Fullspeed"),
+                        _ => String::from("Original"),
+                    };
+            }
+            MenuFocusRegion::SettingsAppConfigViRefresh => {
+                self.state.manage.settings_n64_vi_refresh =
+                    match self.state.menu_nav.settings_app_vi_refresh_index {
+                        1 => String::from("1500"),
+                        2 => String::from("2200"),
+                        _ => String::from("Auto"),
+                    };
+            }
+            MenuFocusRegion::SettingsAppConfigCountPerOpDenomPot => {
+                self.state.manage.settings_n64_count_per_op_denom_pot =
+                    match self.state.menu_nav.settings_app_count_per_op_denom_pot_index {
+                        1 => String::from("1"),
+                        2 => String::from("2"),
+                        3 => String::from("3"),
+                        4 => String::from("4"),
+                        _ => String::from("0"),
+                    };
+            }
+            MenuFocusRegion::SettingsAppConfigAspectRatio => {
+                self.state.manage.settings_n64_aspect_ratio =
+                    match self.state.menu_nav.settings_app_aspect_ratio_index {
+                        1 => String::from("16:9"),
+                        2 => String::from("16:9 adjusted"),
+                        _ => String::from("4:3"),
+                    };
+            }
             MenuFocusRegion::SettingsAppConfigSave => {
                 if !self.state.manage.job_running {
                     self.save_manage_app_settings();
@@ -1440,7 +1976,57 @@ impl NativeArcadeUiApp {
         self.state.menu_nav.focus_region = match self.state.menu_nav.focus_region {
             MenuFocusRegion::TopNav => MenuFocusRegion::TopNav,
             MenuFocusRegion::SettingsAppConfigUpscaling => MenuFocusRegion::TopNav,
-            MenuFocusRegion::SettingsAppConfigSave => MenuFocusRegion::SettingsAppConfigUpscaling,
+            MenuFocusRegion::SettingsAppConfigParallelProfile => {
+                MenuFocusRegion::SettingsAppConfigUpscaling
+            }
+            MenuFocusRegion::SettingsAppConfigSynchronous => {
+                MenuFocusRegion::SettingsAppConfigParallelProfile
+            }
+            MenuFocusRegion::SettingsAppConfigSsReadBack => {
+                MenuFocusRegion::SettingsAppConfigSynchronous
+            }
+            MenuFocusRegion::SettingsAppConfigViAa => {
+                MenuFocusRegion::SettingsAppConfigSsReadBack
+            }
+            MenuFocusRegion::SettingsAppConfigViBilinear => {
+                MenuFocusRegion::SettingsAppConfigViAa
+            }
+            MenuFocusRegion::SettingsAppConfigDitherFilter => {
+                MenuFocusRegion::SettingsAppConfigViBilinear
+            }
+            MenuFocusRegion::SettingsAppConfigDivotFilter => {
+                MenuFocusRegion::SettingsAppConfigDitherFilter
+            }
+            MenuFocusRegion::SettingsAppConfigGammaDither => {
+                MenuFocusRegion::SettingsAppConfigDivotFilter
+            }
+            MenuFocusRegion::SettingsAppConfigCountPerOp => {
+                MenuFocusRegion::SettingsAppConfigGammaDither
+            }
+            MenuFocusRegion::SettingsAppConfigFbEmulation => {
+                MenuFocusRegion::SettingsAppConfigCountPerOp
+            }
+            MenuFocusRegion::SettingsAppConfigCopyColorToRdram => {
+                MenuFocusRegion::SettingsAppConfigFbEmulation
+            }
+            MenuFocusRegion::SettingsAppConfigFrameDuplication => {
+                MenuFocusRegion::SettingsAppConfigCopyColorToRdram
+            }
+            MenuFocusRegion::SettingsAppConfigFramerate => {
+                MenuFocusRegion::SettingsAppConfigFrameDuplication
+            }
+            MenuFocusRegion::SettingsAppConfigViRefresh => {
+                MenuFocusRegion::SettingsAppConfigFramerate
+            }
+            MenuFocusRegion::SettingsAppConfigCountPerOpDenomPot => {
+                MenuFocusRegion::SettingsAppConfigViRefresh
+            }
+            MenuFocusRegion::SettingsAppConfigAspectRatio => {
+                MenuFocusRegion::SettingsAppConfigCountPerOpDenomPot
+            }
+            MenuFocusRegion::SettingsAppConfigSave => {
+                MenuFocusRegion::SettingsAppConfigAspectRatio
+            }
             MenuFocusRegion::SettingsCoverSettings => MenuFocusRegion::SettingsAppConfigSave,
             _ => MenuFocusRegion::TopNav,
         };

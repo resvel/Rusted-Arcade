@@ -15,6 +15,158 @@ impl NativeArcadeUiApp {
             "8x" => 3,
             _ => 0,
         };
+        self.state.menu_nav.settings_app_parallel_profile_index = match self
+            .state
+            .manage
+            .settings_n64_parallel_profile
+            .as_str()
+        {
+            "performance" => 1,
+            _ => 0,
+        };
+        self.state.menu_nav.settings_app_synchronous_index = match self
+            .state
+            .manage
+            .settings_n64_parallel_rdp_synchronous
+            .as_str()
+        {
+            "true" => 1,
+            _ => 0,
+        };
+        self.state.menu_nav.settings_app_ss_read_back_index = match self
+            .state
+            .manage
+            .settings_n64_parallel_rdp_super_sampled_read_back
+            .as_str()
+        {
+            "true" => 1,
+            _ => 0,
+        };
+        self.state.menu_nav.settings_app_vi_aa_index = match self
+            .state
+            .manage
+            .settings_n64_parallel_rdp_vi_aa
+            .as_str()
+        {
+            "enabled" => 1,
+            _ => 0,
+        };
+        self.state.menu_nav.settings_app_vi_bilinear_index = match self
+            .state
+            .manage
+            .settings_n64_parallel_rdp_vi_bilinear
+            .as_str()
+        {
+            "enabled" => 1,
+            _ => 0,
+        };
+        self.state.menu_nav.settings_app_dither_filter_index = match self
+            .state
+            .manage
+            .settings_n64_parallel_rdp_dither_filter
+            .as_str()
+        {
+            "enabled" => 1,
+            _ => 0,
+        };
+        self.state.menu_nav.settings_app_divot_filter_index = match self
+            .state
+            .manage
+            .settings_n64_parallel_rdp_divot_filter
+            .as_str()
+        {
+            "enabled" => 1,
+            _ => 0,
+        };
+        self.state.menu_nav.settings_app_gamma_dither_index = match self
+            .state
+            .manage
+            .settings_n64_parallel_rdp_gamma_dither
+            .as_str()
+        {
+            "enabled" => 1,
+            _ => 0,
+        };
+        self.state.menu_nav.settings_app_count_per_op_index = match self
+            .state
+            .manage
+            .settings_n64_count_per_op
+            .as_str()
+        {
+            "1" => 1,
+            "2" => 2,
+            "3" => 3,
+            _ => 0,
+        };
+        self.state.menu_nav.settings_app_fb_emulation_index = match self
+            .state
+            .manage
+            .settings_n64_fb_emulation
+            .as_str()
+        {
+            "False" => 1,
+            _ => 0,
+        };
+        self.state.menu_nav.settings_app_copy_color_to_rdram_index = match self
+            .state
+            .manage
+            .settings_n64_copy_color_to_rdram
+            .as_str()
+        {
+            "Async" => 1,
+            "Sync" => 2,
+            _ => 0,
+        };
+        self.state.menu_nav.settings_app_frame_duplication_index = match self
+            .state
+            .manage
+            .settings_n64_frame_duplication
+            .as_str()
+        {
+            "True" => 1,
+            _ => 0,
+        };
+        self.state.menu_nav.settings_app_framerate_index = match self
+            .state
+            .manage
+            .settings_n64_framerate
+            .as_str()
+        {
+            "Fullspeed" => 1,
+            _ => 0,
+        };
+        self.state.menu_nav.settings_app_vi_refresh_index = match self
+            .state
+            .manage
+            .settings_n64_vi_refresh
+            .as_str()
+        {
+            "1500" => 1,
+            "2200" => 2,
+            _ => 0,
+        };
+        self.state.menu_nav.settings_app_count_per_op_denom_pot_index = match self
+            .state
+            .manage
+            .settings_n64_count_per_op_denom_pot
+            .as_str()
+        {
+            "1" => 1,
+            "2" => 2,
+            "3" => 3,
+            "4" => 4,
+            _ => 0,
+        };
+        self.state.menu_nav.settings_app_aspect_ratio_index = match self
+            .state
+            .manage
+            .settings_n64_aspect_ratio
+            .as_str()
+        {
+            "16:9" => 1,
+            "16:9 adjusted" => 2,
+            _ => 0,
+        };
         self.state.menu_nav.settings_cover_action_index =
             self.state.menu_nav.settings_cover_action_index.min(1);
     }

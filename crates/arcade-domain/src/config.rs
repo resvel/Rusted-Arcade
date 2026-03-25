@@ -24,6 +24,36 @@ pub struct N64EmulationConfig {
     pub parallel_rdp_upscaling: N64ParallelRdpUpscaling,
     #[serde(default)]
     pub parallel_profile: N64ParallelProfile,
+    #[serde(default)]
+    pub parallel_rdp_synchronous: N64ParallelRdpToggle,
+    #[serde(default)]
+    pub parallel_rdp_super_sampled_read_back: N64ParallelRdpToggle,
+    #[serde(default)]
+    pub parallel_rdp_vi_aa: N64ParallelRdpFilter,
+    #[serde(default)]
+    pub parallel_rdp_vi_bilinear: N64ParallelRdpFilter,
+    #[serde(default)]
+    pub parallel_rdp_dither_filter: N64ParallelRdpFilter,
+    #[serde(default)]
+    pub parallel_rdp_divot_filter: N64ParallelRdpFilter,
+    #[serde(default)]
+    pub parallel_rdp_gamma_dither: N64ParallelRdpFilter,
+    #[serde(default)]
+    pub count_per_op: N64CountPerOp,
+    #[serde(default)]
+    pub fb_emulation: N64FbEmulation,
+    #[serde(default)]
+    pub copy_color_to_rdram: N64CopyColorToRdram,
+    #[serde(default)]
+    pub frame_duplication: N64FrameDuplication,
+    #[serde(default)]
+    pub framerate: N64Framerate,
+    #[serde(default)]
+    pub vi_refresh: N64ViRefresh,
+    #[serde(default)]
+    pub count_per_op_denom_pot: N64CountPerOpDenomPot,
+    #[serde(default)]
+    pub aspect_ratio: N64AspectRatio,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq)]
@@ -40,10 +70,23 @@ impl N64PreferredCore {
     pub fn as_core_name(self) -> &'static str {
         match self {
             Self::Mupen64plusNext => "mupen64plus_next",
-            #[cfg(target_os = "macos")]
-            Self::ParallelN64 => "mupen64plus_next",
-            #[cfg(not(target_os = "macos"))]
-            Self::ParallelN64 => "parallel_n64",
+            Self::ParallelN64 => {
+                #[cfg(target_os = "macos")]
+                {
+                    // Under Rosetta 2 the x86_64 parallel_n64 core can use
+                    // dynarec. On native arm64 we fall back to mupen64plus_next
+                    // since parallel_n64 cannot JIT without Rosetta translation.
+                    if crate::platform::is_running_under_rosetta() {
+                        "parallel_n64"
+                    } else {
+                        "mupen64plus_next"
+                    }
+                }
+                #[cfg(not(target_os = "macos"))]
+                {
+                    "parallel_n64"
+                }
+            }
         }
     }
 }
@@ -85,6 +128,231 @@ impl N64ParallelProfile {
         match self {
             Self::Balanced => "balanced",
             Self::Performance => "performance",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum N64ParallelRdpToggle {
+    #[default]
+    #[serde(alias = "false")]
+    False,
+    #[serde(alias = "true")]
+    True,
+}
+
+impl N64ParallelRdpToggle {
+    pub fn as_core_value(self) -> &'static str {
+        match self {
+            Self::False => "false",
+            Self::True => "true",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum N64ParallelRdpFilter {
+    #[default]
+    Disabled,
+    Enabled,
+}
+
+impl N64ParallelRdpFilter {
+    pub fn as_core_value(self) -> &'static str {
+        match self {
+            Self::Disabled => "disabled",
+            Self::Enabled => "enabled",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum N64CountPerOp {
+    #[default]
+    #[serde(alias = "0")]
+    Auto,
+    #[serde(alias = "1")]
+    One,
+    #[serde(alias = "2")]
+    Two,
+    #[serde(alias = "3")]
+    Three,
+}
+
+impl N64CountPerOp {
+    pub fn as_core_value(self) -> &'static str {
+        match self {
+            Self::Auto => "0",
+            Self::One => "1",
+            Self::Two => "2",
+            Self::Three => "3",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum N64FbEmulation {
+    #[default]
+    #[serde(alias = "True")]
+    True,
+    #[serde(alias = "False")]
+    False,
+}
+
+impl N64FbEmulation {
+    pub fn as_core_value(self) -> &'static str {
+        match self {
+            Self::True => "True",
+            Self::False => "False",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum N64CopyColorToRdram {
+    #[default]
+    Async,
+    Off,
+    Sync,
+}
+
+impl N64CopyColorToRdram {
+    pub fn as_core_value(self) -> &'static str {
+        match self {
+            Self::Off => "Off",
+            Self::Async => "Async",
+            Self::Sync => "Software",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq)]
+pub enum N64FrameDuplication {
+    #[default]
+    #[serde(rename = "False", alias = "false")]
+    False,
+    #[serde(rename = "True", alias = "true")]
+    True,
+}
+
+impl N64FrameDuplication {
+    pub fn as_core_value(self) -> &'static str {
+        match self {
+            Self::False => "False",
+            Self::True => "True",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq)]
+pub enum N64Framerate {
+    #[default]
+    #[serde(rename = "Original")]
+    Original,
+    #[serde(rename = "Fullspeed")]
+    Fullspeed,
+}
+
+impl N64Framerate {
+    pub fn as_core_value(self) -> &'static str {
+        match self {
+            Self::Original => "Original",
+            Self::Fullspeed => "Fullspeed",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq)]
+pub enum N64ViRefresh {
+    #[default]
+    #[serde(rename = "Auto")]
+    Auto,
+    #[serde(rename = "1500")]
+    V1500,
+    #[serde(rename = "2200")]
+    V2200,
+}
+
+impl N64ViRefresh {
+    pub fn as_core_value(self) -> &'static str {
+        match self {
+            Self::Auto => "Auto",
+            Self::V1500 => "1500",
+            Self::V2200 => "2200",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq)]
+pub enum N64CountPerOpDenomPot {
+    #[default]
+    #[serde(alias = "0")]
+    Zero,
+    #[serde(alias = "1")]
+    One,
+    #[serde(alias = "2")]
+    Two,
+    #[serde(alias = "3")]
+    Three,
+    #[serde(alias = "4")]
+    Four,
+    #[serde(alias = "5")]
+    Five,
+    #[serde(alias = "6")]
+    Six,
+    #[serde(alias = "7")]
+    Seven,
+    #[serde(alias = "8")]
+    Eight,
+    #[serde(alias = "9")]
+    Nine,
+    #[serde(alias = "10")]
+    Ten,
+    #[serde(alias = "11")]
+    Eleven,
+}
+
+impl N64CountPerOpDenomPot {
+    pub fn as_core_value(self) -> &'static str {
+        match self {
+            Self::Zero => "0",
+            Self::One => "1",
+            Self::Two => "2",
+            Self::Three => "3",
+            Self::Four => "4",
+            Self::Five => "5",
+            Self::Six => "6",
+            Self::Seven => "7",
+            Self::Eight => "8",
+            Self::Nine => "9",
+            Self::Ten => "10",
+            Self::Eleven => "11",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq)]
+pub enum N64AspectRatio {
+    #[default]
+    #[serde(rename = "4:3")]
+    Ratio43,
+    #[serde(rename = "16:9")]
+    Ratio169,
+    #[serde(rename = "16:9 adjusted")]
+    Ratio169Adjusted,
+}
+
+impl N64AspectRatio {
+    pub fn as_core_value(self) -> &'static str {
+        match self {
+            Self::Ratio43 => "4:3",
+            Self::Ratio169 => "16:9",
+            Self::Ratio169Adjusted => "16:9 adjusted",
         }
     }
 }

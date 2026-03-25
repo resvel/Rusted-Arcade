@@ -12,8 +12,8 @@ use arcade_domain::{
     resolve_core, resolve_effective_core_override, resolve_path_from_root, AppConfig,
     CoverScrapePlatformIds, CoverScrapeRunOptions, CoverScrapeSettingsInput, CoverScrapingConfig,
     DetectedPadIdentity, ManageOperationKind, ManageOperationSummary, ManageProgressEvent,
-    ManageRomStatus, ManageScope, ManagementConfig, N64ParallelProfile, N64ParallelRdpUpscaling,
-    N64PreferredCore, PathsConfig, RomCard, RomQuery, SaveLimits, SaveSlotData, SaveSlotSummary,
+    ManageRomStatus, ManageScope, ManagementConfig, N64EmulationConfig, PathsConfig, RomCard,
+    RomQuery, SaveLimits, SaveSlotData, SaveSlotSummary,
     SavedGamepadMappingSummary, StoredGamepadMapping, SYSTEM_DEFAULT_MAPPING_KEY,
 };
 use sha1::{Digest, Sha1};
@@ -307,9 +307,7 @@ impl NativeServices {
     pub fn update_app_config_settings(
         &self,
         paths: PathsConfig,
-        preferred_core: N64PreferredCore,
-        parallel_rdp_upscaling: N64ParallelRdpUpscaling,
-        parallel_profile: N64ParallelProfile,
+        n64_config: N64EmulationConfig,
     ) -> Result<AppConfigUpdateOutcome> {
         let mut config = self
             .config
@@ -319,9 +317,7 @@ impl NativeServices {
         let restart_required = config.paths != paths;
         let mut saved_config = config.clone();
         saved_config.paths = paths;
-        saved_config.emulation.n64.preferred_core = preferred_core;
-        saved_config.emulation.n64.parallel_rdp_upscaling = parallel_rdp_upscaling;
-        saved_config.emulation.n64.parallel_profile = parallel_profile;
+        saved_config.emulation.n64 = n64_config;
 
         fs::create_dir_all(&saved_config.paths.rom_root)?;
         saved_config.ensure_dirs()?;
@@ -1178,9 +1174,9 @@ mod tests {
     use super::*;
     use arcade_data::Database;
     use arcade_domain::{
-        CanonicalButton, MappingEntry, N64ParallelProfile, N64ParallelRdpUpscaling,
-        N64PreferredCore, PathsConfig, NEXT_SAVE_SLOT_ACTION, QUICK_LOAD_ACTION, QUICK_SAVE_ACTION,
-        SYSTEM_DEFAULT_MAPPING_KEY,
+        CanonicalButton, MappingEntry, N64EmulationConfig, N64ParallelProfile,
+        N64ParallelRdpUpscaling, N64PreferredCore, PathsConfig, NEXT_SAVE_SLOT_ACTION,
+        QUICK_LOAD_ACTION, QUICK_SAVE_ACTION, SYSTEM_DEFAULT_MAPPING_KEY,
     };
     use chrono::Utc;
     use rusqlite::params;
@@ -1497,9 +1493,12 @@ mod tests {
         let outcome = services
             .update_app_config_settings(
                 updated_paths.clone(),
-                N64PreferredCore::Mupen64plusNext,
-                N64ParallelRdpUpscaling::X2,
-                N64ParallelProfile::Performance,
+                N64EmulationConfig {
+                    preferred_core: N64PreferredCore::Mupen64plusNext,
+                    parallel_rdp_upscaling: N64ParallelRdpUpscaling::X2,
+                    parallel_profile: N64ParallelProfile::Performance,
+                    ..N64EmulationConfig::default()
+                },
             )
             .expect("save settings");
 
@@ -1541,9 +1540,12 @@ mod tests {
         let outcome = services
             .update_app_config_settings(
                 config.paths.clone(),
-                N64PreferredCore::Mupen64plusNext,
-                N64ParallelRdpUpscaling::X4,
-                N64ParallelProfile::Balanced,
+                N64EmulationConfig {
+                    preferred_core: N64PreferredCore::Mupen64plusNext,
+                    parallel_rdp_upscaling: N64ParallelRdpUpscaling::X4,
+                    parallel_profile: N64ParallelProfile::Balanced,
+                    ..N64EmulationConfig::default()
+                },
             )
             .expect("save settings");
 

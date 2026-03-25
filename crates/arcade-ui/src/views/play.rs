@@ -161,7 +161,15 @@ impl NativeArcadeUiApp {
                 .map(|rom| rom.rom.system.as_str())
         })?;
         match system {
-            "NES" | "SNES" | "GENESIS" | "N64" => Some(4.0 / 3.0),
+            "NES" | "SNES" | "GENESIS" => Some(4.0 / 3.0),
+            "N64" => {
+                let config = self.services.config();
+                match config.emulation.n64.aspect_ratio {
+                    arcade_domain::N64AspectRatio::Ratio169
+                    | arcade_domain::N64AspectRatio::Ratio169Adjusted => Some(16.0 / 9.0),
+                    _ => Some(4.0 / 3.0),
+                }
+            }
             "GB" => Some(10.0 / 9.0),
             "GBA" => Some(3.0 / 2.0),
             _ => None,
