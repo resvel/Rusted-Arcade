@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -12,8 +13,71 @@ const PROJECT_NAME_LEGACY: &str = "personal-web-arcade";
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct EmulationConfig {
+    /// Legacy N64 settings kept for backward-compatible deserialization.
+    /// Still serialized so `preferred_core` persists; variable fields are
+    /// superseded by `core_settings` once migration has run.
     #[serde(default)]
     pub n64: N64EmulationConfig,
+
+    /// Per-core settings: keys are core names (e.g. `"mupen64plus_next"`),
+    /// values are maps of variable_key → chosen value.
+    #[serde(default)]
+    pub core_settings: HashMap<String, HashMap<String, String>>,
+}
+
+impl EmulationConfig {
+    /// Look up a stored core variable value.
+    pub fn get_core_variable(&self, core_name: &str, key: &str) -> Option<&str> {
+        self.core_settings
+            .get(core_name)
+            .and_then(|vars| vars.get(key))
+            .map(|s| s.as_str())
+    }
+
+    /// Ensure platform-specific default values are present. Uses `or_insert`
+    /// so explicit user choices are never overwritten.
+    pub fn apply_platform_defaults(&mut self) {
+        #[cfg(target_os = "macos")]
+        {
+            let vars = self
+                .core_settings
+                .entry("mupen64plus_next".into())
+                .or_default();
+            vars.entry("mupen64plus-Framerate".into())
+                .or_insert_with(|| "Fullspeed".into());
+            vars.entry("mupen64plus-FrameDuping".into())
+                .or_insert_with(|| "True".into());
+            vars.entry("mupen64plus-virefresh".into())
+                .or_insert_with(|| "1500".into());
+        }
+    }
+
+    /// One-time migration: copy legacy `N64EmulationConfig` fields into
+    /// `core_settings["mupen64plus_next"]`. Only runs if the key is absent.
+    pub fn migrate_legacy_n64(&mut self) {
+        if self.core_settings.contains_key("mupen64plus_next") {
+            return;
+        }
+        let n = &self.n64;
+        let mut vars = HashMap::new();
+        vars.insert("mupen64plus-aspect".into(), n.aspect_ratio.as_core_value().into());
+        vars.insert("mupen64plus-parallel-rdp-upscaling".into(), n.parallel_rdp_upscaling.as_core_value().into());
+        vars.insert("mupen64plus-parallel-rdp-synchronous".into(), n.parallel_rdp_synchronous.as_core_value().into());
+        vars.insert("mupen64plus-parallel-rdp-super-sampled-read-back".into(), n.parallel_rdp_super_sampled_read_back.as_core_value().into());
+        vars.insert("mupen64plus-parallel-rdp-vi-aa".into(), n.parallel_rdp_vi_aa.as_core_value().into());
+        vars.insert("mupen64plus-parallel-rdp-vi-bilinear".into(), n.parallel_rdp_vi_bilinear.as_core_value().into());
+        vars.insert("mupen64plus-parallel-rdp-dither-filter".into(), n.parallel_rdp_dither_filter.as_core_value().into());
+        vars.insert("mupen64plus-parallel-rdp-divot-filter".into(), n.parallel_rdp_divot_filter.as_core_value().into());
+        vars.insert("mupen64plus-parallel-rdp-gamma-dither".into(), n.parallel_rdp_gamma_dither.as_core_value().into());
+        vars.insert("mupen64plus-EnableFBEmulation".into(), n.fb_emulation.as_core_value().into());
+        vars.insert("mupen64plus-EnableCopyColorToRDRAM".into(), n.copy_color_to_rdram.as_core_value().into());
+        vars.insert("mupen64plus-FrameDuping".into(), n.frame_duplication.as_core_value().into());
+        vars.insert("mupen64plus-Framerate".into(), n.framerate.as_core_value().into());
+        vars.insert("mupen64plus-virefresh".into(), n.vi_refresh.as_core_value().into());
+        vars.insert("mupen64plus-CountPerOp".into(), n.count_per_op.as_core_value().into());
+        vars.insert("mupen64plus-CountPerOpDenomPot".into(), n.count_per_op_denom_pot.as_core_value().into());
+        self.core_settings.insert("mupen64plus_next".into(), vars);
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -487,13 +551,16 @@ impl AppConfig {
         if config_path.exists() {
             let raw = fs::read_to_string(&config_path)
                 .with_context(|| format!("failed to read config at {}", config_path.display()))?;
-            let config: AppConfig = toml::from_str(&raw)
+            let mut config: AppConfig = toml::from_str(&raw)
                 .with_context(|| format!("invalid config TOML at {}", config_path.display()))?;
+            config.emulation.migrate_legacy_n64();
+            config.emulation.apply_platform_defaults();
             config.ensure_dirs()?;
             return Ok((config, config_path));
         }
 
-        let config = AppConfig::default();
+        let mut config = AppConfig::default();
+        config.emulation.apply_platform_defaults();
         config.ensure_dirs()?;
 
         if let Some(parent) = config_path.parent() {

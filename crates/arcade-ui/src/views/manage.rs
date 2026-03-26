@@ -1,12 +1,10 @@
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::mpsc;
 
 use arcade_domain::{
     CoverScrapeRunOptions, CoverScrapeSettingsInput, ManageOperationKind, ManageScope,
-    N64CopyColorToRdram, N64CountPerOp, N64FbEmulation, N64ParallelProfile,
-    N64ParallelRdpFilter, N64ParallelRdpToggle, N64ParallelRdpUpscaling,
-    N64PreferredCore, N64FrameDuplication, N64Framerate, N64ViRefresh,
-    N64AspectRatio, N64CountPerOpDenomPot, PathsConfig,
+    PathsConfig,
 };
 use eframe::egui;
 
@@ -32,134 +30,32 @@ impl NativeArcadeUiApp {
             config.paths.save_state_root.display().to_string();
         self.state.manage.settings_core_root = config.paths.core_root.display().to_string();
         self.state.manage.settings_bios_root = config.paths.bios_root.display().to_string();
-        #[cfg(target_os = "macos")]
-        {
-            if arcade_domain::is_running_under_rosetta() {
-                self.state.manage.settings_n64_preferred_core = config
-                    .emulation
-                    .n64
-                    .preferred_core
-                    .as_core_name()
-                    .to_string();
-            } else {
-                self.state.manage.settings_n64_preferred_core =
-                    String::from("mupen64plus_next");
+
+        // Populate the generic core_values map from the persisted core_settings,
+        // resolving defaults from the registry for any keys not yet stored.
+        let profiles = arcade_domain::core_profiles();
+        let mut core_values: HashMap<String, HashMap<String, String>> = HashMap::new();
+        for profile in &profiles {
+            let mut vars = HashMap::new();
+            for var_def in &profile.variables {
+                let value = arcade_domain::resolve_core_variable(
+                    &config.emulation.core_settings,
+                    profile.core_name,
+                    var_def,
+                );
+                vars.insert(var_def.key.to_string(), value);
+            }
+            core_values.insert(profile.core_name.to_string(), vars);
+        }
+        self.state.manage.settings_core_values = core_values;
+
+        // Default to the first core tab if the current selection is empty.
+        if self.state.manage.settings_selected_core.is_empty() {
+            if let Some(first) = profiles.first() {
+                self.state.manage.settings_selected_core = first.core_name.to_string();
             }
         }
-        #[cfg(not(target_os = "macos"))]
-        {
-            self.state.manage.settings_n64_preferred_core = config
-                .emulation
-                .n64
-                .preferred_core
-                .as_core_name()
-                .to_string();
-        }
-        self.state.manage.settings_n64_parallel_rdp_upscaling = config
-            .emulation
-            .n64
-            .parallel_rdp_upscaling
-            .as_core_value()
-            .to_string();
-        self.state.manage.settings_n64_parallel_profile = config
-            .emulation
-            .n64
-            .parallel_profile
-            .as_config_value()
-            .to_string();
-        self.state.manage.settings_n64_parallel_rdp_synchronous = config
-            .emulation
-            .n64
-            .parallel_rdp_synchronous
-            .as_core_value()
-            .to_string();
-        self.state.manage.settings_n64_parallel_rdp_super_sampled_read_back = config
-            .emulation
-            .n64
-            .parallel_rdp_super_sampled_read_back
-            .as_core_value()
-            .to_string();
-        self.state.manage.settings_n64_parallel_rdp_vi_aa = config
-            .emulation
-            .n64
-            .parallel_rdp_vi_aa
-            .as_core_value()
-            .to_string();
-        self.state.manage.settings_n64_parallel_rdp_vi_bilinear = config
-            .emulation
-            .n64
-            .parallel_rdp_vi_bilinear
-            .as_core_value()
-            .to_string();
-        self.state.manage.settings_n64_parallel_rdp_dither_filter = config
-            .emulation
-            .n64
-            .parallel_rdp_dither_filter
-            .as_core_value()
-            .to_string();
-        self.state.manage.settings_n64_parallel_rdp_divot_filter = config
-            .emulation
-            .n64
-            .parallel_rdp_divot_filter
-            .as_core_value()
-            .to_string();
-        self.state.manage.settings_n64_parallel_rdp_gamma_dither = config
-            .emulation
-            .n64
-            .parallel_rdp_gamma_dither
-            .as_core_value()
-            .to_string();
-        self.state.manage.settings_n64_count_per_op = config
-            .emulation
-            .n64
-            .count_per_op
-            .as_core_value()
-            .to_string();
-        self.state.manage.settings_n64_fb_emulation = config
-            .emulation
-            .n64
-            .fb_emulation
-            .as_core_value()
-            .to_string();
-        self.state.manage.settings_n64_copy_color_to_rdram = match config
-            .emulation
-            .n64
-            .copy_color_to_rdram
-        {
-            arcade_domain::N64CopyColorToRdram::Off => String::from("Off"),
-            arcade_domain::N64CopyColorToRdram::Async => String::from("Async"),
-            arcade_domain::N64CopyColorToRdram::Sync => String::from("Sync"),
-        };
-        self.state.manage.settings_n64_frame_duplication = config
-            .emulation
-            .n64
-            .frame_duplication
-            .as_core_value()
-            .to_string();
-        self.state.manage.settings_n64_framerate = config
-            .emulation
-            .n64
-            .framerate
-            .as_core_value()
-            .to_string();
-        self.state.manage.settings_n64_vi_refresh = config
-            .emulation
-            .n64
-            .vi_refresh
-            .as_core_value()
-            .to_string();
-        self.state.manage.settings_n64_count_per_op_denom_pot = config
-            .emulation
-            .n64
-            .count_per_op_denom_pot
-            .as_core_value()
-            .to_string();
-        self.state.manage.settings_n64_aspect_ratio = config
-            .emulation
-            .n64
-            .aspect_ratio
-            .as_core_value()
-            .to_string();
+
         self.state.manage.settings_api_key = scrape.tgdb_api_key.clone().unwrap_or_default();
         self.state.manage.settings_limit = scrape.default_limit.to_string();
         self.state.manage.settings_delay_ms = scrape.default_delay_ms.to_string();
@@ -301,510 +197,133 @@ impl NativeArcadeUiApp {
             draw_path_row(ui, "Core Root", &mut self.state.manage.settings_core_root);
             draw_path_row(ui, "BIOS Root", &mut self.state.manage.settings_bios_root);
 
+            ui.add_space(8.0);
+            ui.label(
+                egui::RichText::new("Core Settings")
+                    .small()
+                    .strong()
+                    .color(palette.text),
+            );
+            ui.add_space(4.0);
+
+            // --- Core/system tab selector ---
+            let profiles = arcade_domain::core_profiles();
+            let tab_idx = self
+                .state
+                .menu_nav
+                .settings_core_tab_index
+                .min(profiles.len().saturating_sub(1));
+
+            ui.horizontal_wrapped(|ui| {
+                for (index, profile) in profiles.iter().enumerate() {
+                    let tab_selected =
+                        self.state.manage.settings_selected_core == profile.core_name;
+                    let tab_focused = self.state.menu_nav.focus_region
+                        == MenuFocusRegion::SettingsAppConfigCoreTab
+                        && tab_idx == index;
+                    let label = format!("{} ({})", profile.display_name, profile.system);
+                    let response =
+                        ui.add(manage_button(&label, tab_focused, tab_selected, palette));
+                    if tab_focused {
+                        Self::paint_selection_glow(ui, response.rect, 255, palette.accent, 0.78);
+                    }
+                    if response.clicked() {
+                        self.state.menu_nav.focus_region =
+                            MenuFocusRegion::SettingsAppConfigCoreTab;
+                        self.state.menu_nav.settings_core_tab_index = index;
+                        self.state.menu_nav.settings_core_variable_index = 0;
+                        self.state.menu_nav.settings_core_option_index = 0;
+                        self.state.manage.settings_selected_core =
+                            profile.core_name.to_string();
+                    }
+                }
+            });
+
             ui.add_space(6.0);
-            ui.label(
-                egui::RichText::new("N64 Core: mupen64plus_next")
-                    .small()
-                    .color(palette.text_muted),
-            );
-            ui.label(
-                egui::RichText::new("N64 Renderer: ParaLLEl RDP (Vulkan)")
-                    .small()
-                    .color(palette.text_muted),
-            );
 
-            ui.add_space(4.0);
-            ui.label(
-                egui::RichText::new("N64 Internal Resolution")
-                    .small()
-                    .color(palette.text_muted),
-            );
-            ui.horizontal_wrapped(|ui| {
-                for (index, value) in ["1x", "2x", "4x", "8x"].into_iter().enumerate() {
-                    let selected = self.state.manage.settings_n64_parallel_rdp_upscaling == value;
-                    let focused = self.state.menu_nav.focus_region
-                        == MenuFocusRegion::SettingsAppConfigUpscaling
-                        && self.state.menu_nav.settings_app_upscaling_index == index;
-                    let response = ui.add(manage_button(value, focused, selected, palette));
-                    if focused {
-                        Self::paint_selection_glow(ui, response.rect, 255, palette.accent, 0.78);
+            // --- Dynamic variable rows for the selected core ---
+            if let Some(profile) = profiles.get(tab_idx) {
+                let core_name = profile.core_name.to_string();
+                let mut last_group: Option<&str> = None;
+
+                for (var_idx, var_def) in profile.variables.iter().enumerate() {
+                    // Group heading
+                    if last_group != Some(var_def.group) {
+                        if last_group.is_some() {
+                            ui.add_space(6.0);
+                        }
+                        ui.label(
+                            egui::RichText::new(var_def.group)
+                                .small()
+                                .strong()
+                                .color(palette.text),
+                        );
+                        ui.add_space(2.0);
+                        last_group = Some(var_def.group);
                     }
-                    if response.clicked() {
-                        self.state.menu_nav.focus_region =
-                            MenuFocusRegion::SettingsAppConfigUpscaling;
-                        self.state.menu_nav.settings_app_upscaling_index = index;
-                        self.state.manage.settings_n64_parallel_rdp_upscaling = value.to_string();
-                    }
+
+                    // Variable label
+                    ui.label(
+                        egui::RichText::new(var_def.label)
+                            .small()
+                            .color(palette.text_muted),
+                    );
+
+                    // Current value from the in-memory map
+                    let current_value = self
+                        .state
+                        .manage
+                        .settings_core_values
+                        .get(&core_name)
+                        .and_then(|m| m.get(var_def.key))
+                        .cloned()
+                        .unwrap_or_default();
+
+                    // Option buttons
+                    ui.horizontal_wrapped(|ui| {
+                        for (opt_idx, opt) in var_def.options.iter().enumerate() {
+                            let opt_selected = current_value == opt.value;
+                            let opt_focused = self.state.menu_nav.focus_region
+                                == MenuFocusRegion::SettingsAppConfigCoreVariable
+                                && self.state.menu_nav.settings_core_variable_index == var_idx
+                                && self.state.menu_nav.settings_core_option_index == opt_idx;
+                            let display =
+                                opt.display.unwrap_or(opt.value);
+                            let response = ui.add(manage_button(
+                                display,
+                                opt_focused,
+                                opt_selected,
+                                palette,
+                            ));
+                            if opt_focused {
+                                Self::paint_selection_glow(
+                                    ui,
+                                    response.rect,
+                                    255,
+                                    palette.accent,
+                                    0.78,
+                                );
+                            }
+                            if response.clicked() {
+                                self.state.menu_nav.focus_region =
+                                    MenuFocusRegion::SettingsAppConfigCoreVariable;
+                                self.state.menu_nav.settings_core_variable_index = var_idx;
+                                self.state.menu_nav.settings_core_option_index = opt_idx;
+                                self.state
+                                    .manage
+                                    .settings_core_values
+                                    .entry(core_name.clone())
+                                    .or_default()
+                                    .insert(
+                                        var_def.key.to_string(),
+                                        opt.value.to_string(),
+                                    );
+                            }
+                        }
+                    });
+                    ui.add_space(2.0);
                 }
-            });
-
-            ui.add_space(8.0);
-            ui.label(
-                egui::RichText::new("Parallel Profile")
-                    .small()
-                    .color(palette.text_muted),
-            );
-            ui.horizontal_wrapped(|ui| {
-                for (index, value) in ["balanced", "performance"].into_iter().enumerate() {
-                    let selected = self.state.manage.settings_n64_parallel_profile == value;
-                    let focused = self.state.menu_nav.focus_region
-                        == MenuFocusRegion::SettingsAppConfigParallelProfile
-                        && self.state.menu_nav.settings_app_parallel_profile_index == index;
-                    let response = ui.add(manage_button(value, focused, selected, palette));
-                    if focused {
-                        Self::paint_selection_glow(ui, response.rect, 255, palette.accent, 0.78);
-                    }
-                    if response.clicked() {
-                        self.state.menu_nav.focus_region =
-                            MenuFocusRegion::SettingsAppConfigParallelProfile;
-                        self.state.menu_nav.settings_app_parallel_profile_index = index;
-                        self.state.manage.settings_n64_parallel_profile = value.to_string();
-                    }
-                }
-            });
-
-            ui.add_space(8.0);
-            ui.label(
-                egui::RichText::new("ParaLLEl RDP Settings")
-                    .small()
-                    .strong()
-                    .color(palette.text),
-            );
-            ui.add_space(4.0);
-
-            // Synchronous Rendering
-            ui.label(
-                egui::RichText::new("Synchronous Rendering")
-                    .small()
-                    .color(palette.text_muted),
-            );
-            ui.horizontal_wrapped(|ui| {
-                for (index, value) in ["false", "true"].into_iter().enumerate() {
-                    let selected =
-                        self.state.manage.settings_n64_parallel_rdp_synchronous == value;
-                    let focused = self.state.menu_nav.focus_region
-                        == MenuFocusRegion::SettingsAppConfigSynchronous
-                        && self.state.menu_nav.settings_app_synchronous_index == index;
-                    let response = ui.add(manage_button(value, focused, selected, palette));
-                    if focused {
-                        Self::paint_selection_glow(ui, response.rect, 255, palette.accent, 0.78);
-                    }
-                    if response.clicked() {
-                        self.state.menu_nav.focus_region =
-                            MenuFocusRegion::SettingsAppConfigSynchronous;
-                        self.state.menu_nav.settings_app_synchronous_index = index;
-                        self.state.manage.settings_n64_parallel_rdp_synchronous =
-                            value.to_string();
-                    }
-                }
-            });
-
-            ui.add_space(4.0);
-            // Super-Sampled Read-Back
-            ui.label(
-                egui::RichText::new("Super-Sampled Read-Back")
-                    .small()
-                    .color(palette.text_muted),
-            );
-            ui.horizontal_wrapped(|ui| {
-                for (index, value) in ["false", "true"].into_iter().enumerate() {
-                    let selected =
-                        self.state.manage.settings_n64_parallel_rdp_super_sampled_read_back
-                            == value;
-                    let focused = self.state.menu_nav.focus_region
-                        == MenuFocusRegion::SettingsAppConfigSsReadBack
-                        && self.state.menu_nav.settings_app_ss_read_back_index == index;
-                    let response = ui.add(manage_button(value, focused, selected, palette));
-                    if focused {
-                        Self::paint_selection_glow(ui, response.rect, 255, palette.accent, 0.78);
-                    }
-                    if response.clicked() {
-                        self.state.menu_nav.focus_region =
-                            MenuFocusRegion::SettingsAppConfigSsReadBack;
-                        self.state.menu_nav.settings_app_ss_read_back_index = index;
-                        self.state
-                            .manage
-                            .settings_n64_parallel_rdp_super_sampled_read_back =
-                            value.to_string();
-                    }
-                }
-            });
-
-            ui.add_space(4.0);
-            // VI Anti-Aliasing
-            ui.label(
-                egui::RichText::new("VI Anti-Aliasing")
-                    .small()
-                    .color(palette.text_muted),
-            );
-            ui.horizontal_wrapped(|ui| {
-                for (index, value) in ["disabled", "enabled"].into_iter().enumerate() {
-                    let selected =
-                        self.state.manage.settings_n64_parallel_rdp_vi_aa == value;
-                    let focused = self.state.menu_nav.focus_region
-                        == MenuFocusRegion::SettingsAppConfigViAa
-                        && self.state.menu_nav.settings_app_vi_aa_index == index;
-                    let response = ui.add(manage_button(value, focused, selected, palette));
-                    if focused {
-                        Self::paint_selection_glow(ui, response.rect, 255, palette.accent, 0.78);
-                    }
-                    if response.clicked() {
-                        self.state.menu_nav.focus_region =
-                            MenuFocusRegion::SettingsAppConfigViAa;
-                        self.state.menu_nav.settings_app_vi_aa_index = index;
-                        self.state.manage.settings_n64_parallel_rdp_vi_aa = value.to_string();
-                    }
-                }
-            });
-
-            ui.add_space(4.0);
-            // VI Bilinear Filtering
-            ui.label(
-                egui::RichText::new("VI Bilinear Filtering")
-                    .small()
-                    .color(palette.text_muted),
-            );
-            ui.horizontal_wrapped(|ui| {
-                for (index, value) in ["disabled", "enabled"].into_iter().enumerate() {
-                    let selected =
-                        self.state.manage.settings_n64_parallel_rdp_vi_bilinear == value;
-                    let focused = self.state.menu_nav.focus_region
-                        == MenuFocusRegion::SettingsAppConfigViBilinear
-                        && self.state.menu_nav.settings_app_vi_bilinear_index == index;
-                    let response = ui.add(manage_button(value, focused, selected, palette));
-                    if focused {
-                        Self::paint_selection_glow(ui, response.rect, 255, palette.accent, 0.78);
-                    }
-                    if response.clicked() {
-                        self.state.menu_nav.focus_region =
-                            MenuFocusRegion::SettingsAppConfigViBilinear;
-                        self.state.menu_nav.settings_app_vi_bilinear_index = index;
-                        self.state.manage.settings_n64_parallel_rdp_vi_bilinear =
-                            value.to_string();
-                    }
-                }
-            });
-
-            ui.add_space(4.0);
-            // Dither Filter
-            ui.label(
-                egui::RichText::new("Dither Filter")
-                    .small()
-                    .color(palette.text_muted),
-            );
-            ui.horizontal_wrapped(|ui| {
-                for (index, value) in ["disabled", "enabled"].into_iter().enumerate() {
-                    let selected =
-                        self.state.manage.settings_n64_parallel_rdp_dither_filter == value;
-                    let focused = self.state.menu_nav.focus_region
-                        == MenuFocusRegion::SettingsAppConfigDitherFilter
-                        && self.state.menu_nav.settings_app_dither_filter_index == index;
-                    let response = ui.add(manage_button(value, focused, selected, palette));
-                    if focused {
-                        Self::paint_selection_glow(ui, response.rect, 255, palette.accent, 0.78);
-                    }
-                    if response.clicked() {
-                        self.state.menu_nav.focus_region =
-                            MenuFocusRegion::SettingsAppConfigDitherFilter;
-                        self.state.menu_nav.settings_app_dither_filter_index = index;
-                        self.state.manage.settings_n64_parallel_rdp_dither_filter =
-                            value.to_string();
-                    }
-                }
-            });
-
-            ui.add_space(4.0);
-            // Divot Filter
-            ui.label(
-                egui::RichText::new("Divot Filter")
-                    .small()
-                    .color(palette.text_muted),
-            );
-            ui.horizontal_wrapped(|ui| {
-                for (index, value) in ["disabled", "enabled"].into_iter().enumerate() {
-                    let selected =
-                        self.state.manage.settings_n64_parallel_rdp_divot_filter == value;
-                    let focused = self.state.menu_nav.focus_region
-                        == MenuFocusRegion::SettingsAppConfigDivotFilter
-                        && self.state.menu_nav.settings_app_divot_filter_index == index;
-                    let response = ui.add(manage_button(value, focused, selected, palette));
-                    if focused {
-                        Self::paint_selection_glow(ui, response.rect, 255, palette.accent, 0.78);
-                    }
-                    if response.clicked() {
-                        self.state.menu_nav.focus_region =
-                            MenuFocusRegion::SettingsAppConfigDivotFilter;
-                        self.state.menu_nav.settings_app_divot_filter_index = index;
-                        self.state.manage.settings_n64_parallel_rdp_divot_filter =
-                            value.to_string();
-                    }
-                }
-            });
-
-            ui.add_space(4.0);
-            // Gamma Dither
-            ui.label(
-                egui::RichText::new("Gamma Dither")
-                    .small()
-                    .color(palette.text_muted),
-            );
-            ui.horizontal_wrapped(|ui| {
-                for (index, value) in ["disabled", "enabled"].into_iter().enumerate() {
-                    let selected =
-                        self.state.manage.settings_n64_parallel_rdp_gamma_dither == value;
-                    let focused = self.state.menu_nav.focus_region
-                        == MenuFocusRegion::SettingsAppConfigGammaDither
-                        && self.state.menu_nav.settings_app_gamma_dither_index == index;
-                    let response = ui.add(manage_button(value, focused, selected, palette));
-                    if focused {
-                        Self::paint_selection_glow(ui, response.rect, 255, palette.accent, 0.78);
-                    }
-                    if response.clicked() {
-                        self.state.menu_nav.focus_region =
-                            MenuFocusRegion::SettingsAppConfigGammaDither;
-                        self.state.menu_nav.settings_app_gamma_dither_index = index;
-                        self.state.manage.settings_n64_parallel_rdp_gamma_dither =
-                            value.to_string();
-                    }
-                }
-            });
-
-            ui.add_space(8.0);
-            ui.label(
-                egui::RichText::new("Performance Settings")
-                    .small()
-                    .strong()
-                    .color(palette.text),
-            );
-            ui.add_space(4.0);
-
-            // Count Per Op
-            ui.label(
-                egui::RichText::new("Count Per Op (CPU timing hack)")
-                    .small()
-                    .color(palette.text_muted),
-            );
-            ui.horizontal_wrapped(|ui| {
-                for (index, (value, label)) in
-                    [("0", "Auto"), ("1", "1"), ("2", "2"), ("3", "3")]
-                        .into_iter()
-                        .enumerate()
-                {
-                    let selected = self.state.manage.settings_n64_count_per_op == value;
-                    let focused = self.state.menu_nav.focus_region
-                        == MenuFocusRegion::SettingsAppConfigCountPerOp
-                        && self.state.menu_nav.settings_app_count_per_op_index == index;
-                    let response = ui.add(manage_button(label, focused, selected, palette));
-                    if focused {
-                        Self::paint_selection_glow(ui, response.rect, 255, palette.accent, 0.78);
-                    }
-                    if response.clicked() {
-                        self.state.menu_nav.focus_region =
-                            MenuFocusRegion::SettingsAppConfigCountPerOp;
-                        self.state.menu_nav.settings_app_count_per_op_index = index;
-                        self.state.manage.settings_n64_count_per_op = value.to_string();
-                    }
-                }
-            });
-
-            ui.add_space(4.0);
-            // FB Emulation
-            ui.label(
-                egui::RichText::new("Framebuffer Emulation")
-                    .small()
-                    .color(palette.text_muted),
-            );
-            ui.horizontal_wrapped(|ui| {
-                for (index, value) in ["True", "False"].into_iter().enumerate() {
-                    let selected = self.state.manage.settings_n64_fb_emulation == value;
-                    let focused = self.state.menu_nav.focus_region
-                        == MenuFocusRegion::SettingsAppConfigFbEmulation
-                        && self.state.menu_nav.settings_app_fb_emulation_index == index;
-                    let response = ui.add(manage_button(value, focused, selected, palette));
-                    if focused {
-                        Self::paint_selection_glow(ui, response.rect, 255, palette.accent, 0.78);
-                    }
-                    if response.clicked() {
-                        self.state.menu_nav.focus_region =
-                            MenuFocusRegion::SettingsAppConfigFbEmulation;
-                        self.state.menu_nav.settings_app_fb_emulation_index = index;
-                        self.state.manage.settings_n64_fb_emulation = value.to_string();
-                    }
-                }
-            });
-
-            ui.add_space(4.0);
-            // Copy Color to RDRAM
-            ui.label(
-                egui::RichText::new("Copy Color to RDRAM")
-                    .small()
-                    .color(palette.text_muted),
-            );
-            ui.horizontal_wrapped(|ui| {
-                for (index, value) in ["Off", "Async", "Sync"].into_iter().enumerate() {
-                    let selected = self.state.manage.settings_n64_copy_color_to_rdram == value;
-                    let focused = self.state.menu_nav.focus_region
-                        == MenuFocusRegion::SettingsAppConfigCopyColorToRdram
-                        && self.state.menu_nav.settings_app_copy_color_to_rdram_index == index;
-                    let response = ui.add(manage_button(value, focused, selected, palette));
-                    if focused {
-                        Self::paint_selection_glow(ui, response.rect, 255, palette.accent, 0.78);
-                    }
-                    if response.clicked() {
-                        self.state.menu_nav.focus_region =
-                            MenuFocusRegion::SettingsAppConfigCopyColorToRdram;
-                        self.state.menu_nav.settings_app_copy_color_to_rdram_index = index;
-                        self.state.manage.settings_n64_copy_color_to_rdram = value.to_string();
-                    }
-                }
-            });
-
-            ui.add_space(8.0);
-            ui.label(
-                egui::RichText::new("Frame Pacing")
-                    .small()
-                    .strong()
-                    .color(palette.text),
-            );
-            ui.add_space(4.0);
-
-            // Frame Duplication
-            ui.label(
-                egui::RichText::new("Frame Duplication")
-                    .small()
-                    .color(palette.text_muted),
-            );
-            ui.horizontal_wrapped(|ui| {
-                for (index, value) in ["False", "True"].into_iter().enumerate() {
-                    let selected = self.state.manage.settings_n64_frame_duplication == value;
-                    let focused = self.state.menu_nav.focus_region
-                        == MenuFocusRegion::SettingsAppConfigFrameDuplication
-                        && self.state.menu_nav.settings_app_frame_duplication_index == index;
-                    let response = ui.add(manage_button(value, focused, selected, palette));
-                    if focused {
-                        Self::paint_selection_glow(ui, response.rect, 255, palette.accent, 0.78);
-                    }
-                    if response.clicked() {
-                        self.state.menu_nav.focus_region =
-                            MenuFocusRegion::SettingsAppConfigFrameDuplication;
-                        self.state.menu_nav.settings_app_frame_duplication_index = index;
-                        self.state.manage.settings_n64_frame_duplication = value.to_string();
-                    }
-                }
-            });
-
-            ui.add_space(4.0);
-            // Framerate
-            ui.label(
-                egui::RichText::new("Framerate")
-                    .small()
-                    .color(palette.text_muted),
-            );
-            ui.horizontal_wrapped(|ui| {
-                for (index, value) in ["Original", "Fullspeed"].into_iter().enumerate() {
-                    let selected = self.state.manage.settings_n64_framerate == value;
-                    let focused = self.state.menu_nav.focus_region
-                        == MenuFocusRegion::SettingsAppConfigFramerate
-                        && self.state.menu_nav.settings_app_framerate_index == index;
-                    let response = ui.add(manage_button(value, focused, selected, palette));
-                    if focused {
-                        Self::paint_selection_glow(ui, response.rect, 255, palette.accent, 0.78);
-                    }
-                    if response.clicked() {
-                        self.state.menu_nav.focus_region =
-                            MenuFocusRegion::SettingsAppConfigFramerate;
-                        self.state.menu_nav.settings_app_framerate_index = index;
-                        self.state.manage.settings_n64_framerate = value.to_string();
-                    }
-                }
-            });
-
-            ui.add_space(4.0);
-            // VI Refresh (Overclock)
-            ui.label(
-                egui::RichText::new("VI Refresh (Overclock)")
-                    .small()
-                    .color(palette.text_muted),
-            );
-            ui.horizontal_wrapped(|ui| {
-                for (index, value) in ["Auto", "1500", "2200"].into_iter().enumerate() {
-                    let selected = self.state.manage.settings_n64_vi_refresh == value;
-                    let focused = self.state.menu_nav.focus_region
-                        == MenuFocusRegion::SettingsAppConfigViRefresh
-                        && self.state.menu_nav.settings_app_vi_refresh_index == index;
-                    let response = ui.add(manage_button(value, focused, selected, palette));
-                    if focused {
-                        Self::paint_selection_glow(ui, response.rect, 255, palette.accent, 0.78);
-                    }
-                    if response.clicked() {
-                        self.state.menu_nav.focus_region =
-                            MenuFocusRegion::SettingsAppConfigViRefresh;
-                        self.state.menu_nav.settings_app_vi_refresh_index = index;
-                        self.state.manage.settings_n64_vi_refresh = value.to_string();
-                    }
-                }
-            });
-
-            ui.add_space(4.0);
-            // Count Per Op Divider (Overclock)
-            ui.label(
-                egui::RichText::new("Count Per Op Divider (Overclock)")
-                    .small()
-                    .color(palette.text_muted),
-            );
-            ui.horizontal_wrapped(|ui| {
-                for (index, value) in ["0", "1", "2", "3", "4"].into_iter().enumerate() {
-                    let selected = self.state.manage.settings_n64_count_per_op_denom_pot == value;
-                    let focused = self.state.menu_nav.focus_region
-                        == MenuFocusRegion::SettingsAppConfigCountPerOpDenomPot
-                        && self.state.menu_nav.settings_app_count_per_op_denom_pot_index == index;
-                    let response = ui.add(manage_button(value, focused, selected, palette));
-                    if focused {
-                        Self::paint_selection_glow(ui, response.rect, 255, palette.accent, 0.78);
-                    }
-                    if response.clicked() {
-                        self.state.menu_nav.focus_region =
-                            MenuFocusRegion::SettingsAppConfigCountPerOpDenomPot;
-                        self.state.menu_nav.settings_app_count_per_op_denom_pot_index = index;
-                        self.state.manage.settings_n64_count_per_op_denom_pot =
-                            value.to_string();
-                    }
-                }
-            });
-
-            ui.add_space(8.0);
-            ui.label(
-                egui::RichText::new("Display")
-                    .small()
-                    .strong()
-                    .color(palette.text),
-            );
-            ui.add_space(4.0);
-
-            // Aspect Ratio
-            ui.label(
-                egui::RichText::new("Aspect Ratio")
-                    .small()
-                    .color(palette.text_muted),
-            );
-            ui.horizontal_wrapped(|ui| {
-                for (index, value) in ["4:3", "16:9", "16:9 adjusted"].into_iter().enumerate() {
-                    let selected = self.state.manage.settings_n64_aspect_ratio == value;
-                    let focused = self.state.menu_nav.focus_region
-                        == MenuFocusRegion::SettingsAppConfigAspectRatio
-                        && self.state.menu_nav.settings_app_aspect_ratio_index == index;
-                    let response = ui.add(manage_button(value, focused, selected, palette));
-                    if focused {
-                        Self::paint_selection_glow(ui, response.rect, 255, palette.accent, 0.78);
-                    }
-                    if response.clicked() {
-                        self.state.menu_nav.focus_region =
-                            MenuFocusRegion::SettingsAppConfigAspectRatio;
-                        self.state.menu_nav.settings_app_aspect_ratio_index = index;
-                        self.state.manage.settings_n64_aspect_ratio = value.to_string();
-                    }
-                }
-            });
+            }
 
             ui.add_space(6.0);
             ui.label(
@@ -1252,216 +771,10 @@ impl NativeArcadeUiApp {
                 return;
             }
         };
-        #[cfg(target_os = "macos")]
-        let preferred_core = if arcade_domain::is_running_under_rosetta() {
-            match parse_n64_preferred_core(&self.state.manage.settings_n64_preferred_core) {
-                Ok(value) => value,
-                Err(err) => {
-                    self.state.manage.status_message = err;
-                    self.state.status = self.state.manage.status_message.clone();
-                    return;
-                }
-            }
-        } else {
-            N64PreferredCore::Mupen64plusNext
-        };
-        #[cfg(not(target_os = "macos"))]
-        let preferred_core =
-            match parse_n64_preferred_core(&self.state.manage.settings_n64_preferred_core) {
-                Ok(value) => value,
-                Err(err) => {
-                    self.state.manage.status_message = err;
-                    self.state.status = self.state.manage.status_message.clone();
-                    return;
-                }
-            };
-        let parallel_rdp_upscaling = match parse_n64_parallel_rdp_upscaling(
-            &self.state.manage.settings_n64_parallel_rdp_upscaling,
-        ) {
-            Ok(value) => value,
-            Err(err) => {
-                self.state.manage.status_message = err;
-                self.state.status = self.state.manage.status_message.clone();
-                return;
-            }
-        };
-        let parallel_profile = match parse_n64_parallel_profile(
-            &self.state.manage.settings_n64_parallel_profile,
-        ) {
-            Ok(value) => value,
-            Err(err) => {
-                self.state.manage.status_message = err;
-                self.state.status = self.state.manage.status_message.clone();
-                return;
-            }
-        };
-        let parallel_rdp_synchronous = match parse_n64_parallel_rdp_toggle(
-            &self.state.manage.settings_n64_parallel_rdp_synchronous,
-        ) {
-            Ok(value) => value,
-            Err(err) => {
-                self.state.manage.status_message = err;
-                self.state.status = self.state.manage.status_message.clone();
-                return;
-            }
-        };
-        let parallel_rdp_super_sampled_read_back = match parse_n64_parallel_rdp_toggle(
-            &self.state.manage.settings_n64_parallel_rdp_super_sampled_read_back,
-        ) {
-            Ok(value) => value,
-            Err(err) => {
-                self.state.manage.status_message = err;
-                self.state.status = self.state.manage.status_message.clone();
-                return;
-            }
-        };
-        let parallel_rdp_vi_aa = match parse_n64_parallel_rdp_filter(
-            &self.state.manage.settings_n64_parallel_rdp_vi_aa,
-        ) {
-            Ok(value) => value,
-            Err(err) => {
-                self.state.manage.status_message = err;
-                self.state.status = self.state.manage.status_message.clone();
-                return;
-            }
-        };
-        let parallel_rdp_vi_bilinear = match parse_n64_parallel_rdp_filter(
-            &self.state.manage.settings_n64_parallel_rdp_vi_bilinear,
-        ) {
-            Ok(value) => value,
-            Err(err) => {
-                self.state.manage.status_message = err;
-                self.state.status = self.state.manage.status_message.clone();
-                return;
-            }
-        };
-        let parallel_rdp_dither_filter = match parse_n64_parallel_rdp_filter(
-            &self.state.manage.settings_n64_parallel_rdp_dither_filter,
-        ) {
-            Ok(value) => value,
-            Err(err) => {
-                self.state.manage.status_message = err;
-                self.state.status = self.state.manage.status_message.clone();
-                return;
-            }
-        };
-        let parallel_rdp_divot_filter = match parse_n64_parallel_rdp_filter(
-            &self.state.manage.settings_n64_parallel_rdp_divot_filter,
-        ) {
-            Ok(value) => value,
-            Err(err) => {
-                self.state.manage.status_message = err;
-                self.state.status = self.state.manage.status_message.clone();
-                return;
-            }
-        };
-        let parallel_rdp_gamma_dither = match parse_n64_parallel_rdp_filter(
-            &self.state.manage.settings_n64_parallel_rdp_gamma_dither,
-        ) {
-            Ok(value) => value,
-            Err(err) => {
-                self.state.manage.status_message = err;
-                self.state.status = self.state.manage.status_message.clone();
-                return;
-            }
-        };
 
-        let count_per_op = match parse_n64_count_per_op(
-            &self.state.manage.settings_n64_count_per_op,
-        ) {
-            Ok(value) => value,
-            Err(err) => {
-                self.state.manage.status_message = err;
-                self.state.status = self.state.manage.status_message.clone();
-                return;
-            }
-        };
-        let fb_emulation = match parse_n64_fb_emulation(
-            &self.state.manage.settings_n64_fb_emulation,
-        ) {
-            Ok(value) => value,
-            Err(err) => {
-                self.state.manage.status_message = err;
-                self.state.status = self.state.manage.status_message.clone();
-                return;
-            }
-        };
-        let copy_color_to_rdram = match parse_n64_copy_color_to_rdram(
-            &self.state.manage.settings_n64_copy_color_to_rdram,
-        ) {
-            Ok(value) => value,
-            Err(err) => {
-                self.state.manage.status_message = err;
-                self.state.status = self.state.manage.status_message.clone();
-                return;
-            }
-        };
-        let frame_duplication = match parse_n64_frame_duplication(
-            &self.state.manage.settings_n64_frame_duplication,
-        ) {
-            Ok(value) => value,
-            Err(err) => {
-                self.state.manage.status_message = err;
-                self.state.status = self.state.manage.status_message.clone();
-                return;
-            }
-        };
-        let framerate = match parse_n64_framerate(
-            &self.state.manage.settings_n64_framerate,
-        ) {
-            Ok(value) => value,
-            Err(err) => {
-                self.state.manage.status_message = err;
-                self.state.status = self.state.manage.status_message.clone();
-                return;
-            }
-        };
-        let vi_refresh = match parse_n64_vi_refresh(
-            &self.state.manage.settings_n64_vi_refresh,
-        ) {
-            Ok(value) => value,
-            Err(err) => {
-                self.state.manage.status_message = err;
-                self.state.status = self.state.manage.status_message.clone();
-                return;
-            }
-        };
-        let count_per_op_denom_pot = match parse_n64_count_per_op_denom_pot(
-            &self.state.manage.settings_n64_count_per_op_denom_pot,
-        ) {
-            Ok(value) => value,
-            Err(err) => {
-                self.state.manage.status_message = err;
-                self.state.status = self.state.manage.status_message.clone();
-                return;
-            }
-        };
+        let core_settings = self.state.manage.settings_core_values.clone();
 
-        let n64_config = arcade_domain::N64EmulationConfig {
-            preferred_core,
-            parallel_rdp_upscaling,
-            parallel_profile,
-            parallel_rdp_synchronous,
-            parallel_rdp_super_sampled_read_back,
-            parallel_rdp_vi_aa,
-            parallel_rdp_vi_bilinear,
-            parallel_rdp_dither_filter,
-            parallel_rdp_divot_filter,
-            parallel_rdp_gamma_dither,
-            count_per_op,
-            fb_emulation,
-            copy_color_to_rdram,
-            frame_duplication,
-            framerate,
-            vi_refresh,
-            count_per_op_denom_pot,
-            aspect_ratio: parse_n64_aspect_ratio(&self.state.manage.settings_n64_aspect_ratio).unwrap_or_default(),
-        };
-
-        match self.services.update_app_config_settings(
-            paths,
-            n64_config,
-        ) {
+        match self.services.update_app_config_settings(paths, core_settings) {
             Ok(outcome) => {
                 if !outcome.restart_required {
                     self.sync_manage_settings_from_services();
@@ -1884,137 +1197,6 @@ fn parse_path_field(value: &str, label: &str) -> Result<PathBuf, String> {
         Err(format!("{label} cannot be empty."))
     } else {
         Ok(PathBuf::from(trimmed))
-    }
-}
-
-fn parse_n64_parallel_rdp_upscaling(value: &str) -> Result<N64ParallelRdpUpscaling, String> {
-    match value.trim() {
-        "1x" => Ok(N64ParallelRdpUpscaling::X1),
-        "2x" => Ok(N64ParallelRdpUpscaling::X2),
-        "4x" => Ok(N64ParallelRdpUpscaling::X4),
-        "8x" => Ok(N64ParallelRdpUpscaling::X8),
-        _ => Err(String::from(
-            "N64 internal resolution must be one of: 1x, 2x, 4x, 8x.",
-        )),
-    }
-}
-
-fn parse_n64_parallel_profile(value: &str) -> Result<N64ParallelProfile, String> {
-    match value.trim() {
-        "balanced" => Ok(N64ParallelProfile::Balanced),
-        "performance" => Ok(N64ParallelProfile::Performance),
-        _ => Err(String::from(
-            "N64 parallel profile must be either balanced or performance.",
-        )),
-    }
-}
-
-fn parse_n64_parallel_rdp_toggle(value: &str) -> Result<N64ParallelRdpToggle, String> {
-    match value.trim() {
-        "false" => Ok(N64ParallelRdpToggle::False),
-        "true" => Ok(N64ParallelRdpToggle::True),
-        _ => Err(String::from("Value must be false or true.")),
-    }
-}
-
-fn parse_n64_parallel_rdp_filter(value: &str) -> Result<N64ParallelRdpFilter, String> {
-    match value.trim() {
-        "disabled" => Ok(N64ParallelRdpFilter::Disabled),
-        "enabled" => Ok(N64ParallelRdpFilter::Enabled),
-        _ => Err(String::from("Value must be disabled or enabled.")),
-    }
-}
-
-fn parse_n64_preferred_core(value: &str) -> Result<N64PreferredCore, String> {
-    match value.trim() {
-        "mupen64plus_next" => Ok(N64PreferredCore::Mupen64plusNext),
-        "parallel_n64" => Ok(N64PreferredCore::ParallelN64),
-        _ => Err(String::from(
-            "N64 preferred core must be either mupen64plus_next or parallel_n64.",
-        )),
-    }
-}
-
-fn parse_n64_count_per_op(value: &str) -> Result<N64CountPerOp, String> {
-    match value.trim() {
-        "0" => Ok(N64CountPerOp::Auto),
-        "1" => Ok(N64CountPerOp::One),
-        "2" => Ok(N64CountPerOp::Two),
-        "3" => Ok(N64CountPerOp::Three),
-        _ => Err(String::from("Count Per Op must be one of: Auto, 1, 2, 3.")),
-    }
-}
-
-fn parse_n64_fb_emulation(value: &str) -> Result<N64FbEmulation, String> {
-    match value.trim() {
-        "True" => Ok(N64FbEmulation::True),
-        "False" => Ok(N64FbEmulation::False),
-        _ => Err(String::from("FB Emulation must be True or False.")),
-    }
-}
-
-fn parse_n64_copy_color_to_rdram(value: &str) -> Result<N64CopyColorToRdram, String> {
-    match value.trim() {
-        "Off" => Ok(N64CopyColorToRdram::Off),
-        "Async" => Ok(N64CopyColorToRdram::Async),
-        "Sync" => Ok(N64CopyColorToRdram::Sync),
-        _ => Err(String::from(
-            "Copy Color to RDRAM must be one of: Off, Async, Sync.",
-        )),
-    }
-}
-
-fn parse_n64_frame_duplication(value: &str) -> Result<N64FrameDuplication, String> {
-    match value.trim() {
-        "False" => Ok(N64FrameDuplication::False),
-        "True" => Ok(N64FrameDuplication::True),
-        _ => Err(String::from("Frame Duplication must be True or False.")),
-    }
-}
-
-fn parse_n64_framerate(value: &str) -> Result<N64Framerate, String> {
-    match value.trim() {
-        "Original" => Ok(N64Framerate::Original),
-        "Fullspeed" => Ok(N64Framerate::Fullspeed),
-        _ => Err(String::from("Framerate must be one of: Original, Fullspeed.")),
-    }
-}
-
-fn parse_n64_vi_refresh(value: &str) -> Result<N64ViRefresh, String> {
-    match value.trim() {
-        "Auto" => Ok(N64ViRefresh::Auto),
-        "1500" => Ok(N64ViRefresh::V1500),
-        "2200" => Ok(N64ViRefresh::V2200),
-        _ => Err(String::from("VI Refresh must be one of: Auto, 1500, 2200.")),
-    }
-}
-
-fn parse_n64_aspect_ratio(value: &str) -> Result<N64AspectRatio, String> {
-    match value.trim() {
-        "4:3" => Ok(N64AspectRatio::Ratio43),
-        "16:9" => Ok(N64AspectRatio::Ratio169),
-        "16:9 adjusted" => Ok(N64AspectRatio::Ratio169Adjusted),
-        _ => Err(String::from("Aspect Ratio must be one of: 4:3, 16:9, 16:9 adjusted.")),
-    }
-}
-
-fn parse_n64_count_per_op_denom_pot(value: &str) -> Result<N64CountPerOpDenomPot, String> {
-    match value.trim() {
-        "0" => Ok(N64CountPerOpDenomPot::Zero),
-        "1" => Ok(N64CountPerOpDenomPot::One),
-        "2" => Ok(N64CountPerOpDenomPot::Two),
-        "3" => Ok(N64CountPerOpDenomPot::Three),
-        "4" => Ok(N64CountPerOpDenomPot::Four),
-        "5" => Ok(N64CountPerOpDenomPot::Five),
-        "6" => Ok(N64CountPerOpDenomPot::Six),
-        "7" => Ok(N64CountPerOpDenomPot::Seven),
-        "8" => Ok(N64CountPerOpDenomPot::Eight),
-        "9" => Ok(N64CountPerOpDenomPot::Nine),
-        "10" => Ok(N64CountPerOpDenomPot::Ten),
-        "11" => Ok(N64CountPerOpDenomPot::Eleven),
-        _ => Err(String::from(
-            "Count Per Op Divider must be between 0 and 11.",
-        )),
     }
 }
 

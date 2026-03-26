@@ -12,7 +12,7 @@ use arcade_domain::{
     resolve_core, resolve_effective_core_override, resolve_path_from_root, AppConfig,
     CoverScrapePlatformIds, CoverScrapeRunOptions, CoverScrapeSettingsInput, CoverScrapingConfig,
     DetectedPadIdentity, ManageOperationKind, ManageOperationSummary, ManageProgressEvent,
-    ManageRomStatus, ManageScope, ManagementConfig, N64EmulationConfig, PathsConfig, RomCard,
+    ManageRomStatus, ManageScope, ManagementConfig, PathsConfig, RomCard,
     RomQuery, SaveLimits, SaveSlotData, SaveSlotSummary,
     SavedGamepadMappingSummary, StoredGamepadMapping, SYSTEM_DEFAULT_MAPPING_KEY,
 };
@@ -307,7 +307,7 @@ impl NativeServices {
     pub fn update_app_config_settings(
         &self,
         paths: PathsConfig,
-        n64_config: N64EmulationConfig,
+        core_settings: HashMap<String, HashMap<String, String>>,
     ) -> Result<AppConfigUpdateOutcome> {
         let mut config = self
             .config
@@ -317,7 +317,7 @@ impl NativeServices {
         let restart_required = config.paths != paths;
         let mut saved_config = config.clone();
         saved_config.paths = paths;
-        saved_config.emulation.n64 = n64_config;
+        saved_config.emulation.core_settings = core_settings;
 
         fs::create_dir_all(&saved_config.paths.rom_root)?;
         saved_config.ensure_dirs()?;
@@ -1174,8 +1174,7 @@ mod tests {
     use super::*;
     use arcade_data::Database;
     use arcade_domain::{
-        CanonicalButton, MappingEntry, N64EmulationConfig, N64ParallelProfile,
-        N64ParallelRdpUpscaling, N64PreferredCore, PathsConfig, NEXT_SAVE_SLOT_ACTION,
+        CanonicalButton, MappingEntry, N64PreferredCore, PathsConfig, NEXT_SAVE_SLOT_ACTION,
         QUICK_LOAD_ACTION, QUICK_SAVE_ACTION, SYSTEM_DEFAULT_MAPPING_KEY,
     };
     use chrono::Utc;
@@ -1490,16 +1489,16 @@ mod tests {
             bios_root: tmp.path().join("next-bios"),
         };
 
+        let mut core_settings = std::collections::HashMap::new();
+        let mut mupen_vars = std::collections::HashMap::new();
+        mupen_vars.insert(
+            "mupen64plus-parallel-rdp-upscaling".to_string(),
+            "2x".to_string(),
+        );
+        core_settings.insert("mupen64plus_next".to_string(), mupen_vars);
+
         let outcome = services
-            .update_app_config_settings(
-                updated_paths.clone(),
-                N64EmulationConfig {
-                    preferred_core: N64PreferredCore::Mupen64plusNext,
-                    parallel_rdp_upscaling: N64ParallelRdpUpscaling::X2,
-                    parallel_profile: N64ParallelProfile::Performance,
-                    ..N64EmulationConfig::default()
-                },
-            )
+            .update_app_config_settings(updated_paths.clone(), core_settings)
             .expect("save settings");
 
         assert!(outcome.restart_required);
@@ -1507,18 +1506,6 @@ mod tests {
         let active = services.config();
         assert_eq!(active.paths.rom_root, config.paths.rom_root);
         assert_eq!(active.paths.db_path, config.paths.db_path);
-        assert_eq!(
-            active.emulation.n64.preferred_core,
-            N64PreferredCore::Mupen64plusNext
-        );
-        assert_eq!(
-            active.emulation.n64.parallel_rdp_upscaling,
-            N64ParallelRdpUpscaling::X2
-        );
-        assert_eq!(
-            active.emulation.n64.parallel_profile,
-            N64ParallelProfile::Performance
-        );
 
         let (saved, _) = AppConfig::load_or_create(Some(&config_path)).expect("reload config");
         assert_eq!(saved.paths.rom_root, updated_paths.rom_root);
@@ -1537,16 +1524,16 @@ mod tests {
         let services =
             NativeServices::bootstrap(config.clone(), config_path.clone(), db).expect("bootstrap");
 
+        let mut core_settings = std::collections::HashMap::new();
+        let mut mupen_vars = std::collections::HashMap::new();
+        mupen_vars.insert(
+            "mupen64plus-parallel-rdp-upscaling".to_string(),
+            "4x".to_string(),
+        );
+        core_settings.insert("mupen64plus_next".to_string(), mupen_vars);
+
         let outcome = services
-            .update_app_config_settings(
-                config.paths.clone(),
-                N64EmulationConfig {
-                    preferred_core: N64PreferredCore::Mupen64plusNext,
-                    parallel_rdp_upscaling: N64ParallelRdpUpscaling::X4,
-                    parallel_profile: N64ParallelProfile::Balanced,
-                    ..N64EmulationConfig::default()
-                },
-            )
+            .update_app_config_settings(config.paths.clone(), core_settings)
             .expect("save settings");
 
         assert!(!outcome.restart_required);
@@ -1554,16 +1541,13 @@ mod tests {
         let active = services.config();
         assert_eq!(active.paths.rom_root, config.paths.rom_root);
         assert_eq!(
-            active.emulation.n64.preferred_core,
-            N64PreferredCore::Mupen64plusNext
-        );
-        assert_eq!(
-            active.emulation.n64.parallel_rdp_upscaling,
-            N64ParallelRdpUpscaling::X4
-        );
-        assert_eq!(
-            active.emulation.n64.parallel_profile,
-            N64ParallelProfile::Balanced
+            active
+                .emulation
+                .core_settings
+                .get("mupen64plus_next")
+                .and_then(|m| m.get("mupen64plus-parallel-rdp-upscaling"))
+                .map(|s| s.as_str()),
+            Some("4x")
         );
     }
 

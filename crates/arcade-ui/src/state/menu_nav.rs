@@ -17,23 +17,10 @@ pub(crate) enum MenuFocusRegion {
     ManageScrapeSystems,
     ManageScrapeActions,
     ManageList,
-    SettingsAppConfigUpscaling,
-    SettingsAppConfigParallelProfile,
-    SettingsAppConfigSynchronous,
-    SettingsAppConfigSsReadBack,
-    SettingsAppConfigViAa,
-    SettingsAppConfigViBilinear,
-    SettingsAppConfigDitherFilter,
-    SettingsAppConfigDivotFilter,
-    SettingsAppConfigGammaDither,
-    SettingsAppConfigCountPerOp,
-    SettingsAppConfigFbEmulation,
-    SettingsAppConfigCopyColorToRdram,
-    SettingsAppConfigFrameDuplication,
-    SettingsAppConfigFramerate,
-    SettingsAppConfigViRefresh,
-    SettingsAppConfigCountPerOpDenomPot,
-    SettingsAppConfigAspectRatio,
+    /// Core/system selector tabs in the settings panel.
+    SettingsAppConfigCoreTab,
+    /// A specific core variable row (index tracked separately).
+    SettingsAppConfigCoreVariable,
     SettingsAppConfigSave,
     SettingsCoverSettings,
     Grid,
@@ -58,23 +45,12 @@ pub(crate) struct MenuNavState {
     pub(crate) manage_scrape_system_index: usize,
     pub(crate) manage_scrape_action_index: usize,
     pub(crate) manage_list_index: usize,
-    pub(crate) settings_app_upscaling_index: usize,
-    pub(crate) settings_app_parallel_profile_index: usize,
-    pub(crate) settings_app_synchronous_index: usize,
-    pub(crate) settings_app_ss_read_back_index: usize,
-    pub(crate) settings_app_vi_aa_index: usize,
-    pub(crate) settings_app_vi_bilinear_index: usize,
-    pub(crate) settings_app_dither_filter_index: usize,
-    pub(crate) settings_app_divot_filter_index: usize,
-    pub(crate) settings_app_gamma_dither_index: usize,
-    pub(crate) settings_app_count_per_op_index: usize,
-    pub(crate) settings_app_fb_emulation_index: usize,
-    pub(crate) settings_app_copy_color_to_rdram_index: usize,
-    pub(crate) settings_app_frame_duplication_index: usize,
-    pub(crate) settings_app_framerate_index: usize,
-    pub(crate) settings_app_vi_refresh_index: usize,
-    pub(crate) settings_app_count_per_op_denom_pot_index: usize,
-    pub(crate) settings_app_aspect_ratio_index: usize,
+    /// Which core tab is focused in the system/core selector.
+    pub(crate) settings_core_tab_index: usize,
+    /// Which variable row is focused within the selected core.
+    pub(crate) settings_core_variable_index: usize,
+    /// Which option button is focused within the current variable row.
+    pub(crate) settings_core_option_index: usize,
     pub(crate) settings_cover_action_index: usize,
     pub(crate) grid_index_home: usize,
     pub(crate) grid_index_library: usize,
@@ -113,23 +89,9 @@ impl Default for MenuNavState {
             manage_scrape_system_index: 0,
             manage_scrape_action_index: 0,
             manage_list_index: 0,
-            settings_app_upscaling_index: 0,
-            settings_app_parallel_profile_index: 0,
-            settings_app_synchronous_index: 0,
-            settings_app_ss_read_back_index: 0,
-            settings_app_vi_aa_index: 0,
-            settings_app_vi_bilinear_index: 0,
-            settings_app_dither_filter_index: 0,
-            settings_app_divot_filter_index: 0,
-            settings_app_frame_duplication_index: 0,
-            settings_app_framerate_index: 0,
-            settings_app_vi_refresh_index: 0,
-            settings_app_count_per_op_denom_pot_index: 0,
-            settings_app_aspect_ratio_index: 0,
-            settings_app_gamma_dither_index: 0,
-            settings_app_count_per_op_index: 0,
-            settings_app_fb_emulation_index: 0,
-            settings_app_copy_color_to_rdram_index: 0,
+            settings_core_tab_index: 0,
+            settings_core_variable_index: 0,
+            settings_core_option_index: 0,
             settings_cover_action_index: 0,
             grid_index_home: 0,
             grid_index_library: 0,
@@ -345,57 +307,18 @@ impl MenuNavState {
             MenuFocusRegion::ManageScrapeSystems => MenuFocusRegion::ManageSettings,
             MenuFocusRegion::ManageScrapeActions => MenuFocusRegion::ManageScrapeSystems,
             MenuFocusRegion::ManageList => MenuFocusRegion::ManageScrapeActions,
-            MenuFocusRegion::SettingsAppConfigUpscaling => MenuFocusRegion::TopNav,
-            MenuFocusRegion::SettingsAppConfigParallelProfile => {
-                MenuFocusRegion::SettingsAppConfigUpscaling
-            }
-            MenuFocusRegion::SettingsAppConfigSynchronous => {
-                MenuFocusRegion::SettingsAppConfigUpscaling
-            }
-            MenuFocusRegion::SettingsAppConfigSsReadBack => {
-                MenuFocusRegion::SettingsAppConfigSynchronous
-            }
-            MenuFocusRegion::SettingsAppConfigViAa => {
-                MenuFocusRegion::SettingsAppConfigSsReadBack
-            }
-            MenuFocusRegion::SettingsAppConfigViBilinear => {
-                MenuFocusRegion::SettingsAppConfigViAa
-            }
-            MenuFocusRegion::SettingsAppConfigDitherFilter => {
-                MenuFocusRegion::SettingsAppConfigViBilinear
-            }
-            MenuFocusRegion::SettingsAppConfigDivotFilter => {
-                MenuFocusRegion::SettingsAppConfigDitherFilter
-            }
-            MenuFocusRegion::SettingsAppConfigGammaDither => {
-                MenuFocusRegion::SettingsAppConfigDivotFilter
-            }
-            MenuFocusRegion::SettingsAppConfigCountPerOp => {
-                MenuFocusRegion::SettingsAppConfigGammaDither
-            }
-            MenuFocusRegion::SettingsAppConfigFbEmulation => {
-                MenuFocusRegion::SettingsAppConfigCountPerOp
-            }
-            MenuFocusRegion::SettingsAppConfigCopyColorToRdram => {
-                MenuFocusRegion::SettingsAppConfigFbEmulation
-            }
-            MenuFocusRegion::SettingsAppConfigFrameDuplication => {
-                MenuFocusRegion::SettingsAppConfigCopyColorToRdram
-            }
-            MenuFocusRegion::SettingsAppConfigFramerate => {
-                MenuFocusRegion::SettingsAppConfigFrameDuplication
-            }
-            MenuFocusRegion::SettingsAppConfigViRefresh => {
-                MenuFocusRegion::SettingsAppConfigFramerate
-            }
-            MenuFocusRegion::SettingsAppConfigCountPerOpDenomPot => {
-                MenuFocusRegion::SettingsAppConfigViRefresh
-            }
-            MenuFocusRegion::SettingsAppConfigAspectRatio => {
-                MenuFocusRegion::SettingsAppConfigCountPerOpDenomPot
+            MenuFocusRegion::SettingsAppConfigCoreTab => MenuFocusRegion::TopNav,
+            MenuFocusRegion::SettingsAppConfigCoreVariable => {
+                if self.settings_core_variable_index == 0 {
+                    MenuFocusRegion::SettingsAppConfigCoreTab
+                } else {
+                    self.settings_core_variable_index =
+                        self.settings_core_variable_index.saturating_sub(1);
+                    MenuFocusRegion::SettingsAppConfigCoreVariable
+                }
             }
             MenuFocusRegion::SettingsAppConfigSave => {
-                MenuFocusRegion::SettingsAppConfigAspectRatio
+                MenuFocusRegion::SettingsAppConfigCoreVariable
             }
             MenuFocusRegion::SettingsCoverSettings => MenuFocusRegion::SettingsAppConfigSave,
             MenuFocusRegion::Grid => {
