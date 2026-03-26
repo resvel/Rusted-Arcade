@@ -970,7 +970,6 @@ impl NativeArcadeUiApp {
                 MenuFocusRegion::FiltersToggle
                     | MenuFocusRegion::FiltersSystem
                     | MenuFocusRegion::FiltersAlpha
-                    | MenuFocusRegion::ControllerMappingToggle
                     | MenuFocusRegion::Grid
             )
         {

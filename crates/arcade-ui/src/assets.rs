@@ -44,7 +44,6 @@ impl AssetCache {
 struct AllThemeAssets {
     devices: Vec<PathBuf>,
     controllers: Vec<PathBuf>,
-    logos: Vec<PathBuf>,
 }
 
 impl NativeArcadeUiApp {
@@ -148,31 +147,6 @@ impl NativeArcadeUiApp {
                 self.paint_vertical_art_stack(ui, ctx, right_rect, &side_art, 90, 10);
             }
             (None, None) => {}
-        }
-    }
-
-    pub(crate) fn draw_all_systems_header_logos(
-        &mut self,
-        ui: &egui::Ui,
-        ctx: &egui::Context,
-        rect: egui::Rect,
-    ) {
-        let assets = self.resolve_all_theme_assets();
-        if assets.logos.is_empty() || rect.width() <= 24.0 || rect.height() <= 12.0 {
-            return;
-        }
-
-        let slot_width = rect.width() / assets.logos.len() as f32;
-        for (index, path) in assets.logos.iter().enumerate() {
-            let slot = egui::Rect::from_min_max(
-                egui::pos2(rect.left() + slot_width * index as f32 + 6.0, rect.top()),
-                egui::pos2(
-                    rect.left() + slot_width * (index + 1) as f32 - 6.0,
-                    rect.bottom(),
-                ),
-            )
-            .shrink2(egui::vec2(4.0, 2.0));
-            self.paint_fitted_accent_texture(ui, ctx, slot, path, 54);
         }
     }
 
@@ -400,14 +374,6 @@ impl NativeArcadeUiApp {
                 "/system-logos/snescontroller.png",
                 "/system-logos/genesiscontroller.png",
             ]),
-            logos: self.resolve_existing_assets(&[
-                "/system-logos/nintendo.svg",
-                "/system-logos/snes.svg",
-                "/system-logos/genesis.svg",
-                "/system-logos/Game_Boy_logo.png",
-                "/system-logos/Game_Boy_Advance_logo.png",
-                "/system-logos/n64logo.png",
-            ]),
         }
     }
 
@@ -417,6 +383,25 @@ impl NativeArcadeUiApp {
 
     fn resolve_header_background_path(&self) -> Option<PathBuf> {
         self.resolve_db_asset_path("/system-logos/headerbackground.png")
+    }
+
+    fn resolve_header_title_path(&self) -> Option<PathBuf> {
+        self.resolve_db_asset_path("headerTitle.png")
+    }
+
+    pub(crate) fn header_title_texture(
+        &mut self,
+        ctx: &egui::Context,
+    ) -> Option<TextureHandle> {
+        let path = self.resolve_header_title_path()?;
+        Self::load_texture_from_path(
+            &mut self.assets.background_textures,
+            &mut self.assets.image_load_failures,
+            ctx,
+            path,
+            "header-title",
+            egui::TextureOptions::LINEAR,
+        )
     }
 
     pub(crate) fn resolve_system_background_path(&self) -> Option<PathBuf> {

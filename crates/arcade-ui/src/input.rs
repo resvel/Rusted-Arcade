@@ -286,8 +286,8 @@ impl NativeArcadeUiApp {
     }
 
     pub(crate) fn sync_controller_mapping_editor(&mut self) {
-        let system = self.active_system().to_string();
-        if system == "ALL" {
+        let system = self.state.controller_mapping.input_system.clone();
+        if system == "ALL" || system.is_empty() {
             return;
         }
 
@@ -325,8 +325,8 @@ impl NativeArcadeUiApp {
     }
 
     pub(crate) fn reset_controller_mapping_editor_to_defaults(&mut self) {
-        let system = self.active_system().to_string();
-        if system == "ALL" {
+        let system = self.state.controller_mapping.input_system.clone();
+        if system == "ALL" || system.is_empty() {
             return;
         }
 
@@ -338,8 +338,8 @@ impl NativeArcadeUiApp {
     }
 
     pub(crate) fn save_controller_mapping_from_editor(&mut self) {
-        let system = self.active_system().to_string();
-        if system == "ALL" {
+        let system = self.state.controller_mapping.input_system.clone();
+        if system == "ALL" || system.is_empty() {
             self.state.status =
                 String::from("Choose a specific system before saving a controller mapping.");
             return;
@@ -849,8 +849,6 @@ impl NativeArcadeUiApp {
                 MenuNavDirection::Down => {
                     self.state.menu_nav.focus_region = if self.filters_panel_expanded() {
                         MenuFocusRegion::FiltersSystem
-                    } else if self.controller_mapping_panel_visible() {
-                        MenuFocusRegion::ControllerMappingToggle
                     } else if self.current_browse_grid_source().is_some() {
                         MenuFocusRegion::Grid
                     } else {
@@ -881,29 +879,11 @@ impl NativeArcadeUiApp {
                 let entering_grid = matches!(direction, MenuNavDirection::Down);
                 self.state.menu_nav.move_alpha_filter(direction, alpha_last);
                 if entering_grid {
-                    if self.controller_mapping_panel_visible() {
-                        self.state.menu_nav.focus_region = MenuFocusRegion::ControllerMappingToggle;
-                    } else if let Some(source) = self.current_browse_grid_source() {
+                    if let Some(source) = self.current_browse_grid_source() {
                         self.repair_grid_selection(source);
                     }
                 }
             }
-            MenuFocusRegion::ControllerMappingToggle => match direction {
-                MenuNavDirection::Up => {
-                    self.state.menu_nav.focus_region = if self.filters_panel_expanded() {
-                        MenuFocusRegion::FiltersAlpha
-                    } else {
-                        MenuFocusRegion::FiltersToggle
-                    };
-                }
-                MenuNavDirection::Down => {
-                    if let Some(source) = self.current_browse_grid_source() {
-                        self.state.menu_nav.focus_region = MenuFocusRegion::Grid;
-                        self.repair_grid_selection(source);
-                    }
-                }
-                MenuNavDirection::Left | MenuNavDirection::Right => {}
-            },
             MenuFocusRegion::ManageHeader
             | MenuFocusRegion::ManageScope
             | MenuFocusRegion::ManageActions
@@ -938,10 +918,7 @@ impl NativeArcadeUiApp {
                         if self.grid_len(source) == 0
                             || self.active_grid_index(source) < metrics.columns
                         {
-                            if self.controller_mapping_panel_visible() {
-                                self.state.menu_nav.focus_region =
-                                    MenuFocusRegion::ControllerMappingToggle;
-                            } else if matches!(
+                            if matches!(
                                 self.state.current_view,
                                 crate::app::AppView::Home | crate::app::AppView::Library
                             ) {
@@ -1012,9 +989,6 @@ impl NativeArcadeUiApp {
             MenuFocusRegion::Grid => {
                 self.launch_selected_rom();
             }
-            MenuFocusRegion::ControllerMappingToggle => {
-                self.state.controller_mapping.toggle_expanded();
-            }
             MenuFocusRegion::ManageHeader
             | MenuFocusRegion::ManageScope
             | MenuFocusRegion::ManageActions
@@ -1044,7 +1018,6 @@ impl NativeArcadeUiApp {
         self.state.menu_nav.step_back_focus(
             self.state.current_view,
             self.filters_panel_expanded(),
-            self.controller_mapping_panel_visible(),
         );
     }
 
@@ -1231,7 +1204,6 @@ impl NativeArcadeUiApp {
             MenuFocusRegion::FiltersToggle
             | MenuFocusRegion::FiltersSystem
             | MenuFocusRegion::FiltersAlpha
-            | MenuFocusRegion::ControllerMappingToggle
             | MenuFocusRegion::Grid
             | MenuFocusRegion::SettingsAppConfigCoreTab
             | MenuFocusRegion::SettingsAppConfigCoreVariable
@@ -1289,7 +1261,6 @@ impl NativeArcadeUiApp {
             MenuFocusRegion::FiltersToggle
             | MenuFocusRegion::FiltersSystem
             | MenuFocusRegion::FiltersAlpha
-            | MenuFocusRegion::ControllerMappingToggle
             | MenuFocusRegion::Grid
             | MenuFocusRegion::SettingsAppConfigCoreTab
             | MenuFocusRegion::SettingsAppConfigCoreVariable
@@ -1315,7 +1286,6 @@ impl NativeArcadeUiApp {
             MenuFocusRegion::FiltersToggle
             | MenuFocusRegion::FiltersSystem
             | MenuFocusRegion::FiltersAlpha
-            | MenuFocusRegion::ControllerMappingToggle
             | MenuFocusRegion::Grid
             | MenuFocusRegion::SettingsAppConfigCoreTab
             | MenuFocusRegion::SettingsAppConfigCoreVariable

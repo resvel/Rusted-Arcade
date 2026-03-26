@@ -27,6 +27,8 @@ pub(crate) struct ControllerMappingState {
     pub(crate) loaded_threshold: f32,
     pub(crate) actions: BTreeMap<String, Option<MappingEntry>>,
     pub(crate) threshold: f32,
+    /// The system selected in the Input Settings panel (Settings view).
+    pub(crate) input_system: String,
     mapping_cache: HashMap<ControllerMappingCacheKey, StoredGamepadMapping>,
 }
 
@@ -43,6 +45,7 @@ impl Default for ControllerMappingState {
             loaded_threshold: default_mapping.threshold,
             actions: default_mapping.actions,
             threshold: default_mapping.threshold,
+            input_system: String::from("NES"),
             mapping_cache: HashMap::new(),
         }
     }

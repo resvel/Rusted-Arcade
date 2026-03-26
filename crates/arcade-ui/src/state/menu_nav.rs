@@ -9,7 +9,6 @@ pub(crate) enum MenuFocusRegion {
     FiltersToggle,
     FiltersSystem,
     FiltersAlpha,
-    ControllerMappingToggle,
     ManageHeader,
     ManageScope,
     ManageActions,
@@ -166,21 +165,10 @@ impl MenuNavState {
 
     pub(crate) fn normalize_filter_focus(
         &mut self,
-        current_view: AppView,
+        _current_view: AppView,
         filters_expanded: bool,
-        has_grid: bool,
+        _has_grid: bool,
     ) {
-        if !matches!(current_view, AppView::Library)
-            && self.focus_region == MenuFocusRegion::ControllerMappingToggle
-        {
-            self.focus_region = if has_grid {
-                MenuFocusRegion::Grid
-            } else {
-                MenuFocusRegion::TopNav
-            };
-            return;
-        }
-
         if filters_expanded {
             return;
         }
@@ -271,7 +259,6 @@ impl MenuNavState {
         &mut self,
         current_view: AppView,
         filters_expanded: bool,
-        controller_panel_visible: bool,
     ) {
         self.focus_region = match self.focus_region {
             MenuFocusRegion::TopNav => MenuFocusRegion::TopNav,
@@ -293,13 +280,6 @@ impl MenuNavState {
             }
             MenuFocusRegion::FiltersSystem => MenuFocusRegion::FiltersToggle,
             MenuFocusRegion::FiltersAlpha => MenuFocusRegion::FiltersSystem,
-            MenuFocusRegion::ControllerMappingToggle => {
-                if filters_expanded {
-                    MenuFocusRegion::FiltersAlpha
-                } else {
-                    MenuFocusRegion::FiltersToggle
-                }
-            }
             MenuFocusRegion::ManageHeader => MenuFocusRegion::TopNav,
             MenuFocusRegion::ManageScope => MenuFocusRegion::ManageHeader,
             MenuFocusRegion::ManageActions => MenuFocusRegion::ManageScope,
@@ -322,9 +302,7 @@ impl MenuNavState {
             }
             MenuFocusRegion::SettingsCoverSettings => MenuFocusRegion::SettingsAppConfigSave,
             MenuFocusRegion::Grid => {
-                if controller_panel_visible {
-                    MenuFocusRegion::ControllerMappingToggle
-                } else if matches!(current_view, AppView::Home | AppView::Library) {
+                if matches!(current_view, AppView::Home | AppView::Library) {
                     if filters_expanded {
                         MenuFocusRegion::FiltersAlpha
                     } else {

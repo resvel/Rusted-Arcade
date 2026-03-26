@@ -68,6 +68,45 @@ impl NativeArcadeUiApp {
         }
     }
 
+    /// Paint the title image as a decorative overlay anchored to the left of
+    /// the header.  `image_height` controls the rendered image size;
+    /// `layout_width` reserves horizontal space so nav buttons don't overlap.
+    /// The image is vertically centred on `anchor_rect` and the panel clips
+    /// the transparent padding, keeping the header compact.
+    fn paint_header_title(
+        &mut self,
+        ui: &mut egui::Ui,
+        anchor_rect: egui::Rect,
+        image_height: f32,
+        layout_width: f32,
+    ) {
+        if let Some(texture) = self.header_title_texture(ui.ctx()) {
+            let tex_size = texture.size_vec2();
+            let aspect = tex_size.x / tex_size.y;
+            let draw_width = image_height * aspect;
+            let draw_rect = egui::Rect::from_min_size(
+                egui::pos2(
+                    anchor_rect.left(),
+                    anchor_rect.top() - image_height * 0.38,
+                ),
+                egui::vec2(draw_width, image_height),
+            );
+            let uv = egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0));
+            ui.painter()
+                .image(texture.id(), draw_rect, uv, egui::Color32::WHITE);
+            // Reserve horizontal space only (height stays at layout row height)
+            ui.allocate_space(egui::vec2(layout_width, 0.0));
+        } else {
+            let palette = self.palette();
+            ui.label(
+                egui::RichText::new("Rusted Arcade")
+                    .size(18.0)
+                    .strong()
+                    .color(palette.text),
+            );
+        }
+    }
+
     pub(super) fn draw_top_nav(&mut self, ctx: &egui::Context) {
         let width = Self::viewport_width(ctx);
         let chrome_margin = Self::chrome_margin_for_width(width);
@@ -113,39 +152,15 @@ impl NativeArcadeUiApp {
                         egui::vec2(content_width, 0.0),
                         egui::Layout::top_down(egui::Align::Min),
                         |ui| {
-                            let show_all_logos = self.active_system() == "ALL";
-                            ui.set_min_height(if compact_layout {
-                                if show_all_logos {
-                                    118.0
-                                } else {
-                                    88.0
-                                }
-                            } else if show_all_logos {
-                                106.0
-                            } else {
-                                72.0
-                            });
-                            ui.spacing_mut().item_spacing = egui::vec2(14.0, 8.0);
+                            ui.set_min_height(if compact_layout { 36.0 } else { 40.0 });
+                            ui.spacing_mut().item_spacing = egui::vec2(14.0, 4.0);
 
                             if compact_layout {
-                                ui.vertical(|ui| {
-                                    ui.label(
-                                        egui::RichText::new("Rusted Arcade")
-                                            .heading()
-                                            .strong()
-                                            .color(palette.text),
-                                    );
-                                    ui.label(
-                                        egui::RichText::new(
-                                            "Default in Game Controls: hold 'ESC' to Exit. Controller Exit, Reset, Save, Load, and slot shortcuts can be customized per system in Library.",
-                                        )
-                                        .small()
-                                        .color(palette.text_muted),
-                                    );
-                                });
-                                ui.add_space(10.0);
                                 ui.horizontal_wrapped(|ui| {
-                                    ui.spacing_mut().item_spacing = egui::vec2(10.0, 8.0);
+                                    ui.spacing_mut().item_spacing = egui::vec2(8.0, 4.0);
+                                    self.paint_header_title(
+                                        ui, panel_rect, 264.0, 160.0,
+                                    );
                                     for (label, view, logical_index) in [
                                         ("Favorites", AppView::Home, 0usize),
                                         ("Library", AppView::Library, 1usize),
@@ -156,33 +171,21 @@ impl NativeArcadeUiApp {
                                             label,
                                             view,
                                             logical_index,
-                                            egui::vec2(92.0, 34.0),
-                                            13.0,
+                                            egui::vec2(82.0, 28.0),
+                                            12.5,
                                         );
                                     }
                                 });
                             } else {
                                 ui.horizontal(|ui| {
-                                    ui.vertical(|ui| {
-                                        ui.label(
-                                            egui::RichText::new("Rusted Arcade")
-                                                .heading()
-                                                .strong()
-                                                .color(palette.text),
-                                        );
-                                        ui.label(
-                                            egui::RichText::new(
-                                                "Default in Game Controls: hold 'ESC' to Exit. Controller Exit, Reset, Save, Load, and slot shortcuts can be customized per system in Library.",
-                                            )
-                                            .small()
-                                            .color(palette.text_muted),
-                                        );
-                                    });
-                                    ui.add_space(18.0);
+                                    self.paint_header_title(
+                                        ui, panel_rect, 312.0, 200.0,
+                                    );
+                                    ui.add_space(12.0);
                                     ui.with_layout(
                                         egui::Layout::right_to_left(egui::Align::Center),
                                         |ui| {
-                                            ui.spacing_mut().item_spacing = egui::vec2(12.0, 8.0);
+                                            ui.spacing_mut().item_spacing = egui::vec2(10.0, 4.0);
                                             for (label, view, logical_index) in [
                                                 ("Settings", AppView::Settings, 2usize),
                                                 ("Library", AppView::Library, 1usize),
@@ -193,23 +196,13 @@ impl NativeArcadeUiApp {
                                                     label,
                                                     view,
                                                     logical_index,
-                                                    egui::vec2(98.0, 36.0),
-                                                    13.5,
+                                                    egui::vec2(88.0, 30.0),
+                                                    13.0,
                                                 );
                                             }
                                         },
                                     );
                                 });
-                            }
-
-                            if show_all_logos {
-                                ui.add_space(if compact_layout { 4.0 } else { 6.0 });
-                                let banner_height = if compact_layout { 24.0 } else { 28.0 };
-                                let (rect, _) = ui.allocate_exact_size(
-                                    egui::vec2(ui.available_width(), banner_height),
-                                    egui::Sense::hover(),
-                                );
-                                self.draw_all_systems_header_logos(ui, ctx, rect);
                             }
                         },
                     );

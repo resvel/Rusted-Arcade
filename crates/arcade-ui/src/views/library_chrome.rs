@@ -107,7 +107,7 @@ impl NativeArcadeUiApp {
                         ),
                     ))
                     .corner_radius(egui::CornerRadius::same(255))
-                    .inner_margin(egui::Margin::symmetric(14, 9));
+                    .inner_margin(egui::Margin::symmetric(10, 6));
 
                 let rendered = frame.show(ui, |ui| {
                     if let Some(texture) = self.system_logo_texture(ctx, system) {
@@ -169,7 +169,7 @@ impl NativeArcadeUiApp {
             });
         } else {
             egui::ScrollArea::horizontal()
-                .max_height(54.0)
+                .max_height(44.0)
                 .id_salt("systems-scroll")
                 .show(ui, |ui| {
                     ui.set_min_width(row_width);
@@ -243,7 +243,7 @@ impl NativeArcadeUiApp {
     }
 
     pub(crate) fn draw_system_controller_panel(&mut self, ctx: &egui::Context, ui: &mut egui::Ui) {
-        let active_system = self.active_system().to_string();
+        let active_system = self.state.controller_mapping.input_system.clone();
         let available_width = ui.available_width();
         let wide_layout = available_width >= 620.0;
         let max_image_height = if active_system == "ARCADE" {
@@ -363,28 +363,13 @@ impl NativeArcadeUiApp {
                         } else {
                             "Expand"
                         };
-                        let focused =
-                            self.state.menu_nav.focus_region == MenuFocusRegion::ControllerMappingToggle;
-                        let focus_t = ui
-                            .ctx()
-                            .animate_bool(ui.id().with("controller-mapping-toggle-focus"), focused);
                         let toggle_button =
                             egui::Button::new(egui::RichText::new(toggle_label).size(11.5))
-                                .fill(if focused {
-                                    blend_color(palette.panel, palette.accent_soft, 0.32)
-                                } else {
-                                    palette.panel
-                                })
-                                .stroke(egui::Stroke::new(
-                                    if focused { 1.6 } else { 1.0 },
-                                    if focused { palette.accent } else { palette.border },
-                                ))
+                                .fill(palette.panel)
+                                .stroke(egui::Stroke::new(1.0, palette.border))
                                 .corner_radius(egui::CornerRadius::same(255));
                         let response = ui.add(toggle_button);
-                        let glow_t = if focused { 0.58 + focus_t * 0.42 } else { 0.0 };
-                        Self::paint_selection_glow(ui, response.rect, 255, palette.accent, glow_t);
                         if response.clicked() {
-                            self.state.menu_nav.focus_region = MenuFocusRegion::ControllerMappingToggle;
                             self.state.controller_mapping.toggle_expanded();
                         }
                     },
@@ -715,7 +700,7 @@ impl NativeArcadeUiApp {
             });
         } else {
             egui::ScrollArea::horizontal()
-                .max_height(34.0)
+                .max_height(28.0)
                 .id_salt("alpha-scroll")
                 .show(ui, |ui| {
                     ui.set_min_width(row_width);
@@ -741,8 +726,8 @@ impl NativeArcadeUiApp {
         let focus_t = ui
             .ctx()
             .animate_bool(ui.id().with(("alpha-pill-focus", value)), focused);
-        let button = egui::Button::new(egui::RichText::new(value).size(11.0).strong())
-            .min_size(egui::vec2(32.0, 24.0))
+        let button = egui::Button::new(egui::RichText::new(value).size(10.5).strong())
+            .min_size(egui::vec2(28.0, 20.0))
             .fill(if selected {
                 palette.accent_soft
             } else if focused {

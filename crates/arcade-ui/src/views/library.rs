@@ -1,6 +1,6 @@
 use eframe::egui;
 
-use crate::app::{AppView, GridSource, NativeArcadeUiApp};
+use crate::app::{GridSource, NativeArcadeUiApp};
 use crate::state::MenuFocusRegion;
 
 impl NativeArcadeUiApp {
@@ -14,20 +14,6 @@ impl NativeArcadeUiApp {
             self.filters_panel_expanded(),
             self.current_browse_grid_source().is_some(),
         );
-
-        if self.state.menu_nav.focus_region == MenuFocusRegion::ControllerMappingToggle
-            && !self.controller_mapping_panel_visible()
-        {
-            self.state.menu_nav.focus_region = if self.filters_panel_expanded() {
-                MenuFocusRegion::FiltersAlpha
-            } else {
-                MenuFocusRegion::FiltersToggle
-            };
-        }
-    }
-
-    pub(crate) fn controller_mapping_panel_visible(&self) -> bool {
-        self.state.current_view == AppView::Library && self.active_system() != "ALL"
     }
 
     fn filters_panel_summary(&self) -> String {
@@ -115,11 +101,11 @@ impl NativeArcadeUiApp {
                         return;
                     }
 
-                    ui.add_space(2.0);
+                    ui.add_space(1.0);
                     system_changed = self.draw_system_toolbar(ctx, ui);
-                    ui.add_space(2.0);
+                    ui.add_space(1.0);
                     alpha_changed = self.draw_alpha_toolbar(ui);
-                    ui.add_space(4.0);
+                    ui.add_space(2.0);
 
                     let search_band_width = ui.available_width().min(620.0);
                     ui.horizontal(|ui| {
@@ -142,7 +128,7 @@ impl NativeArcadeUiApp {
                                     let search_width =
                                         (ui.available_width() * 0.5).clamp(220.0, 360.0);
                                     let search_response = ui.add_sized(
-                                        [search_width, 30.0],
+                                        [search_width, 24.0],
                                         egui::TextEdit::singleline(&mut self.state.library.search)
                                             .hint_text("Title, manufacturer, genre"),
                                     );
@@ -232,30 +218,6 @@ impl NativeArcadeUiApp {
             self.state.library.visible_rom_ids.len(),
             "titles loaded",
         );
-        if self.active_system() != "ALL" {
-            ui.add_space(6.0);
-            let section_width = ui.available_width();
-            let content_width = Self::content_band_width_for(section_width);
-            let side_gutter = ((section_width - content_width) * 0.5).max(0.0);
-
-            ui.horizontal(|ui| {
-                if side_gutter > 0.0 {
-                    ui.add_space(side_gutter);
-                }
-
-                ui.allocate_ui_with_layout(
-                    egui::vec2(content_width, 0.0),
-                    egui::Layout::top_down(egui::Align::Min),
-                    |ui| {
-                        self.draw_system_controller_panel(ctx, ui);
-                    },
-                );
-
-                if side_gutter > 0.0 {
-                    ui.add_space(side_gutter);
-                }
-            });
-        }
 
         let desired_page_size =
             self.desired_library_page_size(ui.available_width(), ui.available_height());
@@ -273,11 +235,7 @@ impl NativeArcadeUiApp {
         }
         self.apply_current_view_filter_change(system_changed, alpha_changed, apply_filters);
 
-        ui.add_space(if self.active_system() == "ALL" {
-            4.0
-        } else {
-            2.0
-        });
+        ui.add_space(4.0);
         if self.state.library.visible_rom_ids.is_empty() {
             self.panel_frame().show(ui, |ui| {
                 ui.label(
