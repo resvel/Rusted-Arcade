@@ -52,13 +52,8 @@ impl NativeArcadeUiApp {
     }
 
     pub(crate) fn draw_system_toolbar(&mut self, ctx: &egui::Context, ui: &mut egui::Ui) -> bool {
-        let palette = self.palette();
         let mut changed = false;
 
-        if self.active_system() == "ARCADE" {
-            self.draw_arcade_toolbar_banner(ctx, ui, &palette);
-            ui.add_space(4.0);
-        }
         let row_width = ui.available_width();
         let mut draw_pills = |ui: &mut egui::Ui, spacing: egui::Vec2| {
             ui.spacing_mut().item_spacing = spacing;
@@ -107,7 +102,7 @@ impl NativeArcadeUiApp {
                         ),
                     ))
                     .corner_radius(egui::CornerRadius::same(255))
-                    .inner_margin(egui::Margin::symmetric(10, 6));
+                    .inner_margin(egui::Margin::symmetric(6, 3));
 
                 let rendered = frame.show(ui, |ui| {
                     if let Some(texture) = self.system_logo_texture(ctx, system) {
@@ -133,7 +128,7 @@ impl NativeArcadeUiApp {
                                 } else {
                                     system.to_string()
                                 })
-                                .size(12.0)
+                                .size(11.0)
                                 .strong(),
                             )
                             .sense(egui::Sense::click()),
@@ -161,85 +156,31 @@ impl NativeArcadeUiApp {
         };
 
         if use_wrapped_system_toolbar(row_width) {
-            ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                ui.set_width(row_width);
-                ui.horizontal_wrapped(|ui| {
-                    draw_pills(ui, egui::vec2(12.0, 6.0));
-                });
+            let spacing_x = 7.0;
+            let pill_overhead = 14.0; // 2 * inner_margin(6) + ~2 stroke
+            let content_w: f32 = SYSTEM_FILTERS
+                .iter()
+                .map(|s| Self::system_logo_size(s).x + pill_overhead)
+                .sum::<f32>()
+                + (SYSTEM_FILTERS.len() as f32 - 1.0) * spacing_x;
+            let pad = ((row_width - content_w) * 0.5).max(0.0);
+            ui.horizontal(|ui| {
+                ui.add_space(pad);
+                draw_pills(ui, egui::vec2(spacing_x, 3.0));
             });
         } else {
             egui::ScrollArea::horizontal()
-                .max_height(44.0)
+                .max_height(24.0)
                 .id_salt("systems-scroll")
                 .show(ui, |ui| {
                     ui.set_min_width(row_width);
                     ui.horizontal_centered(|ui| {
-                        draw_pills(ui, egui::vec2(14.0, 6.0));
+                        draw_pills(ui, egui::vec2(8.0, 3.0));
                     });
                 });
         }
 
         changed
-    }
-
-    fn draw_arcade_toolbar_banner(
-        &mut self,
-        ctx: &egui::Context,
-        ui: &mut egui::Ui,
-        _palette: &ThemePalette,
-    ) {
-        let banner_height = if ui.available_width() >= 720.0 {
-            44.0
-        } else if ui.available_width() >= 420.0 {
-            38.0
-        } else {
-            32.0
-        };
-        let width = ui.available_width();
-        let (rect, _) =
-            ui.allocate_exact_size(egui::vec2(width, banner_height), egui::Sense::hover());
-        let uv = egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0));
-
-        for (path, anchor_x, max_w, max_h, alpha) in [
-            (
-                "/system-logos-web/Neo_Geo_logo.svg",
-                0.16_f32,
-                0.26_f32,
-                0.82_f32,
-                42_u8,
-            ),
-            (
-                "/system-logos-web/SNK_logo.svg",
-                0.5_f32,
-                0.16_f32,
-                0.5_f32,
-                32_u8,
-            ),
-            (
-                "/system-logos-web/SNK_Playmore_logo.svg",
-                0.82_f32,
-                0.3_f32,
-                0.62_f32,
-                38_u8,
-            ),
-        ] {
-            let Some(asset_path) = self.resolve_db_asset_path(path) else {
-                continue;
-            };
-            let Some(texture) = self.themed_art_texture(ctx, asset_path) else {
-                continue;
-            };
-            let max_size = egui::vec2((rect.width() * max_w).max(32.0), rect.height() * max_h);
-            let draw_size = fit_size(texture.size_vec2(), max_size);
-            let center = egui::pos2(rect.left() + rect.width() * anchor_x, rect.center().y);
-            let draw_rect = egui::Rect::from_center_size(center, draw_size);
-            ui.painter().image(
-                texture.id(),
-                draw_rect,
-                uv,
-                egui::Color32::from_rgba_premultiplied(255, 255, 255, alpha),
-            );
-        }
     }
 
     pub(crate) fn draw_system_controller_panel(&mut self, ctx: &egui::Context, ui: &mut egui::Ui) {
@@ -677,40 +618,101 @@ impl NativeArcadeUiApp {
         });
     }
 
-    pub(crate) fn draw_alpha_toolbar(&mut self, ui: &mut egui::Ui) -> bool {
+    pub(crate) fn draw_alpha_toolbar(
+        &mut self,
+        ui: &mut egui::Ui,
+        show_manage: bool,
+    ) -> bool {
         let palette = self.palette();
         let mut changed = false;
 
         let row_width = ui.available_width();
-        let mut draw_buttons = |ui: &mut egui::Ui, spacing: egui::Vec2| {
-            ui.spacing_mut().item_spacing = spacing;
-            for (index, value) in Self::alpha_filter_values().iter().copied().enumerate() {
-                if self.draw_alpha_button(ui, value, index, &palette) {
-                    changed = true;
-                }
-            }
-        };
 
         if use_wrapped_alpha_toolbar(row_width) {
-            ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                ui.set_width(row_width);
-                ui.horizontal_wrapped(|ui| {
-                    draw_buttons(ui, egui::vec2(6.0, 6.0));
-                });
+            let spacing_x = 3.0;
+            let single_w = 27.0_f32; // single-letter button: text + 2*button_padding + stroke
+            let wider_count = 2.0; // "ALL" and "0-9" are wider
+            let wider_w = 38.0; // approximate width of wider buttons
+            let n = ALPHA_FILTERS.len() as f32;
+            let content_w =
+                wider_count * wider_w + (n - wider_count) * single_w + (n - 1.0) * spacing_x;
+            let pad = ((row_width - content_w) * 0.5).max(0.0);
+            ui.horizontal(|ui| {
+                ui.add_space(pad);
+                ui.spacing_mut().item_spacing = egui::vec2(spacing_x, 3.0);
+                for (index, value) in Self::alpha_filter_values().iter().copied().enumerate() {
+                    if self.draw_alpha_button(ui, value, index, &palette) {
+                        changed = true;
+                    }
+                }
+                self.draw_manage_button_inline(ui, show_manage);
             });
         } else {
             egui::ScrollArea::horizontal()
-                .max_height(28.0)
+                .max_height(15.0)
                 .id_salt("alpha-scroll")
                 .show(ui, |ui| {
                     ui.set_min_width(row_width);
                     ui.horizontal_centered(|ui| {
-                        draw_buttons(ui, egui::vec2(8.0, 6.0));
+                        ui.spacing_mut().item_spacing = egui::vec2(4.0, 3.0);
+                        for (index, value) in
+                            Self::alpha_filter_values().iter().copied().enumerate()
+                        {
+                            if self.draw_alpha_button(ui, value, index, &palette) {
+                                changed = true;
+                            }
+                        }
+                        self.draw_manage_button_inline(ui, show_manage);
                     });
                 });
         }
 
         changed
+    }
+
+    fn draw_manage_button_inline(&mut self, ui: &mut egui::Ui, show: bool) {
+        if !show {
+            return;
+        }
+        let palette = self.palette();
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            let focused =
+                self.state.menu_nav.focus_region == MenuFocusRegion::LibraryManageButton;
+            let focus_t = ui
+                .ctx()
+                .animate_bool(ui.id().with("library-manage-button-focus"), focused);
+            let button = egui::Button::new("Manage")
+                .fill(if focused {
+                    palette.accent_soft
+                } else {
+                    palette.panel
+                })
+                .stroke(egui::Stroke::new(
+                    if focused { 1.6 } else { 1.0 },
+                    if focused {
+                        palette.accent
+                    } else {
+                        palette.border
+                    },
+                ))
+                .corner_radius(egui::CornerRadius::same(255));
+            let response = ui.add(button);
+            if focused {
+                Self::paint_selection_glow(
+                    ui,
+                    response.rect,
+                    255,
+                    palette.accent,
+                    0.58 + focus_t * 0.42,
+                );
+            }
+            if response.clicked() {
+                self.state.manage.open = true;
+                self.state.menu_nav.focus_region = MenuFocusRegion::ManageHeader;
+                self.refresh_manage_rows();
+                self.sync_manage_settings_from_services();
+            }
+        });
     }
 
     pub(crate) fn draw_alpha_button(
@@ -726,8 +728,8 @@ impl NativeArcadeUiApp {
         let focus_t = ui
             .ctx()
             .animate_bool(ui.id().with(("alpha-pill-focus", value)), focused);
-        let button = egui::Button::new(egui::RichText::new(value).size(10.5).strong())
-            .min_size(egui::vec2(28.0, 20.0))
+        let button = egui::Button::new(egui::RichText::new(value).size(10.0).strong())
+            .min_size(egui::vec2(15.0, 11.0))
             .fill(if selected {
                 palette.accent_soft
             } else if focused {

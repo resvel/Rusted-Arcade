@@ -11,6 +11,7 @@ impl NativeArcadeUiApp {
             ui,
             self.state.library.favorite_ids_filtered.len(),
             "favorites loaded",
+            false,
         );
         self.apply_current_view_filter_change(system_changed, alpha_changed, apply_filters);
 

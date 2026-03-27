@@ -1,7 +1,6 @@
 use eframe::egui;
 
 use crate::app::{GridSource, NativeArcadeUiApp};
-use crate::state::MenuFocusRegion;
 
 impl NativeArcadeUiApp {
     pub(crate) fn filters_panel_expanded(&self) -> bool {
@@ -16,33 +15,13 @@ impl NativeArcadeUiApp {
         );
     }
 
-    fn filters_panel_summary(&self) -> String {
-        let mut parts = Vec::new();
-
-        if self.state.library.system_filter != "ALL" {
-            parts.push(self.state.library.system_filter.clone());
-        }
-        if self.state.library.alpha_filter != "ALL" {
-            parts.push(format!("Starts with {}", self.state.library.alpha_filter));
-        }
-        let search = self.state.library.search.trim();
-        if !search.is_empty() {
-            parts.push(format!("Search: {search}"));
-        }
-
-        if parts.is_empty() {
-            String::from("All systems, all titles")
-        } else {
-            parts.join(" • ")
-        }
-    }
-
     pub(crate) fn draw_library_filters_panel(
         &mut self,
         ctx: &egui::Context,
         ui: &mut egui::Ui,
         _loaded_count: usize,
         _loaded_label: &str,
+        show_manage: bool,
     ) -> (bool, bool, bool) {
         let palette = self.palette();
         let mut system_changed = false;
@@ -62,91 +41,37 @@ impl NativeArcadeUiApp {
                 egui::vec2(toolbar_width, 0.0),
                 egui::Layout::top_down(egui::Align::Min),
                 |ui| {
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        let toggle_label = if self.state.library.filters_panel_collapsed {
-                            "Expand"
-                        } else {
-                            "Collapse"
-                        };
-                        let focused =
-                            self.state.menu_nav.focus_region == MenuFocusRegion::FiltersToggle;
-                        let focus_t = ui
-                            .ctx()
-                            .animate_bool(ui.id().with("filters-panel-toggle-focus"), focused);
-                        let button = egui::Button::new(toggle_label)
-                            .fill(palette.accent_soft)
-                            .stroke(egui::Stroke::new(
-                                if focused { 1.6 } else { 1.0 },
-                                palette.accent,
-                            ))
-                            .corner_radius(egui::CornerRadius::same(255));
-                        let response = ui.add(button);
-                        let glow_t = if focused { 0.58 + focus_t * 0.42 } else { 0.0 };
-                        Self::paint_selection_glow(ui, response.rect, 255, palette.accent, glow_t);
-                        if response.clicked() {
-                            self.state.menu_nav.focus_region = MenuFocusRegion::FiltersToggle;
-                            self.state.library.filters_panel_collapsed =
-                                !self.state.library.filters_panel_collapsed;
-                            self.normalize_filters_panel_focus();
-                        }
-                    });
-
-                    if self.state.library.filters_panel_collapsed {
-                        ui.add_space(3.0);
-                        ui.label(
-                            egui::RichText::new(self.filters_panel_summary())
-                                .small()
-                                .color(palette.text_muted),
-                        );
-                        return;
-                    }
-
-                    ui.add_space(1.0);
                     system_changed = self.draw_system_toolbar(ctx, ui);
                     ui.add_space(1.0);
-                    alpha_changed = self.draw_alpha_toolbar(ui);
-                    ui.add_space(2.0);
+                    alpha_changed = self.draw_alpha_toolbar(ui, show_manage);
+                    ui.add_space(1.0);
 
-                    let search_band_width = ui.available_width().min(620.0);
+                    // Estimate search row width to center it
+                    let search_width =
+                        (toolbar_width * 0.5).clamp(176.0, 308.0);
+                    let search_row_w = 40.0 + search_width + 4.0 + 80.0; // label + input + gap + button
+                    let pad = ((toolbar_width - search_row_w) * 0.5).max(0.0);
                     ui.horizontal(|ui| {
-                        let side_pad = ((ui.available_width() - search_band_width) * 0.5).max(0.0);
-                        if side_pad > 0.0 {
-                            ui.add_space(side_pad);
-                        }
-
-                        ui.allocate_ui_with_layout(
-                            egui::vec2(search_band_width, 0.0),
-                            egui::Layout::left_to_right(egui::Align::Center),
-                            |ui| {
-                                ui.horizontal_wrapped(|ui| {
-                                    ui.spacing_mut().item_spacing = egui::vec2(8.0, 5.0);
-                                    ui.label(
-                                        egui::RichText::new("Search")
-                                            .small()
-                                            .color(palette.text_muted),
-                                    );
-                                    let search_width =
-                                        (ui.available_width() * 0.5).clamp(220.0, 360.0);
-                                    let search_response = ui.add_sized(
-                                        [search_width, 24.0],
-                                        egui::TextEdit::singleline(&mut self.state.library.search)
-                                            .hint_text("Title, manufacturer, genre"),
-                                    );
-                                    let submit = search_response.lost_focus()
-                                        && ui.input(|i| i.key_pressed(egui::Key::Enter));
-                                    let button = egui::Button::new("Apply Filters")
-                                        .fill(palette.accent_soft)
-                                        .stroke(egui::Stroke::new(1.0, palette.accent))
-                                        .corner_radius(egui::CornerRadius::same(255));
-                                    if ui.add(button).clicked() || submit {
-                                        apply_filters = true;
-                                    }
-                                });
-                            },
+                        ui.add_space(pad);
+                        ui.spacing_mut().item_spacing = egui::vec2(4.0, 3.0);
+                        ui.label(
+                            egui::RichText::new("Search")
+                                .size(11.0)
+                                .color(palette.text_muted),
                         );
-
-                        if side_pad > 0.0 {
-                            ui.add_space(side_pad);
+                        let search_response = ui.add_sized(
+                            [search_width, 18.0],
+                            egui::TextEdit::singleline(&mut self.state.library.search)
+                                .hint_text("Title, manufacturer, genre"),
+                        );
+                        let submit = search_response.lost_focus()
+                            && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                        let button = egui::Button::new("Apply Filters")
+                            .fill(palette.accent_soft)
+                            .stroke(egui::Stroke::new(1.0, palette.accent))
+                            .corner_radius(egui::CornerRadius::same(255));
+                        if ui.add(button).clicked() || submit {
+                            apply_filters = true;
                         }
                     });
                 },
@@ -161,62 +86,19 @@ impl NativeArcadeUiApp {
     }
 
     pub(crate) fn draw_library(&mut self, ctx: &egui::Context, ui: &mut egui::Ui) {
-        let palette = self.palette();
-        ui.horizontal(|ui| {
-            if !self.state.manage.open {
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    let focused =
-                        self.state.menu_nav.focus_region == MenuFocusRegion::LibraryManageButton;
-                    let focus_t = ui
-                        .ctx()
-                        .animate_bool(ui.id().with("library-manage-button-focus"), focused);
-                    let button = egui::Button::new("Manage")
-                        .fill(if focused {
-                            palette.accent_soft
-                        } else {
-                            palette.panel
-                        })
-                        .stroke(egui::Stroke::new(
-                            if focused { 1.6 } else { 1.0 },
-                            if focused {
-                                palette.accent
-                            } else {
-                                palette.border
-                            },
-                        ))
-                        .corner_radius(egui::CornerRadius::same(255));
-                    let response = ui.add(button);
-                    if focused {
-                        Self::paint_selection_glow(
-                            ui,
-                            response.rect,
-                            255,
-                            palette.accent,
-                            0.58 + focus_t * 0.42,
-                        );
-                    }
-                    if response.clicked() {
-                        self.state.menu_nav.focus_region = MenuFocusRegion::LibraryManageButton;
-                        self.state.manage.open = true;
-                        self.state.menu_nav.focus_region = MenuFocusRegion::ManageHeader;
-                        self.refresh_manage_rows();
-                        self.sync_manage_settings_from_services();
-                    }
-                });
-            }
-        });
-        ui.add_space(6.0);
 
         if self.state.manage.open {
             self.draw_manage_library(ctx, ui);
             return;
         }
 
+        let show_manage = !self.state.manage.open;
         let (system_changed, alpha_changed, apply_filters) = self.draw_library_filters_panel(
             ctx,
             ui,
             self.state.library.visible_rom_ids.len(),
             "titles loaded",
+            show_manage,
         );
 
         let desired_page_size =
@@ -239,7 +121,7 @@ impl NativeArcadeUiApp {
         if self.state.library.visible_rom_ids.is_empty() {
             self.panel_frame().show(ui, |ui| {
                 ui.label(
-                    egui::RichText::new("No ROMs match current filters.").color(palette.text_muted),
+                    egui::RichText::new("No ROMs match current filters.").color(self.palette().text_muted),
                 );
             });
             return;

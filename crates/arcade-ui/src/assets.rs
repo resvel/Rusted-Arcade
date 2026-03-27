@@ -83,9 +83,6 @@ impl NativeArcadeUiApp {
             }
         }
 
-        if self.active_system() == "ARCADE" {
-            self.draw_arcade_side_art(ui, ctx, rect);
-        }
     }
 
     fn draw_all_systems_background(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
@@ -216,57 +213,6 @@ impl NativeArcadeUiApp {
         }
 
         drew_any
-    }
-
-    fn draw_arcade_side_art(&mut self, ui: &egui::Ui, ctx: &egui::Context, rect: egui::Rect) {
-        let lane_width = Self::content_band_width_for(rect.width()).min(rect.width() * 0.94);
-        let lane_rect = egui::Rect::from_center_size(
-            rect.center(),
-            egui::vec2((lane_width + 40.0).min(rect.width()), rect.height() * 0.98),
-        );
-        let gutter_gap = 20.0;
-        let left_width = (lane_rect.left() - rect.left() - gutter_gap).max(0.0);
-        let right_width = (rect.right() - lane_rect.right() - gutter_gap).max(0.0);
-
-        let left_gutter = (left_width >= 48.0).then_some(egui::Rect::from_min_max(
-            rect.left_top(),
-            egui::pos2(lane_rect.left() - gutter_gap, rect.bottom()),
-        ));
-        let right_gutter = (right_width >= 48.0).then_some(egui::Rect::from_min_max(
-            egui::pos2(lane_rect.right() + gutter_gap, rect.top()),
-            rect.right_bottom(),
-        ));
-
-        let cabinet = self.resolve_db_asset_path("/system-logos/arcade-neogeo-snk.png");
-        let handheld = self.resolve_db_asset_path("/system-logos/Neo-Geo_Pocket_Color.JPG");
-        let console = self.resolve_db_asset_path("/system-logos/Neo-Geo-AES-Console-Set.jpg");
-
-        if let Some(left_rect) = left_gutter {
-            let top_slot = egui::Rect::from_min_max(
-                left_rect.min,
-                egui::pos2(left_rect.max.x, left_rect.min.y + left_rect.height() * 0.54),
-            )
-            .shrink2(egui::vec2(8.0, 10.0));
-            let bottom_slot = egui::Rect::from_min_max(
-                egui::pos2(left_rect.min.x, left_rect.min.y + left_rect.height() * 0.56),
-                left_rect.max,
-            )
-            .shrink2(egui::vec2(8.0, 10.0));
-
-            if let Some(path) = cabinet.as_ref() {
-                self.paint_fitted_accent_texture(ui, ctx, top_slot, path, 104);
-            }
-            if let Some(path) = handheld.as_ref() {
-                self.paint_fitted_accent_texture(ui, ctx, bottom_slot, path, 84);
-            }
-        }
-
-        if let Some(right_rect) = right_gutter {
-            let slot = right_rect.shrink2(egui::vec2(8.0, 14.0));
-            if let Some(path) = console.as_ref() {
-                self.paint_fitted_accent_texture(ui, ctx, slot, path, 88);
-            }
-        }
     }
 
     fn paint_fitted_accent_texture(
@@ -620,14 +566,14 @@ impl NativeArcadeUiApp {
 
     pub(crate) fn system_logo_size(system: &str) -> Vec2 {
         match system {
-            "NES" => egui::vec2(102.0, 32.0),
-            "SNES" => egui::vec2(112.0, 32.0),
-            "GENESIS" => egui::vec2(112.0, 32.0),
-            "GB" => egui::vec2(96.0, 32.0),
-            "GBA" => egui::vec2(132.0, 32.0),
-            "N64" => egui::vec2(88.0, 32.0),
-            "ARCADE" => egui::vec2(104.0, 28.0),
-            _ => egui::vec2(76.0, 28.0),
+            "NES" => egui::vec2(56.0, 18.0),
+            "SNES" => egui::vec2(62.0, 18.0),
+            "GENESIS" => egui::vec2(62.0, 18.0),
+            "GB" => egui::vec2(53.0, 18.0),
+            "GBA" => egui::vec2(73.0, 18.0),
+            "N64" => egui::vec2(48.0, 18.0),
+            "ARCADE" => egui::vec2(57.0, 15.0),
+            _ => egui::vec2(42.0, 15.0),
         }
     }
 

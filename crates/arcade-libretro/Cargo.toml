@@ -8,6 +8,9 @@ license.workspace = true
 default = []
 audio = ["dep:cpal"]
 
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(feature, values("cargo-clippy"))'] }
+
 [dependencies]
 anyhow.workspace = true
 thiserror.workspace = true
