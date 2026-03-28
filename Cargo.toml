@@ -45,6 +45,7 @@ zip = { version = "2.2", default-features = false, features = ["deflate"] }
 objc = "0.2"
 sha1 = "0.10"
 ureq = { version = "2.12", features = ["json"] }
+rfd = "0.15"
 
 [profile.dev]
 opt-level = 1

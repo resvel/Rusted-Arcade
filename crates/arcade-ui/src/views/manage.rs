@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 
 use arcade_domain::{
@@ -187,15 +187,36 @@ impl NativeArcadeUiApp {
             ui.heading("App Configuration");
             ui.add_space(6.0);
 
-            draw_path_row(ui, "ROM Root", &mut self.state.manage.settings_rom_root);
-            draw_path_row(ui, "DB Path", &mut self.state.manage.settings_db_path);
+            draw_path_row(
+                ui,
+                "ROM Root",
+                &mut self.state.manage.settings_rom_root,
+                PathPickerKind::Directory,
+            );
+            draw_path_row(
+                ui,
+                "DB Path",
+                &mut self.state.manage.settings_db_path,
+                PathPickerKind::File,
+            );
             draw_path_row(
                 ui,
                 "Save State Root",
                 &mut self.state.manage.settings_save_state_root,
+                PathPickerKind::Directory,
             );
-            draw_path_row(ui, "Core Root", &mut self.state.manage.settings_core_root);
-            draw_path_row(ui, "BIOS Root", &mut self.state.manage.settings_bios_root);
+            draw_path_row(
+                ui,
+                "Core Root",
+                &mut self.state.manage.settings_core_root,
+                PathPickerKind::Directory,
+            );
+            draw_path_row(
+                ui,
+                "BIOS Root",
+                &mut self.state.manage.settings_bios_root,
+                PathPickerKind::Directory,
+            );
 
             ui.add_space(8.0);
             ui.label(
@@ -1162,12 +1183,64 @@ fn scrape_system_values() -> [&'static str; 7] {
     ["NES", "SNES", "GENESIS", "GB", "GBA", "N64", "ARCADE"]
 }
 
-fn draw_path_row(ui: &mut egui::Ui, label: &str, value: &mut String) {
-    ui.horizontal_wrapped(|ui| {
-        ui.label(label);
-        let width = ui.available_width().max(280.0);
-        ui.add_sized([width, 28.0], egui::TextEdit::singleline(value));
+#[derive(Clone, Copy)]
+enum PathPickerKind {
+    Directory,
+    File,
+}
+
+fn draw_path_row(ui: &mut egui::Ui, label: &str, value: &mut String, picker_kind: PathPickerKind) {
+    ui.horizontal(|ui| {
+        let label_width = 120.0;
+        let browse_width = 88.0;
+        let spacing = ui.spacing().item_spacing.x;
+
+        ui.add_sized([label_width, 28.0], egui::Label::new(label));
+        let field_width = (ui.available_width() - browse_width - spacing).max(160.0);
+        ui.add_sized([field_width, 28.0], egui::TextEdit::singleline(value));
+        let browse = ui.add_sized([browse_width, 28.0], egui::Button::new("Browse..."));
+        if browse.clicked() {
+            if let Some(path) = pick_path_with_dialog(value, picker_kind) {
+                *value = path.display().to_string();
+            }
+        }
     });
+}
+
+fn pick_path_with_dialog(current_value: &str, picker_kind: PathPickerKind) -> Option<PathBuf> {
+    let mut dialog = rfd::FileDialog::new();
+    let current = current_value.trim();
+    if !current.is_empty() {
+        let current_path = PathBuf::from(current);
+        let initial_dir = initial_dialog_dir(&current_path, picker_kind);
+        if let Some(dir) = initial_dir {
+            dialog = dialog.set_directory(dir);
+        }
+        if matches!(picker_kind, PathPickerKind::File) {
+            if let Some(name) = current_path.file_name().and_then(|name| name.to_str()) {
+                dialog = dialog.set_file_name(name);
+            }
+        }
+    }
+
+    match picker_kind {
+        PathPickerKind::Directory => dialog.pick_folder(),
+        // DB path may not exist yet; save-file mode supports choosing or creating one.
+        PathPickerKind::File => dialog.save_file(),
+    }
+}
+
+fn initial_dialog_dir(current_path: &Path, picker_kind: PathPickerKind) -> Option<PathBuf> {
+    match picker_kind {
+        PathPickerKind::Directory => {
+            if current_path.is_dir() {
+                Some(current_path.to_path_buf())
+            } else {
+                current_path.parent().map(Path::to_path_buf)
+            }
+        }
+        PathPickerKind::File => current_path.parent().map(Path::to_path_buf),
+    }
 }
 
 fn compact_path(value: &str, max_chars: usize) -> String {
