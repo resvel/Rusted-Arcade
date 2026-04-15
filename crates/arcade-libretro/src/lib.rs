@@ -946,6 +946,15 @@ impl LibretroHost {
             .has_external_present_window(&self.runtime)
     }
 
+    pub fn expects_external_vulkan_present_window(&self) -> bool {
+        self.runtime
+            .video_coordinator
+            .lock()
+            .current_selection()
+            .map(|selection| selection.allows_external_present)
+            .unwrap_or(false)
+    }
+
     pub fn vulkan_present_test_metrics(&self) -> VulkanPresentTestMetrics {
         let backend_kind = self.runtime.video_coordinator.lock().current_backend_kind();
         let external_window_created = self

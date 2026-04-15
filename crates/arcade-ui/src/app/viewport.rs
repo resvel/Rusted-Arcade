@@ -8,9 +8,13 @@ impl NativeArcadeUiApp {
         ctx: &egui::Context,
         session_active: bool,
         external_present_active: bool,
+        external_present_expected: bool,
         external_window_available: bool,
     ) {
-        let window_level = if session_active && external_window_available {
+        let external_window_session =
+            session_active && (external_present_expected || external_window_available);
+        let window_level = if external_window_session || (session_active && external_present_active)
+        {
             egui::viewport::WindowLevel::AlwaysOnBottom
         } else {
             egui::viewport::WindowLevel::Normal
@@ -20,7 +24,7 @@ impl NativeArcadeUiApp {
         self.sync_external_present_window_position(
             ctx,
             &viewport,
-            session_active && external_window_available,
+            session_active && external_present_active,
         );
 
         if !session_active
@@ -35,7 +39,9 @@ impl NativeArcadeUiApp {
             self.send_viewport_restore_cmds(ctx);
         }
 
-        let immersive_session = session_active && !external_present_active;
+        // If an external Vulkan window exists for this session, never push the main app
+        // into immersive fullscreen; fullscreen can trap the app above the external window.
+        let immersive_session = session_active && !external_window_session;
 
         if immersive_session {
             self.state.play.viewport_restore_stage = 0;
@@ -72,6 +78,15 @@ impl NativeArcadeUiApp {
             }
             self.state.play.viewport_enter_stage = 0;
             self.state.play.restore_maximized = false;
+            return;
+        }
+
+        if external_window_session && viewport.fullscreen.unwrap_or(false) {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(false));
+            self.send_viewport_restore_cmds(ctx);
+            self.state.play.viewport_immersive_applied = false;
+            self.state.play.viewport_restore_stage = Self::VIEWPORT_RESTORE_APPLY;
+            self.state.play.viewport_restore_frames = Self::VIEWPORT_RESTORE_RETRY_FRAMES;
             return;
         }
 

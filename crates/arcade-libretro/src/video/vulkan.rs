@@ -15,31 +15,75 @@ impl VideoBackend for VulkanBackend {
     }
 
     fn consume_frame(&mut self, runtime: &HostRuntime) -> Result<FrameDelivery> {
+        let debug_step = vulkan_debug_enabled()
+            .then(|| VULKAN_DEBUG_STEP_COUNTER.load(Ordering::Relaxed));
         let pending = runtime.callback_state.lock().latest_hw_frame.take();
         let Some(pending) = pending else {
-            return Ok(runtime
-                .callback_state
-                .lock()
-                .latest_frame
-                .take()
-                .map(FrameDelivery::CpuFrame)
-                .unwrap_or(FrameDelivery::NoFrame));
+            return Ok(match runtime.callback_state.lock().latest_frame.take() {
+                Some(frame) => FrameDelivery::CpuFrame(frame),
+                None => {
+                    if let Some(step) = debug_step.filter(|step| *step < 16) {
+                        info!(
+                            target: "arcade_libretro::vulkan_debug",
+                            "consume_frame step={} delivery=no_frame reason=missing_hw_and_cpu_frame",
+                            step
+                        );
+                    }
+                    FrameDelivery::NoFrame
+                }
+            });
         };
 
         match take_vulkan_render_frame(runtime, pending) {
             Ok(Some(frame)) => Ok(FrameDelivery::CpuFrame(frame)),
-            Ok(None)
-                if runtime
-                    .hw_render_state
-                    .lock()
-                    .vulkan
-                    .as_ref()
-                    .and_then(|vulkan| vulkan.present.as_ref())
-                    .is_some() =>
-            {
-                Ok(FrameDelivery::ExternalPresent)
+            Ok(None) => {
+                let (
+                    present_configured,
+                    pending_images,
+                    acquired_image_index,
+                    queue_present_attempts,
+                    queue_present_successes,
+                ) = {
+                    let state = runtime.hw_render_state.lock();
+                    let vulkan = state.vulkan.as_ref();
+                    let metrics = runtime.vulkan_present_metrics.lock();
+                    (
+                        vulkan.and_then(|vulkan| vulkan.present.as_ref()).is_some(),
+                        vulkan.map(|vulkan| vulkan.pending_images.len()).unwrap_or(0),
+                        vulkan
+                            .and_then(|vulkan| vulkan.present.as_ref())
+                            .and_then(|present| present.acquired_image_index),
+                        metrics.queue_present_attempts,
+                        metrics.queue_present_successes,
+                    )
+                };
+                if present_configured {
+                    if let Some(step) = debug_step.filter(|step| *step < 16) {
+                        info!(
+                            target: "arcade_libretro::vulkan_debug",
+                            "consume_frame step={} delivery=external_present pending_images={} acquired_image_index={:?} queue_present_attempts={} queue_present_successes={}",
+                            step,
+                            pending_images,
+                            acquired_image_index,
+                            queue_present_attempts,
+                            queue_present_successes
+                        );
+                    }
+                    Ok(FrameDelivery::ExternalPresent)
+                } else {
+                    if let Some(step) = debug_step.filter(|step| *step < 16) {
+                        info!(
+                            target: "arcade_libretro::vulkan_debug",
+                            "consume_frame step={} delivery=no_frame reason=present_state_unavailable pending_images={} queue_present_attempts={} queue_present_successes={}",
+                            step,
+                            pending_images,
+                            queue_present_attempts,
+                            queue_present_successes
+                        );
+                    }
+                    Ok(FrameDelivery::NoFrame)
+                }
             }
-            Ok(None) => Ok(FrameDelivery::NoFrame),
             Err(err) => Ok(FrameDelivery::Error(err.to_string())),
         }
     }

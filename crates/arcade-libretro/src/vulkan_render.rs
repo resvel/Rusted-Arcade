@@ -1583,9 +1583,36 @@ pub(super) fn present_vulkan_image(
     external_window: Option<ExternalVulkanWindowDescriptor>,
 ) -> Result<bool> {
     if vulkan.present.is_none() {
+        if vulkan_debug_enabled() {
+            let debug_step = VULKAN_DEBUG_STEP_COUNTER.load(Ordering::Relaxed);
+            if debug_step < 16 {
+                info!(
+                    target: "arcade_libretro::vulkan_debug",
+                    "no present step={} reason=present_state_unavailable pending_images={}",
+                    debug_step,
+                    vulkan.pending_images.len()
+                );
+            }
+        }
         return Ok(false);
     }
     if current_pending_vulkan_image(vulkan).is_none() {
+        if vulkan_debug_enabled() {
+            let debug_step = VULKAN_DEBUG_STEP_COUNTER.load(Ordering::Relaxed);
+            if debug_step < 16 {
+                let acquired_image_index = vulkan
+                    .present
+                    .as_ref()
+                    .and_then(|present| present.acquired_image_index);
+                info!(
+                    target: "arcade_libretro::vulkan_debug",
+                    "no present step={} reason=pending_image_missing pending_images={} acquired_image_index={:?}",
+                    debug_step,
+                    vulkan.pending_images.len(),
+                    acquired_image_index
+                );
+            }
+        }
         return Ok(false);
     }
 

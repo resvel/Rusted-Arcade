@@ -342,6 +342,8 @@ impl eframe::App for NativeArcadeUiApp {
         }
         let external_present_active =
             session_active && self.host.using_external_vulkan_present_window();
+        let external_present_expected =
+            session_active && self.host.expects_external_vulkan_present_window();
         let external_window_available =
             session_active && self.host.has_external_vulkan_present_window();
         let viewport_width = NativeArcadeUiApp::viewport_width(ctx);
@@ -350,6 +352,7 @@ impl eframe::App for NativeArcadeUiApp {
             ctx,
             session_active,
             external_present_active,
+            external_present_expected,
             external_window_available,
         );
 
