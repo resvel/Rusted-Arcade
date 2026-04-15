@@ -8,13 +8,12 @@ impl NativeArcadeUiApp {
         ctx: &egui::Context,
         session_active: bool,
         external_present_active: bool,
-        external_present_expected: bool,
+        _external_present_expected: bool,
         external_window_available: bool,
     ) {
         let external_window_session =
-            session_active && (external_present_expected || external_window_available);
-        let window_level = if external_window_session || (session_active && external_present_active)
-        {
+            session_active && (external_present_active || external_window_available);
+        let window_level = if external_window_session {
             egui::viewport::WindowLevel::AlwaysOnBottom
         } else {
             egui::viewport::WindowLevel::Normal

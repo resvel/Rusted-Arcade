@@ -10,11 +10,8 @@ pub(super) fn default_core_variables_for(
     // Step 1: Apply user-configurable settings from the core registry.
     if let Some(profile) = arcade_domain::core_profile_for(core_name) {
         for var_def in &profile.variables {
-            let value = arcade_domain::resolve_core_variable(
-                &emulation.core_settings,
-                core_name,
-                var_def,
-            );
+            let value =
+                arcade_domain::resolve_core_variable(&emulation.core_settings, core_name, var_def);
             insert_core_variable(&mut variables, var_def.key, &value);
         }
     }
@@ -43,7 +40,11 @@ fn apply_mupen64plus_next_forced(
     emulation: &EmulationConfig,
 ) {
     // Non-configurable baseline variables
-    insert_core_variable(variables, "mupen64plus-cpucore", "dynamic_recompiler");
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    let default_cpucore = "cached_interpreter";
+    #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+    let default_cpucore = "dynamic_recompiler";
+    insert_mupen64plus_next_cpucore_variable(variables, default_cpucore);
     insert_core_variable(variables, "mupen64plus-rsp-plugin", "hle");
     insert_core_variable(variables, "mupen64plus-BilinearMode", "3point");
     insert_core_variable(variables, "mupen64plus-MultiSampling", "0");
@@ -76,11 +77,17 @@ fn apply_mupen64plus_next_forced(
         );
     }
 
-    // Vulkan backend: run LLE ParaLLEl by default.
+    // Vulkan backend: keep ParaLLEl-RDP + ParaLLEl RSP for the most stable
+    // external-present behavior on macOS and other desktop platforms.
     if backend == VideoBackendKind::Vulkan {
         insert_core_variable(variables, "mupen64plus-rdp-plugin", "parallel");
         insert_core_variable(variables, "@mupen64plus-rdp-plugin", "parallel");
-        // ParaLLEl-RDP requires the Parallel RSP (LLE); HLE is incompatible.
+        #[cfg(target_os = "macos")]
+        {
+            // Native macOS Vulkan is more stable with ParaLLEl RSP in our external-present path.
+            insert_core_variable(variables, "mupen64plus-rsp-plugin", "parallel");
+        }
+        #[cfg(not(target_os = "macos"))]
         insert_core_variable(variables, "mupen64plus-rsp-plugin", "parallel");
     }
 }
@@ -137,6 +144,12 @@ fn apply_parallel_n64_forced(
                 .unwrap_or("1x");
             insert_core_variable(variables, "parallel-n64-parallel-rdp-upscaling", upscaling);
 
+            // Ensure dynarec is used on macOS Vulkan when not running under Rosetta
+            #[cfg(target_os = "macos")]
+            if !rosetta && backend == VideoBackendKind::Vulkan {
+                insert_core_variable(variables, "parallel-n64-cpucore", "dynamic_recompiler");
+            }
+
             #[cfg(target_os = "macos")]
             let can_apply_performance_preset = rosetta;
             #[cfg(not(target_os = "macos"))]
@@ -184,6 +197,11 @@ fn insert_core_variable(variables: &mut HashMap<String, CString>, key: &str, val
     variables.insert(String::from(key), value);
 }
 
+fn insert_mupen64plus_next_cpucore_variable(variables: &mut HashMap<String, CString>, value: &str) {
+    insert_core_variable(variables, "mupen64plus-cpu-core", value);
+    insert_core_variable(variables, "mupen64plus-cpucore", value);
+}
+
 fn parallel_n64_cpucore_override() -> Option<String> {
     std::env::var("ARCADE_PARALLEL_N64_CPUCORE")
         .ok()
@@ -227,7 +245,21 @@ fn apply_mupen64plus_next_env_overrides(variables: &mut HashMap<String, CString>
         .ok()
         .filter(|value| !value.is_empty())
     {
-        insert_core_variable(variables, "mupen64plus-cpucore", &value);
+        insert_mupen64plus_next_cpucore_variable(variables, &value);
+    }
+
+    if let Some(value) = std::env::var("ARCADE_MUPEN64PLUS_NEXT_COUNT_PER_OP")
+        .ok()
+        .filter(|value| !value.is_empty())
+    {
+        insert_core_variable(variables, "mupen64plus-CountPerOp", &value);
+    }
+
+    if let Some(value) = std::env::var("ARCADE_MUPEN64PLUS_NEXT_COUNT_PER_OP_DENOM_POT")
+        .ok()
+        .filter(|value| !value.is_empty())
+    {
+        insert_core_variable(variables, "mupen64plus-CountPerOpDenomPot", &value);
     }
 }
 
@@ -350,6 +382,12 @@ mod tests {
         let rsp = variables
             .get("mupen64plus-rsp-plugin")
             .expect("mupen64plus_next rsp override");
+        let cpucore = variables
+            .get("mupen64plus-cpucore")
+            .expect("mupen64plus_next cpucore override");
+        let cpu_core = variables
+            .get("mupen64plus-cpu-core")
+            .expect("mupen64plus_next cpu-core override");
         let upscaling = variables
             .get("mupen64plus-parallel-rdp-upscaling")
             .expect("mupen64plus_next parallel upscaling override");
@@ -374,10 +412,40 @@ mod tests {
         let gamma = variables
             .get("mupen64plus-parallel-rdp-gamma-dither")
             .expect("mupen64plus_next parallel gamma override");
+        let count_per_op = variables
+            .get("mupen64plus-CountPerOp")
+            .expect("mupen64plus_next CountPerOp override");
+        let count_per_op_denom = variables
+            .get("mupen64plus-CountPerOpDenomPot")
+            .expect("mupen64plus_next CountPerOpDenomPot override");
 
         assert_eq!(rdp.to_str().expect("utf8"), "parallel");
         assert_eq!(legacy_rdp.to_str().expect("utf8"), "parallel");
-        assert_eq!(rsp.to_str().expect("utf8"), "parallel");
+        #[cfg(target_os = "macos")]
+        let expected_rsp = if arcade_domain::is_running_under_rosetta() {
+            "parallel"
+        } else {
+            "cxd4"
+        };
+        #[cfg(not(target_os = "macos"))]
+        let expected_rsp = "parallel";
+        #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+        let expected_cpucore = "cached_interpreter";
+        #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+        let expected_cpucore = "dynamic_recompiler";
+        #[cfg(target_os = "macos")]
+        let expected_count_per_op = if arcade_domain::is_running_under_rosetta() {
+            "0"
+        } else {
+            "1"
+        };
+        #[cfg(not(target_os = "macos"))]
+        let expected_count_per_op = "0";
+        assert_eq!(rsp.to_str().expect("utf8"), expected_rsp);
+        assert_eq!(cpucore.to_str().expect("utf8"), expected_cpucore);
+        assert_eq!(cpu_core.to_str().expect("utf8"), expected_cpucore);
+        assert_eq!(count_per_op.to_str().expect("utf8"), expected_count_per_op);
+        assert_eq!(count_per_op_denom.to_str().expect("utf8"), "0");
         assert_eq!(upscaling.to_str().expect("utf8"), "1x");
         assert_eq!(sync.to_str().expect("utf8"), "false");
         assert_eq!(ssaa.to_str().expect("utf8"), "false");
@@ -390,8 +458,11 @@ mod tests {
 
     #[test]
     fn mupen64plus_next_vulkan_reads_upscaling_from_core_settings() {
-        let emulation =
-            emulation_with("mupen64plus_next", "mupen64plus-parallel-rdp-upscaling", "4x");
+        let emulation = emulation_with(
+            "mupen64plus_next",
+            "mupen64plus-parallel-rdp-upscaling",
+            "4x",
+        );
         let variables =
             default_core_variables_for("mupen64plus_next", VideoBackendKind::Vulkan, &emulation);
         let upscaling = variables
@@ -476,8 +547,11 @@ mod tests {
 
     #[test]
     fn default_core_variables_honor_parallel_n64_upscaling_override() {
-        let emulation =
-            emulation_with("mupen64plus_next", "mupen64plus-parallel-rdp-upscaling", "2x");
+        let emulation = emulation_with(
+            "mupen64plus_next",
+            "mupen64plus-parallel-rdp-upscaling",
+            "2x",
+        );
         let variables =
             default_core_variables_for("parallel_n64", VideoBackendKind::Vulkan, &emulation);
         let upscale = variables
@@ -485,6 +559,35 @@ mod tests {
             .expect("parallel rdp upscaling override");
 
         assert_eq!(upscale.to_str().expect("utf8"), "2x");
+    }
+
+    #[test]
+    fn mupen64plus_next_cpucore_env_override_updates_both_variable_names() {
+        let env_key = "ARCADE_MUPEN64PLUS_NEXT_CPUCORE";
+        let previous = std::env::var(env_key).ok();
+        std::env::set_var(env_key, "cached_interpreter");
+
+        let variables = default_core_variables_for(
+            "mupen64plus_next",
+            VideoBackendKind::Vulkan,
+            &EmulationConfig::default(),
+        );
+
+        if let Some(previous) = previous {
+            std::env::set_var(env_key, previous);
+        } else {
+            std::env::remove_var(env_key);
+        }
+
+        let cpucore = variables
+            .get("mupen64plus-cpucore")
+            .expect("mupen64plus cpucore override");
+        let cpu_core = variables
+            .get("mupen64plus-cpu-core")
+            .expect("mupen64plus cpu-core override");
+
+        assert_eq!(cpucore.to_str().expect("utf8"), "cached_interpreter");
+        assert_eq!(cpu_core.to_str().expect("utf8"), "cached_interpreter");
     }
 
     #[test]

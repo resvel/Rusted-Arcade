@@ -92,15 +92,10 @@ pub(super) fn hardware_render_frontend_available_for(runtime: &HostRuntime) -> b
         .is_some()
 }
 
-pub(super) fn vulkan_frontend_probe_available_for(runtime: &HostRuntime) -> bool {
-    runtime
-        .video_coordinator
-        .lock()
-        .frontend_capabilities()
-        .has_windowing_probe()
-}
-
-pub(super) fn hardware_render_preflight_available_for_core(runtime: &HostRuntime, core_name: &str) -> bool {
+pub(super) fn hardware_render_preflight_available_for_core(
+    runtime: &HostRuntime,
+    core_name: &str,
+) -> bool {
     let selection = runtime
         .video_coordinator
         .lock()
@@ -111,11 +106,7 @@ pub(super) fn hardware_render_preflight_available_for_core(runtime: &HostRuntime
             || core_has_embedded_software_video_fallback(core_name);
     }
 
-    if hardware_render_frontend_available_for(runtime) {
-        return true;
-    }
-
-    core_name == "parallel_n64" && vulkan_frontend_probe_available_for(runtime)
+    hardware_render_frontend_available_for(runtime)
 }
 
 pub(super) fn hardware_render_requested() -> bool {
@@ -157,7 +148,10 @@ pub(super) fn apply_runtime_geometry_update(runtime: &HostRuntime, geometry: Ret
     }
 }
 
-pub(super) fn resolve_vulkan_frame_size(runtime: &HostRuntime, pending: PendingHardwareFrame) -> (u32, u32) {
+pub(super) fn resolve_vulkan_frame_size(
+    runtime: &HostRuntime,
+    pending: PendingHardwareFrame,
+) -> (u32, u32) {
     if pending.width > 1 && pending.height > 1 {
         return (pending.width, pending.height);
     }
@@ -482,21 +476,22 @@ pub(super) fn ensure_hw_render_target(target_size: (u32, u32)) -> Result<()> {
 pub(super) fn take_vulkan_render_frame(
     runtime: &HostRuntime,
     pending: PendingHardwareFrame,
-) -> Result<Option<FrameBuffer>> {
+) -> Result<VulkanRenderFrameResult> {
     let frame_size = resolve_vulkan_frame_size(runtime, pending);
     let source_probe_size = (pending.width.max(1), pending.height.max(1));
-    if vulkan_debug_enabled()
-        && (frame_size.0 != pending.width || frame_size.1 != pending.height)
-        && VULKAN_READBACK_DEBUG_COUNTER.load(Ordering::Relaxed) < 16
-    {
-        info!(
-            target: "arcade_libretro::vulkan_debug",
-            "readback using fallback size pending={}x{} resolved={}x{}",
-            pending.width,
-            pending.height,
-            frame_size.0,
-            frame_size.1,
-        );
+    if vulkan_debug_enabled() && (frame_size.0 != pending.width || frame_size.1 != pending.height) {
+        let log_index = VULKAN_FALLBACK_SIZE_DEBUG_COUNTER.fetch_add(1, Ordering::Relaxed);
+        if log_index < 32 || log_index % 120 == 0 {
+            info!(
+                target: "arcade_libretro::vulkan_debug",
+                "readback using fallback size idx={} pending={}x{} resolved={}x{}",
+                log_index,
+                pending.width,
+                pending.height,
+                frame_size.0,
+                frame_size.1,
+            );
+        }
     }
     if vulkan_handoff_trace_enabled() && (source_probe_size.0 <= 1 || source_probe_size.1 <= 1) {
         let trace_index = VULKAN_HANDOFF_TRACE_COUNTER.fetch_add(1, Ordering::Relaxed);
@@ -528,28 +523,41 @@ pub(super) fn take_vulkan_render_frame(
     };
     debug_readback_vulkan_source_image(runtime, vulkan, source_probe_size)?;
     if present_vulkan_image(runtime, vulkan, frame_size, external_window)? {
-        return Ok(None);
+        return Ok(VulkanRenderFrameResult::ExternalPresent);
     }
     if vulkan_force_fallback_idle() {
         wait_for_vulkan_device_idle(vulkan)?;
     }
-    ensure_vulkan_readback_resources(vulkan, required_size)?;
 
     let Some(mut image) = take_current_pending_vulkan_image(vulkan) else {
-        return Ok(None);
+        return Ok(VulkanRenderFrameResult::NoFrame);
     };
 
-    let supported_format = match image.format {
-        vk::Format::R8G8B8A8_UNORM | vk::Format::R8G8B8A8_SRGB => Some(false),
-        vk::Format::B8G8R8A8_UNORM | vk::Format::B8G8R8A8_SRGB => Some(true),
-        _ => None,
+    #[derive(Clone, Copy)]
+    enum ReadbackFormat {
+        Rgba8,
+        Bgra8,
+        A1R5G5B5,
+        R5G6B5,
+    }
+    let readback_format = match image.format {
+        vk::Format::R8G8B8A8_UNORM | vk::Format::R8G8B8A8_SRGB => ReadbackFormat::Rgba8,
+        vk::Format::B8G8R8A8_UNORM | vk::Format::B8G8R8A8_SRGB => ReadbackFormat::Bgra8,
+        vk::Format::A1R5G5B5_UNORM_PACK16 => ReadbackFormat::A1R5G5B5,
+        vk::Format::R5G6B5_UNORM_PACK16 => ReadbackFormat::R5G6B5,
+        _ => {
+            return Err(anyhow!(
+                "unsupported Vulkan image format for readback: {:?}",
+                image.format
+            ));
+        }
     };
-    let Some(needs_bgra_swizzle) = supported_format else {
-        return Err(anyhow!(
-            "unsupported Vulkan image format for readback: {:?}",
-            image.format
-        ));
+    let src_bytes_per_pixel: usize = match readback_format {
+        ReadbackFormat::Rgba8 | ReadbackFormat::Bgra8 => 4,
+        ReadbackFormat::A1R5G5B5 | ReadbackFormat::R5G6B5 => 2,
     };
+    let staging_size = frame_size.0 as usize * frame_size.1 as usize * src_bytes_per_pixel;
+    ensure_vulkan_readback_resources(vulkan, staging_size)?;
 
     let readback = vulkan
         .readback
@@ -671,43 +679,75 @@ pub(super) fn take_vulkan_render_frame(
             .map_err(|err| anyhow!("failed waiting for Vulkan readback fence: {err:?}"))?;
     }
 
-    // Allocate without zeroing: copy_from_slice below immediately overwrites every byte,
-    // so the zero-init in vec![0_u8; n] is pure waste (~1MB/frame at 640×480).
-    let mut pixels = {
-        let mut v = Vec::with_capacity(required_size);
-        #[allow(clippy::uninit_vec)]
-        unsafe {
-            v.set_len(required_size);
-        }
-        v
-    };
+    // Map the staging buffer and convert to RGBA8888.
+    let mut pixels = vec![0u8; required_size];
     unsafe {
         let mapped = vulkan
             .device
             .map_memory(
                 staging_memory,
                 0,
-                required_size as u64,
+                staging_size as u64,
                 vk::MemoryMapFlags::empty(),
             )
             .map_err(|err| anyhow!("failed to map Vulkan staging memory: {err:?}"))?;
-        let src = std::slice::from_raw_parts(mapped as *const u8, required_size);
-        pixels.copy_from_slice(src);
+        let src = std::slice::from_raw_parts(mapped as *const u8, staging_size);
+        match readback_format {
+            ReadbackFormat::Rgba8 => {
+                pixels.copy_from_slice(src);
+            }
+            ReadbackFormat::Bgra8 => {
+                pixels.copy_from_slice(src);
+            }
+            ReadbackFormat::A1R5G5B5 => {
+                // 16-bit packed: bit15=A, bits14-10=R, bits9-5=G, bits4-0=B
+                let src16 = std::slice::from_raw_parts(mapped as *const u16, staging_size / 2);
+                for (i, &packed) in src16.iter().enumerate() {
+                    let r5 = ((packed >> 10) & 0x1F) as u8;
+                    let g5 = ((packed >> 5) & 0x1F) as u8;
+                    let b5 = (packed & 0x1F) as u8;
+                    let off = i * 4;
+                    pixels[off] = (r5 << 3) | (r5 >> 2);
+                    pixels[off + 1] = (g5 << 3) | (g5 >> 2);
+                    pixels[off + 2] = (b5 << 3) | (b5 >> 2);
+                    pixels[off + 3] = 255;
+                }
+            }
+            ReadbackFormat::R5G6B5 => {
+                // 16-bit packed: bits15-11=R, bits10-5=G, bits4-0=B
+                let src16 = std::slice::from_raw_parts(mapped as *const u16, staging_size / 2);
+                for (i, &packed) in src16.iter().enumerate() {
+                    let r5 = ((packed >> 11) & 0x1F) as u8;
+                    let g6 = ((packed >> 5) & 0x3F) as u8;
+                    let b5 = (packed & 0x1F) as u8;
+                    let off = i * 4;
+                    pixels[off] = (r5 << 3) | (r5 >> 2);
+                    pixels[off + 1] = (g6 << 2) | (g6 >> 4);
+                    pixels[off + 2] = (b5 << 3) | (b5 >> 2);
+                    pixels[off + 3] = 255;
+                }
+            }
+        }
         vulkan.device.unmap_memory(staging_memory);
     }
     drop(state);
 
-    // Vulkan readback frames are displayed as standalone game images in the UI. Some cores
-    // leave alpha undefined or zero, which makes the texture effectively invisible even though
-    // RGB data is valid.
-    if needs_bgra_swizzle {
-        for pixel in pixels.chunks_exact_mut(4) {
-            pixel.swap(0, 2);
-            pixel[3] = 255;
+    // For 32-bit formats, fix alpha and swizzle.  16-bit formats are already RGBA with
+    // alpha=255 from the conversion above.
+    match readback_format {
+        ReadbackFormat::Bgra8 => {
+            for pixel in pixels.chunks_exact_mut(4) {
+                pixel.swap(0, 2);
+                pixel[3] = 255;
+            }
         }
-    } else {
-        for pixel in pixels.chunks_exact_mut(4) {
-            pixel[3] = 255;
+        ReadbackFormat::Rgba8 => {
+            for pixel in pixels.chunks_exact_mut(4) {
+                pixel[3] = 255;
+            }
+        }
+        ReadbackFormat::A1R5G5B5 | ReadbackFormat::R5G6B5 => {
+            // Already converted to RGBA with alpha=255
         }
     }
 
@@ -745,13 +785,19 @@ pub(super) fn take_vulkan_render_frame(
         }
     }
 
-    Ok(Some(FrameBuffer {
+    Ok(VulkanRenderFrameResult::CpuFrame(FrameBuffer {
         width: frame_size.0,
         height: frame_size.1,
         pitch: frame_size.0 as usize * 4,
         data: pixels,
         pixel_format: PixelFormat::Rgba8888,
     }))
+}
+
+pub(super) enum VulkanRenderFrameResult {
+    CpuFrame(FrameBuffer),
+    ExternalPresent,
+    NoFrame,
 }
 
 pub(super) fn drain_frontend_gl_errors(runtime: &HostRuntime, stage: &str) {
@@ -828,11 +874,11 @@ pub(super) fn capture_frontend_gl_state(runtime: &HostRuntime) -> Option<Fronten
             framebuffer: NonZeroU32::new(gl.get_parameter_i32(glow::FRAMEBUFFER_BINDING) as u32)
                 .map(glow::NativeFramebuffer),
             read_framebuffer: NonZeroU32::new(
-                gl.get_parameter_i32(glow::READ_FRAMEBUFFER_BINDING) as u32,
+                gl.get_parameter_i32(glow::READ_FRAMEBUFFER_BINDING) as u32
             )
             .map(glow::NativeFramebuffer),
             draw_framebuffer: NonZeroU32::new(
-                gl.get_parameter_i32(glow::DRAW_FRAMEBUFFER_BINDING) as u32,
+                gl.get_parameter_i32(glow::DRAW_FRAMEBUFFER_BINDING) as u32
             )
             .map(glow::NativeFramebuffer),
             unpack_alignment: gl.get_parameter_i32(glow::UNPACK_ALIGNMENT),

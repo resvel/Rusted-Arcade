@@ -30,10 +30,19 @@ impl PendingVulkanImage {
 }
 
 pub(super) fn pending_vulkan_image_delay(vulkan: &VulkanInterfaceState) -> usize {
+    #[cfg(target_os = "macos")]
+    if vulkan.present.is_some() {
+        // External present on macOS should consume the latest callback image
+        // immediately; extra delay just increases latency and can look like
+        // intermittent visual stalls.
+        return 0;
+    }
     vulkan.sync_frames.saturating_sub(1).min(2) as usize
 }
 
-pub(super) fn current_pending_vulkan_image(vulkan: &VulkanInterfaceState) -> Option<&PendingVulkanImage> {
+pub(super) fn current_pending_vulkan_image(
+    vulkan: &VulkanInterfaceState,
+) -> Option<&PendingVulkanImage> {
     let delay = pending_vulkan_image_delay(vulkan);
     (vulkan.pending_images.len() > delay)
         .then(|| vulkan.pending_images.front())
@@ -173,6 +182,14 @@ impl ExternalVulkanWindow {
                 return;
             }
             unsafe {
+                let fullscreen_rect = NSRect {
+                    origin: NSPoint { x: 0.0, y: 0.0 },
+                    size: NSSize {
+                        width: self.width as f64,
+                        height: self.height as f64,
+                    },
+                };
+                let _: () = msg_send![self.ns_window, setFrame:fullscreen_rect display:YES];
                 let null: *mut Object = std::ptr::null_mut();
                 let _: () = msg_send![self.ns_window, makeKeyAndOrderFront: null];
             }
@@ -212,7 +229,11 @@ pub(super) fn vulkan_handoff_trace_enabled() -> bool {
     env_flag_enabled("ARCADE_VULKAN_HANDOFF_TRACE")
 }
 
-pub(super) fn vulkan_handoff_trace_should_log_callback(index: u64, width: u32, height: u32) -> bool {
+pub(super) fn vulkan_handoff_trace_should_log_callback(
+    index: u64,
+    width: u32,
+    height: u32,
+) -> bool {
     index < 64 || index % 120 == 0 || width <= 1 || height <= 1
 }
 
@@ -240,6 +261,14 @@ pub(super) fn vulkan_force_1x1_source_frame_test_mode() -> bool {
 
 pub(super) fn vulkan_fail_fast_disabled() -> bool {
     env_flag_enabled("ARCADE_VULKAN_DISABLE_FAIL_FAST")
+}
+
+pub(super) fn vulkan_fail_fast_sampling_enabled() -> bool {
+    // Keep the default present path minimal: fail-fast readback sampling is only
+    // enabled when explicitly requested (or when diagnostics/test modes are on).
+    env_flag_enabled("ARCADE_VULKAN_FAIL_FAST_SAMPLING")
+        || vulkan_debug_enabled()
+        || vulkan_test_metrics_enabled()
 }
 
 pub(super) fn vulkan_black_fail_fast_threshold_frames() -> u64 {
@@ -272,7 +301,13 @@ pub(super) fn vulkan_tiny_frame_fail_fast_threshold_frames() -> u64 {
     }
 }
 
-pub(super) fn vulkan_should_sample_for_fail_fast(runtime: &HostRuntime, already_non_black: bool) -> bool {
+pub(super) fn vulkan_should_sample_for_fail_fast(
+    runtime: &HostRuntime,
+    already_non_black: bool,
+) -> bool {
+    if !vulkan_fail_fast_sampling_enabled() {
+        return false;
+    }
     let threshold = vulkan_black_fail_fast_threshold_frames();
     if threshold == 0 || already_non_black {
         return false;
@@ -288,6 +323,16 @@ pub(super) fn vulkan_should_sample_for_fail_fast(runtime: &HostRuntime, already_
 
 pub(super) fn vulkan_force_fallback_idle() -> bool {
     match std::env::var("ARCADE_VULKAN_FORCE_FALLBACK_IDLE") {
+        Ok(value) => {
+            let normalized = value.trim().to_ascii_lowercase();
+            !matches!(normalized.as_str(), "0" | "false" | "off" | "no")
+        }
+        Err(_) => false,
+    }
+}
+
+pub(super) fn vulkan_force_present_idle() -> bool {
+    match std::env::var("ARCADE_VULKAN_FORCE_PRESENT_IDLE") {
         Ok(value) => {
             let normalized = value.trim().to_ascii_lowercase();
             !matches!(normalized.as_str(), "0" | "false" | "off" | "no")
@@ -933,7 +978,16 @@ pub(super) fn prepare_vulkan_sync_for_frame(runtime: &HostRuntime) -> Result<()>
         if let Some(image_index) = present.acquired_image_index {
             vulkan.sync_index = image_index;
             vulkan.sync_frames = present.images.len().max(1) as u32;
-            vulkan.waiting_for_core_wait_sync = true;
+            #[cfg(target_os = "macos")]
+            {
+                // On macOS some Vulkan cores (including mupen64plus-next) do not invoke
+                // wait_sync_index for present-mode images; blocking here adds a 50ms/frame stall.
+                vulkan.waiting_for_core_wait_sync = false;
+            }
+            #[cfg(not(target_os = "macos"))]
+            {
+                vulkan.waiting_for_core_wait_sync = true;
+            }
             return Ok(());
         }
 
@@ -962,7 +1016,15 @@ pub(super) fn prepare_vulkan_sync_for_frame(runtime: &HostRuntime) -> Result<()>
                     present.acquired_image_index = Some(image_index);
                     vulkan.sync_index = image_index;
                     vulkan.sync_frames = present.images.len().max(1) as u32;
-                    vulkan.waiting_for_core_wait_sync = true;
+                    #[cfg(target_os = "macos")]
+                    {
+                        // Mirror the non-blocking macOS behavior above for freshly-acquired images.
+                        vulkan.waiting_for_core_wait_sync = false;
+                    }
+                    #[cfg(not(target_os = "macos"))]
+                    {
+                        vulkan.waiting_for_core_wait_sync = true;
+                    }
                 }
                 return Ok(());
             }
@@ -1677,7 +1739,7 @@ pub(super) fn present_vulkan_image(
             .get_mut(image_index as usize)
             .ok_or_else(|| anyhow!("invalid Vulkan present frame index: {image_index}"))?;
 
-        let wait_semaphores = image.semaphores.clone();
+        let wait_semaphores = std::mem::take(&mut image.semaphores);
         let signal_semaphore = image.signal_semaphore.take();
         let image_subresource_range = image.subresource_range;
         let direct_image_view_sampling = should_sample_pending_vulkan_image_directly(&image);
@@ -2183,7 +2245,9 @@ pub(super) fn session_allows_external_vulkan_present(runtime: &HostRuntime) -> b
         .unwrap_or(false)
 }
 
-pub(super) fn ensure_vulkan_interface_state_for(runtime: &HostRuntime) -> std::result::Result<String, String> {
+pub(super) fn ensure_vulkan_interface_state_for(
+    runtime: &HostRuntime,
+) -> std::result::Result<String, String> {
     let negotiation = {
         let state = runtime.hw_render_state.lock();
         if let Some(vulkan) = state.vulkan.as_ref() {
@@ -2551,8 +2615,8 @@ pub(super) fn debug_readback_vulkan_source_image(
 
 #[cfg(test)]
 pub(super) fn probe_basic_vulkan_bootstrap() -> std::result::Result<String, String> {
-    let app_name = CString::new("Let's Play")
-        .map_err(|_| String::from("failed to build Vulkan app name"))?;
+    let app_name =
+        CString::new("Let's Play").map_err(|_| String::from("failed to build Vulkan app name"))?;
     let engine_name = CString::new("arcade-libretro")
         .map_err(|_| String::from("failed to build Vulkan engine name"))?;
 
@@ -2964,6 +3028,24 @@ pub(super) fn wait_for_unsignaled_vulkan_image(runtime: &HostRuntime) -> Result<
         }
 
         if should_sample_pending_vulkan_image_directly(image) {
+            return Ok(());
+        }
+
+        #[cfg(target_os = "macos")]
+        if vulkan.present.is_some() {
+            // Minimal-present mode: do not force device-idle synchronization every
+            // frame. This keeps frontend overhead low and lets the core own pacing.
+            if vulkan_force_present_idle() {
+                if vulkan_debug_enabled()
+                    && VULKAN_READBACK_DEBUG_COUNTER.load(Ordering::Relaxed) < 16
+                {
+                    info!(
+                        target: "arcade_libretro::vulkan_debug",
+                        "forcing Vulkan device idle for present-mode unsignaled image readiness"
+                    );
+                }
+                return wait_for_vulkan_device_idle(vulkan);
+            }
             return Ok(());
         }
 
