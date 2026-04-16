@@ -19,7 +19,9 @@ use crate::{
     state::{ControllerMappingCacheKey, MappingEditorScope, MenuFocusRegion, MenuNavDirection},
 };
 #[cfg(feature = "gamepad")]
-use gilrs::{Axis, Button, GamepadId};
+use gilrs::{ev::Code, Axis, Button, GamepadId};
+#[cfg(feature = "gamepad")]
+use std::collections::HashMap;
 
 const RETRO_DEVICE_JOYPAD: u32 = 1;
 const RETRO_DEVICE_ANALOG: u32 = 5;
@@ -49,6 +51,32 @@ const RETRO_DEVICE_ID_ANALOG_Y: u32 = 1;
 const DIGITAL_FALLBACK_THRESHOLD: f32 = 0.45;
 #[cfg(feature = "gamepad")]
 const BUTTON_ACTIVE_THRESHOLD: f32 = 0.10;
+#[cfg(feature = "gamepad")]
+const SONY_VENDOR_ID: u16 = 0x054c;
+#[cfg(feature = "gamepad")]
+const HID_PAGE_GENERIC_DESKTOP: u16 = 0x0001;
+#[cfg(feature = "gamepad")]
+const HID_PAGE_BUTTON: u16 = 0x0009;
+#[cfg(feature = "gamepad")]
+const HID_USAGE_GD_HATSWITCH_X: u16 = 0x0039;
+#[cfg(feature = "gamepad")]
+const HID_USAGE_GD_HATSWITCH_Y: u16 = 0x003A;
+#[cfg(feature = "gamepad")]
+const HID_USAGE_GD_DPAD_UP: u16 = 0x0090;
+#[cfg(feature = "gamepad")]
+const HID_USAGE_GD_DPAD_DOWN: u16 = 0x0091;
+#[cfg(feature = "gamepad")]
+const HID_USAGE_GD_DPAD_RIGHT: u16 = 0x0092;
+#[cfg(feature = "gamepad")]
+const HID_USAGE_GD_DPAD_LEFT: u16 = 0x0093;
+#[cfg(feature = "gamepad")]
+const HID_USAGE_BTN_DPAD_UP: u16 = 0x000c;
+#[cfg(feature = "gamepad")]
+const HID_USAGE_BTN_DPAD_DOWN: u16 = 0x000d;
+#[cfg(feature = "gamepad")]
+const HID_USAGE_BTN_DPAD_LEFT: u16 = 0x000e;
+#[cfg(feature = "gamepad")]
+const HID_USAGE_BTN_DPAD_RIGHT: u16 = 0x000f;
 
 #[derive(Default, Clone)]
 struct CanonicalPadState {
@@ -114,6 +142,17 @@ struct GamepadCapture {
     port: u32,
     identity: DetectedPadIdentity,
     state: CanonicalPadState,
+}
+
+#[cfg(feature = "gamepad")]
+#[derive(Default, Clone, Copy)]
+pub(crate) struct RawDpadState {
+    up: bool,
+    down: bool,
+    left: bool,
+    right: bool,
+    axis_x: f32,
+    axis_y: f32,
 }
 
 impl NativeArcadeUiApp {
@@ -517,8 +556,11 @@ impl NativeArcadeUiApp {
             return Vec::new();
         };
         let identity_cache = &mut self.gamepad_identity_cache;
+        let raw_dpad_state_cache = &mut self.raw_dpad_state_cache;
 
-        while gilrs.next_event().is_some() {}
+        while let Some(event) = gilrs.next_event() {
+            update_raw_dpad_state_from_event(raw_dpad_state_cache, event);
+        }
 
         let mut connected = gilrs
             .gamepads()
@@ -526,6 +568,7 @@ impl NativeArcadeUiApp {
             .map(|(id, _)| (usize::from(id), id))
             .collect::<Vec<_>>();
         connected.sort_by(|left, right| left.0.cmp(&right.0));
+        raw_dpad_state_cache.retain(|id, _| connected.iter().any(|(connected_id, _)| connected_id == id));
 
         let mut captures = Vec::with_capacity(connected.len().min(MAX_GAMEPAD_PLAYERS as usize));
         let mut input_debug = String::new();
@@ -535,49 +578,49 @@ impl NativeArcadeUiApp {
             .enumerate()
         {
             let gamepad = gilrs.gamepad(id);
+            let raw_dpad = raw_dpad_state_cache
+                .get(&usize::from(id))
+                .copied()
+                .unwrap_or_default();
+            let invert_vertical = should_invert_vertical_axis(gamepad.vendor_id(), gamepad.name());
             let has_dpad_buttons = gamepad_has_dpad_buttons(&gamepad);
+            let has_mapped_dpad_axes =
+                gamepad.axis_code(Axis::DPadX).is_some() || gamepad.axis_code(Axis::DPadY).is_some();
+            let has_raw_dpad_state = raw_dpad.up
+                || raw_dpad.down
+                || raw_dpad.left
+                || raw_dpad.right
+                || raw_dpad.axis_x.abs() >= DIGITAL_FALLBACK_THRESHOLD
+                || raw_dpad.axis_y.abs() >= DIGITAL_FALLBACK_THRESHOLD;
+            let has_explicit_dpad_input = has_dpad_buttons || has_mapped_dpad_axes || has_raw_dpad_state;
             let raw_dpad_x = gamepad.value(Axis::DPadX);
             let raw_dpad_y = gamepad.value(Axis::DPadY);
+            let effective_raw_dpad_x = merge_dpad_axis_value(raw_dpad_x, raw_dpad.axis_x);
+            let effective_raw_dpad_y = merge_dpad_axis_value(raw_dpad_y, raw_dpad.axis_y);
             let raw_left_x = gamepad.value(Axis::LeftStickX);
             let raw_left_y = gamepad.value(Axis::LeftStickY);
-            let dpad_x = raw_dpad_x;
-            let dpad_y = normalize_vertical_axis(raw_dpad_y);
+            let dpad_up_pressed = (has_dpad_buttons && button_down(&gamepad, Button::DPadUp))
+                || raw_dpad.up;
+            let dpad_down_pressed = (has_dpad_buttons && button_down(&gamepad, Button::DPadDown))
+                || raw_dpad.down;
+            let dpad_left_pressed = (has_dpad_buttons && button_down(&gamepad, Button::DPadLeft))
+                || raw_dpad.left;
+            let dpad_right_pressed = (has_dpad_buttons && button_down(&gamepad, Button::DPadRight))
+                || raw_dpad.right;
+            let dpad_x = effective_raw_dpad_x;
+            // gilrs already normalizes DPadY with platform reversal rules; applying
+            // our Sony stick inversion here would double-invert on macOS.
+            let dpad_y = normalize_dpad_vertical_axis(effective_raw_dpad_y);
             let left_x = raw_left_x;
-            let left_y = normalize_vertical_axis(raw_left_y);
-            let right_y = normalize_vertical_axis(gamepad.value(Axis::RightStickY));
+            let left_y = normalize_vertical_axis(raw_left_y, invert_vertical);
+            let right_y = normalize_vertical_axis(gamepad.value(Axis::RightStickY), invert_vertical);
+            let dpad_fallback_x = if has_explicit_dpad_input { 0.0 } else { left_x };
+            let dpad_fallback_y = if has_explicit_dpad_input { 0.0 } else { left_y };
             let state = CanonicalPadState {
-                dpad_up: dpad_direction_active(
-                    &gamepad,
-                    Button::DPadUp,
-                    has_dpad_buttons,
-                    dpad_y,
-                    left_y,
-                    false,
-                ),
-                dpad_down: dpad_direction_active(
-                    &gamepad,
-                    Button::DPadDown,
-                    has_dpad_buttons,
-                    dpad_y,
-                    left_y,
-                    true,
-                ),
-                dpad_left: dpad_direction_active(
-                    &gamepad,
-                    Button::DPadLeft,
-                    has_dpad_buttons,
-                    dpad_x,
-                    left_x,
-                    false,
-                ),
-                dpad_right: dpad_direction_active(
-                    &gamepad,
-                    Button::DPadRight,
-                    has_dpad_buttons,
-                    dpad_x,
-                    left_x,
-                    true,
-                ),
+                dpad_up: direction_active(dpad_up_pressed, dpad_y, dpad_fallback_y, false),
+                dpad_down: direction_active(dpad_down_pressed, dpad_y, dpad_fallback_y, true),
+                dpad_left: direction_active(dpad_left_pressed, dpad_x, dpad_fallback_x, false),
+                dpad_right: direction_active(dpad_right_pressed, dpad_x, dpad_fallback_x, true),
                 south: button_down(&gamepad, Button::South),
                 east: button_down(&gamepad, Button::East),
                 north: button_down(&gamepad, Button::North),
@@ -600,8 +643,8 @@ impl NativeArcadeUiApp {
             debug_gamepad_capture(
                 &gamepad,
                 has_dpad_buttons,
-                raw_dpad_x,
-                raw_dpad_y,
+                effective_raw_dpad_x,
+                effective_raw_dpad_y,
                 raw_left_x,
                 raw_left_y,
                 &state,
@@ -610,8 +653,8 @@ impl NativeArcadeUiApp {
                 input_debug = format_gamepad_capture_debug_line(
                     &gamepad,
                     has_dpad_buttons,
-                    raw_dpad_x,
-                    raw_dpad_y,
+                    effective_raw_dpad_x,
+                    effective_raw_dpad_y,
                     raw_left_x,
                     raw_left_y,
                     &state,
@@ -1811,25 +1854,200 @@ fn gamepad_has_dpad_buttons(gamepad: &gilrs::Gamepad<'_>) -> bool {
 }
 
 #[cfg(feature = "gamepad")]
-fn dpad_direction_active(
-    gamepad: &gilrs::Gamepad<'_>,
+fn update_raw_dpad_state_from_event(cache: &mut HashMap<usize, RawDpadState>, event: gilrs::Event) {
+    use gilrs::EventType;
+
+    let id = usize::from(event.id);
+    match event.event {
+        EventType::Disconnected => {
+            cache.remove(&id);
+        }
+        EventType::ButtonPressed(button, code) => {
+            let state = cache.entry(id).or_default();
+            apply_dpad_button_event(state, button, code, true);
+        }
+        EventType::ButtonReleased(button, code) => {
+            let state = cache.entry(id).or_default();
+            apply_dpad_button_event(state, button, code, false);
+        }
+        EventType::ButtonChanged(button, value, code) => {
+            let state = cache.entry(id).or_default();
+            apply_dpad_button_event(state, button, code, value >= BUTTON_ACTIVE_THRESHOLD);
+        }
+        EventType::AxisChanged(axis, value, code) => {
+            let state = cache.entry(id).or_default();
+            apply_dpad_axis_event(state, axis, code, value);
+        }
+        _ => {}
+    }
+}
+
+#[cfg(feature = "gamepad")]
+fn apply_dpad_button_event(
+    state: &mut RawDpadState,
     button: Button,
-    has_dpad_buttons: bool,
-    dpad_axis_value: f32,
-    fallback_axis_value: f32,
-    positive: bool,
-) -> bool {
-    let button_pressed = if has_dpad_buttons {
-        gamepad.is_pressed(button)
+    code: Code,
+    pressed: bool,
+) {
+    match button {
+        Button::DPadUp => {
+            state.up = pressed;
+            if pressed {
+                state.down = false;
+            }
+        }
+        Button::DPadDown => {
+            state.down = pressed;
+            if pressed {
+                state.up = false;
+            }
+        }
+        Button::DPadLeft => {
+            state.left = pressed;
+            if pressed {
+                state.right = false;
+            }
+        }
+        Button::DPadRight => {
+            state.right = pressed;
+            if pressed {
+                state.left = false;
+            }
+        }
+        Button::Unknown => {
+            let (page, usage) = decode_hid_page_usage(code);
+            if !apply_dpad_button_usage(state, page, usage, pressed) {
+                return;
+            }
+        }
+        _ => return,
+    }
+
+    state.axis_x = if state.left && !state.right {
+        -1.0
+    } else if state.right && !state.left {
+        1.0
     } else {
-        false
+        0.0
     };
-    direction_active(
-        button_pressed,
-        dpad_axis_value,
-        fallback_axis_value,
-        positive,
-    )
+    state.axis_y = if state.up && !state.down {
+        -1.0
+    } else if state.down && !state.up {
+        1.0
+    } else {
+        0.0
+    };
+}
+
+#[cfg(feature = "gamepad")]
+fn apply_dpad_axis_event(state: &mut RawDpadState, axis: Axis, code: Code, value: f32) {
+    match axis {
+        Axis::DPadX => state.axis_x = value,
+        Axis::DPadY => state.axis_y = value,
+        Axis::Unknown => {
+            let (page, usage) = decode_hid_page_usage(code);
+            if page == HID_PAGE_GENERIC_DESKTOP && usage == HID_USAGE_GD_HATSWITCH_X {
+                state.axis_x = value;
+            } else if page == HID_PAGE_GENERIC_DESKTOP && usage == HID_USAGE_GD_HATSWITCH_Y {
+                state.axis_y = value;
+            } else if apply_dpad_axis_usage(state, page, usage, value) {
+                // handled by explicit D-pad usage decoding.
+            } else {
+                return;
+            }
+        }
+        _ => return,
+    }
+    state.left = state.axis_x <= -DIGITAL_FALLBACK_THRESHOLD;
+    state.right = state.axis_x >= DIGITAL_FALLBACK_THRESHOLD;
+    state.up = state.axis_y <= -DIGITAL_FALLBACK_THRESHOLD;
+    state.down = state.axis_y >= DIGITAL_FALLBACK_THRESHOLD;
+}
+
+#[cfg(feature = "gamepad")]
+fn apply_dpad_axis_usage(state: &mut RawDpadState, page: u16, usage: u16, value: f32) -> bool {
+    let active = value >= BUTTON_ACTIVE_THRESHOLD;
+    match (page, usage) {
+        (HID_PAGE_BUTTON, HID_USAGE_BTN_DPAD_UP) | (HID_PAGE_GENERIC_DESKTOP, HID_USAGE_GD_DPAD_UP) => {
+            state.up = active;
+            state.down = false;
+            state.axis_y = if active { -1.0 } else { 0.0 };
+            true
+        }
+        (HID_PAGE_BUTTON, HID_USAGE_BTN_DPAD_DOWN)
+        | (HID_PAGE_GENERIC_DESKTOP, HID_USAGE_GD_DPAD_DOWN) => {
+            state.down = active;
+            state.up = false;
+            state.axis_y = if active { 1.0 } else { 0.0 };
+            true
+        }
+        (HID_PAGE_BUTTON, HID_USAGE_BTN_DPAD_LEFT)
+        | (HID_PAGE_GENERIC_DESKTOP, HID_USAGE_GD_DPAD_LEFT) => {
+            state.left = active;
+            state.right = false;
+            state.axis_x = if active { -1.0 } else { 0.0 };
+            true
+        }
+        (HID_PAGE_BUTTON, HID_USAGE_BTN_DPAD_RIGHT)
+        | (HID_PAGE_GENERIC_DESKTOP, HID_USAGE_GD_DPAD_RIGHT) => {
+            state.right = active;
+            state.left = false;
+            state.axis_x = if active { 1.0 } else { 0.0 };
+            true
+        }
+        _ => false,
+    }
+}
+
+#[cfg(feature = "gamepad")]
+fn decode_hid_page_usage(code: Code) -> (u16, u16) {
+    let raw = code.into_u32();
+    (((raw >> 16) & 0xFFFF) as u16, (raw & 0xFFFF) as u16)
+}
+
+#[cfg(feature = "gamepad")]
+fn apply_dpad_button_usage(state: &mut RawDpadState, page: u16, usage: u16, pressed: bool) -> bool {
+    match (page, usage) {
+        (HID_PAGE_BUTTON, HID_USAGE_BTN_DPAD_UP) | (HID_PAGE_GENERIC_DESKTOP, HID_USAGE_GD_DPAD_UP) => {
+            state.up = pressed;
+            if pressed {
+                state.down = false;
+            }
+            true
+        }
+        (HID_PAGE_BUTTON, HID_USAGE_BTN_DPAD_DOWN) | (HID_PAGE_GENERIC_DESKTOP, HID_USAGE_GD_DPAD_DOWN) => {
+            state.down = pressed;
+            if pressed {
+                state.up = false;
+            }
+            true
+        }
+        (HID_PAGE_BUTTON, HID_USAGE_BTN_DPAD_LEFT) | (HID_PAGE_GENERIC_DESKTOP, HID_USAGE_GD_DPAD_LEFT) => {
+            state.left = pressed;
+            if pressed {
+                state.right = false;
+            }
+            true
+        }
+        (HID_PAGE_BUTTON, HID_USAGE_BTN_DPAD_RIGHT)
+        | (HID_PAGE_GENERIC_DESKTOP, HID_USAGE_GD_DPAD_RIGHT) => {
+            state.right = pressed;
+            if pressed {
+                state.left = false;
+            }
+            true
+        }
+        _ => false,
+    }
+}
+
+#[cfg(feature = "gamepad")]
+fn merge_dpad_axis_value(mapped: f32, raw: f32) -> f32 {
+    if raw.abs() > mapped.abs() {
+        raw
+    } else {
+        mapped
+    }
 }
 
 #[cfg(feature = "gamepad")]
@@ -1950,7 +2168,25 @@ fn format_gamepad_capture_debug_line(
 }
 
 #[cfg(feature = "gamepad")]
-fn normalize_vertical_axis(value: f32) -> f32 {
+fn should_invert_vertical_axis(vendor_id: Option<u16>, name: &str) -> bool {
+    if vendor_id == Some(SONY_VENDOR_ID) {
+        return true;
+    }
+
+    let normalized_name = name.trim().to_ascii_lowercase();
+    normalized_name.contains("dualsense")
+        || normalized_name.contains("dualshock")
+        || normalized_name.contains("playstation")
+        || normalized_name == "wireless controller"
+}
+
+#[cfg(feature = "gamepad")]
+fn normalize_vertical_axis(value: f32, invert: bool) -> f32 {
+    if invert { -value } else { value }
+}
+
+#[cfg(feature = "gamepad")]
+fn normalize_dpad_vertical_axis(value: f32) -> f32 {
     value
 }
 
@@ -2041,8 +2277,81 @@ mod tests {
     #[cfg(feature = "gamepad")]
     #[test]
     fn normalize_vertical_axis_keeps_non_windows_convention() {
-        assert_eq!(normalize_vertical_axis(0.75), 0.75);
-        assert_eq!(normalize_vertical_axis(-0.75), -0.75);
+        assert_eq!(normalize_vertical_axis(0.75, false), 0.75);
+        assert_eq!(normalize_vertical_axis(-0.75, false), -0.75);
+    }
+
+    #[cfg(feature = "gamepad")]
+    #[test]
+    fn normalize_vertical_axis_inverts_when_requested() {
+        assert_eq!(normalize_vertical_axis(0.75, true), -0.75);
+        assert_eq!(normalize_vertical_axis(-0.75, true), 0.75);
+    }
+
+    #[cfg(feature = "gamepad")]
+    #[test]
+    fn normalize_dpad_vertical_axis_keeps_gilrs_axis_direction() {
+        assert_eq!(normalize_dpad_vertical_axis(1.0), 1.0);
+        assert_eq!(normalize_dpad_vertical_axis(-1.0), -1.0);
+    }
+
+    #[cfg(feature = "gamepad")]
+    #[test]
+    fn apply_dpad_button_usage_maps_hid_codes() {
+        let mut state = RawDpadState::default();
+        assert!(apply_dpad_button_usage(
+            &mut state,
+            HID_PAGE_BUTTON,
+            HID_USAGE_BTN_DPAD_LEFT,
+            true
+        ));
+        assert!(state.left);
+        assert!(apply_dpad_button_usage(
+            &mut state,
+            HID_PAGE_GENERIC_DESKTOP,
+            HID_USAGE_GD_DPAD_UP,
+            true
+        ));
+        assert!(state.up);
+        assert!(!apply_dpad_button_usage(&mut state, HID_PAGE_BUTTON, 0x1234, true));
+    }
+
+    #[cfg(feature = "gamepad")]
+    #[test]
+    fn apply_dpad_button_usage_keeps_up_down_exclusive_when_pressed() {
+        let mut state = RawDpadState::default();
+        assert!(apply_dpad_button_usage(
+            &mut state,
+            HID_PAGE_BUTTON,
+            HID_USAGE_BTN_DPAD_UP,
+            true
+        ));
+        assert!(state.up);
+        assert!(!state.down);
+        assert!(apply_dpad_button_usage(
+            &mut state,
+            HID_PAGE_BUTTON,
+            HID_USAGE_BTN_DPAD_DOWN,
+            true
+        ));
+        assert!(state.down);
+        assert!(!state.up);
+    }
+
+    #[cfg(feature = "gamepad")]
+    #[test]
+    fn merge_dpad_axis_value_prefers_nonzero_raw_signal() {
+        assert_eq!(merge_dpad_axis_value(0.0, 1.0), 1.0);
+        assert_eq!(merge_dpad_axis_value(-1.0, 0.0), -1.0);
+        assert_eq!(merge_dpad_axis_value(0.5, -0.9), -0.9);
+    }
+
+    #[cfg(feature = "gamepad")]
+    #[test]
+    fn ps_controller_detection_requests_vertical_inversion() {
+        assert!(should_invert_vertical_axis(Some(SONY_VENDOR_ID), "DualSense Wireless Controller"));
+        assert!(should_invert_vertical_axis(None, "Wireless Controller"));
+        assert!(!should_invert_vertical_axis(Some(0x045e), "Xbox Wireless Controller"));
     }
 
     #[test]

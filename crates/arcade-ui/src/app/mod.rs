@@ -45,6 +45,8 @@ pub struct NativeArcadeUiApp {
     pub(crate) gilrs: Option<Gilrs>,
     #[cfg(feature = "gamepad")]
     pub(crate) gamepad_identity_cache: HashMap<usize, DetectedPadIdentity>,
+    #[cfg(feature = "gamepad")]
+    pub(crate) raw_dpad_state_cache: HashMap<usize, crate::input::RawDpadState>,
     /// RETROK keycodes that were down last frame (for keyboard callback event generation).
     pub(crate) prev_keyboard_keys_down: HashSet<u32>,
 }
@@ -217,6 +219,8 @@ impl NativeArcadeUiApp {
             gilrs,
             #[cfg(feature = "gamepad")]
             gamepad_identity_cache: HashMap::new(),
+            #[cfg(feature = "gamepad")]
+            raw_dpad_state_cache: HashMap::new(),
             prev_keyboard_keys_down: HashSet::new(),
         };
 
