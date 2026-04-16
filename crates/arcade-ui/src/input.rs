@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use eframe::egui;
@@ -8,17 +9,17 @@ use tracing::debug;
 use arcade_domain::MAX_GAMEPAD_PLAYERS;
 use arcade_domain::{
     default_gamepad_mapping_for_system, supported_gamepad_actions, CanonicalAxis, CanonicalButton,
-    DetectedPadIdentity, MappingEntry, StoredDeviceMeta, StoredGamepadMapping, EXIT_ACTION,
-    NEXT_SAVE_SLOT_ACTION, QUICK_LOAD_ACTION, QUICK_SAVE_ACTION, RESET_ACTION,
+    DetectedPadIdentity, MappingEntry, N64PrimaryStick, StoredDeviceMeta, StoredGamepadMapping,
+    EXIT_ACTION, NEXT_SAVE_SLOT_ACTION, QUICK_LOAD_ACTION, QUICK_SAVE_ACTION, RESET_ACTION,
     SYSTEM_DEFAULT_MAPPING_KEY,
 };
 
-#[cfg(feature = "gamepad")]
-use gilrs::{Axis, Button, GamepadId};
 use crate::{
     app::NativeArcadeUiApp,
     state::{ControllerMappingCacheKey, MappingEditorScope, MenuFocusRegion, MenuNavDirection},
 };
+#[cfg(feature = "gamepad")]
+use gilrs::{Axis, Button, GamepadId};
 
 const RETRO_DEVICE_JOYPAD: u32 = 1;
 const RETRO_DEVICE_ANALOG: u32 = 5;
@@ -120,8 +121,14 @@ impl NativeArcadeUiApp {
         self.host.clear_input_state();
 
         let system = self.active_input_system();
+        let n64_primary_stick = if normalize_system_name(&system) == "N64" {
+            Some(self.services.n64_primary_stick())
+        } else {
+            None
+        };
         let keyboard_state = self.capture_keyboard_state(ctx);
-        let mut shortcuts = self.apply_system_mapping_to_host(0, &keyboard_state, &system, None);
+        let mut shortcuts =
+            self.apply_system_mapping_to_host(0, &keyboard_state, &system, None, n64_primary_stick);
         shortcuts.return_pressed |= ctx.input(|i| i.key_down(egui::Key::Escape));
 
         #[cfg(feature = "gamepad")]
@@ -131,6 +138,7 @@ impl NativeArcadeUiApp {
                 &capture.state,
                 &system,
                 Some(&capture.identity),
+                n64_primary_stick,
             );
             shortcuts.merge(capture_shortcuts);
         }
@@ -319,9 +327,12 @@ impl NativeArcadeUiApp {
         );
         let threshold = normalize_mapping_threshold(mapping.threshold);
 
-        self.state
-            .controller_mapping
-            .load_from_mapping(system, desired_key, mapping, threshold);
+        self.state.controller_mapping.load_from_mapping(
+            system,
+            desired_key,
+            mapping.as_ref().clone(),
+            threshold,
+        );
     }
 
     pub(crate) fn reset_controller_mapping_editor_to_defaults(&mut self) {
@@ -505,13 +516,14 @@ impl NativeArcadeUiApp {
             self.state.input_debug.clear();
             return Vec::new();
         };
+        let identity_cache = &mut self.gamepad_identity_cache;
 
         while gilrs.next_event().is_some() {}
 
         let mut connected = gilrs
             .gamepads()
             .filter(|(_, gamepad)| gamepad.is_connected() && is_playable_gamepad(gamepad))
-            .map(|(id, _)| (id.to_string(), id))
+            .map(|(id, _)| (usize::from(id), id))
             .collect::<Vec<_>>();
         connected.sort_by(|left, right| left.0.cmp(&right.0));
 
@@ -573,8 +585,8 @@ impl NativeArcadeUiApp {
                 left_shoulder: button_down(&gamepad, Button::LeftTrigger),
                 right_shoulder: button_down(&gamepad, Button::RightTrigger),
                 guide: button_down(&gamepad, Button::Mode),
-                left_trigger: normalized_axis(gamepad.value(Axis::LeftZ)),
-                right_trigger: normalized_axis(gamepad.value(Axis::RightZ)),
+                left_trigger: trigger_axis_value(&gamepad, Axis::LeftZ, Button::LeftTrigger2),
+                right_trigger: trigger_axis_value(&gamepad, Axis::RightZ, Button::RightTrigger2),
                 select: button_down(&gamepad, Button::Select),
                 start: button_down(&gamepad, Button::Start),
                 left_thumb: button_down(&gamepad, Button::LeftThumb),
@@ -606,9 +618,18 @@ impl NativeArcadeUiApp {
                 );
             }
 
+            let cache_key = usize::from(id);
+            let identity = if let Some(existing) = identity_cache.get(&cache_key) {
+                existing.clone()
+            } else {
+                let built = build_detected_pad_identity(id, &gamepad);
+                identity_cache.insert(cache_key, built.clone());
+                built
+            };
+
             captures.push(GamepadCapture {
                 port: port as u32,
-                identity: build_detected_pad_identity(id, &gamepad),
+                identity,
                 state,
             });
         }
@@ -621,7 +642,7 @@ impl NativeArcadeUiApp {
         &mut self,
         system: &str,
         device: Option<&DetectedPadIdentity>,
-    ) -> StoredGamepadMapping {
+    ) -> Arc<StoredGamepadMapping> {
         let system = normalize_system_name(system);
         let mapping_key = device
             .map(|device| device.device_key.clone())
@@ -658,8 +679,11 @@ impl NativeArcadeUiApp {
         }
         self.state
             .controller_mapping
-            .cache_put(cache_key, mapping.clone());
-        mapping
+            .cache_put(cache_key.clone(), mapping);
+        self.state
+            .controller_mapping
+            .cache_get(&cache_key)
+            .expect("mapping must exist in cache after cache_put")
     }
 
     fn apply_system_mapping_to_host(
@@ -668,6 +692,7 @@ impl NativeArcadeUiApp {
         state: &CanonicalPadState,
         system: &str,
         device: Option<&DetectedPadIdentity>,
+        n64_primary_stick: Option<N64PrimaryStick>,
     ) -> FrontendShortcutState {
         let mapping = self.resolved_mapping_for(system, device);
 
@@ -694,40 +719,24 @@ impl NativeArcadeUiApp {
         }
 
         if system_supports_native_analog(system) {
-            if state.left_x.abs() > f32::EPSILON {
+            let preference = n64_primary_stick.unwrap_or(N64PrimaryStick::Left);
+            let (primary_x, primary_y) = n64_primary_stick_axes_for_preference(state, preference);
+            if primary_x.abs() > f32::EPSILON {
                 set_analog(
                     self,
                     port,
                     RETRO_DEVICE_INDEX_ANALOG_LEFT,
                     RETRO_DEVICE_ID_ANALOG_X,
-                    state.left_x,
+                    primary_x,
                 );
             }
-            if state.left_y.abs() > f32::EPSILON {
+            if primary_y.abs() > f32::EPSILON {
                 set_analog(
                     self,
                     port,
                     RETRO_DEVICE_INDEX_ANALOG_LEFT,
                     RETRO_DEVICE_ID_ANALOG_Y,
-                    state.left_y,
-                );
-            }
-            if state.right_x.abs() > f32::EPSILON {
-                set_analog(
-                    self,
-                    port,
-                    RETRO_DEVICE_INDEX_ANALOG_RIGHT,
-                    RETRO_DEVICE_ID_ANALOG_X,
-                    state.right_x,
-                );
-            }
-            if state.right_y.abs() > f32::EPSILON {
-                set_analog(
-                    self,
-                    port,
-                    RETRO_DEVICE_INDEX_ANALOG_RIGHT,
-                    RETRO_DEVICE_ID_ANALOG_Y,
-                    state.right_y,
+                    primary_y,
                 );
             }
         }
@@ -1015,10 +1024,9 @@ impl NativeArcadeUiApp {
         }
 
         self.normalize_filters_panel_focus();
-        self.state.menu_nav.step_back_focus(
-            self.state.current_view,
-            self.filters_panel_expanded(),
-        );
+        self.state
+            .menu_nav
+            .step_back_focus(self.state.current_view, self.filters_panel_expanded());
     }
 
     fn handle_menu_west_action(&mut self) {
@@ -1311,7 +1319,11 @@ impl NativeArcadeUiApp {
     fn handle_settings_direction(&mut self, direction: MenuNavDirection) {
         let profiles = arcade_domain::core_profiles();
         let num_tabs = profiles.len();
-        let tab_idx = self.state.menu_nav.settings_core_tab_index.min(num_tabs.saturating_sub(1));
+        let tab_idx = self
+            .state
+            .menu_nav
+            .settings_core_tab_index
+            .min(num_tabs.saturating_sub(1));
         let num_vars = profiles
             .get(tab_idx)
             .map(|p| p.variables.len())
@@ -1321,8 +1333,11 @@ impl NativeArcadeUiApp {
             MenuFocusRegion::TopNav => match direction {
                 MenuNavDirection::Down => {
                     self.state.menu_nav.focus_region = MenuFocusRegion::SettingsAppConfigCoreTab;
-                    self.state.menu_nav.settings_core_tab_index =
-                        self.state.menu_nav.settings_core_tab_index.min(num_tabs.saturating_sub(1));
+                    self.state.menu_nav.settings_core_tab_index = self
+                        .state
+                        .menu_nav
+                        .settings_core_tab_index
+                        .min(num_tabs.saturating_sub(1));
                 }
                 _ => self
                     .state
@@ -1344,8 +1359,11 @@ impl NativeArcadeUiApp {
                     }
                 }
                 MenuNavDirection::Left => {
-                    self.state.menu_nav.settings_core_tab_index =
-                        self.state.menu_nav.settings_core_tab_index.saturating_sub(1);
+                    self.state.menu_nav.settings_core_tab_index = self
+                        .state
+                        .menu_nav
+                        .settings_core_tab_index
+                        .saturating_sub(1);
                     self.state.menu_nav.settings_core_variable_index = 0;
                     self.state.menu_nav.settings_core_option_index = 0;
                 }
@@ -1358,9 +1376,11 @@ impl NativeArcadeUiApp {
                 }
             },
             MenuFocusRegion::SettingsAppConfigCoreVariable => {
-                let var_idx = self.state.menu_nav.settings_core_variable_index.min(
-                    num_vars.saturating_sub(1),
-                );
+                let var_idx = self
+                    .state
+                    .menu_nav
+                    .settings_core_variable_index
+                    .min(num_vars.saturating_sub(1));
                 let num_options = profiles
                     .get(tab_idx)
                     .and_then(|p| p.variables.get(var_idx))
@@ -1531,8 +1551,11 @@ impl NativeArcadeUiApp {
                 if self.state.menu_nav.settings_core_variable_index == 0 {
                     MenuFocusRegion::SettingsAppConfigCoreTab
                 } else {
-                    self.state.menu_nav.settings_core_variable_index =
-                        self.state.menu_nav.settings_core_variable_index.saturating_sub(1);
+                    self.state.menu_nav.settings_core_variable_index = self
+                        .state
+                        .menu_nav
+                        .settings_core_variable_index
+                        .saturating_sub(1);
                     self.state.menu_nav.settings_core_option_index = 0;
                     MenuFocusRegion::SettingsAppConfigCoreVariable
                 }
@@ -1564,6 +1587,20 @@ fn normalize_system_name(system: &str) -> String {
     } else {
         normalized
     }
+}
+
+fn n64_primary_stick_axes_for_preference(
+    state: &CanonicalPadState,
+    preference: N64PrimaryStick,
+) -> (f32, f32) {
+    match preference {
+        N64PrimaryStick::Left => (state.left_x, n64_native_analog_y(state.left_y)),
+        N64PrimaryStick::Right => (state.right_x, n64_native_analog_y(state.right_y)),
+    }
+}
+
+fn n64_native_analog_y(value: f32) -> f32 {
+    -value
 }
 
 fn mapping_entry_is_active(
@@ -1822,6 +1859,16 @@ fn normalized_axis(value: f32) -> f32 {
 }
 
 #[cfg(feature = "gamepad")]
+fn merge_trigger_axis_and_button(axis_value: f32, trigger_button_pressed: bool) -> f32 {
+    normalized_axis(axis_value).max(if trigger_button_pressed { 1.0 } else { 0.0 })
+}
+
+#[cfg(feature = "gamepad")]
+fn trigger_axis_value(gamepad: &gilrs::Gamepad<'_>, axis: Axis, trigger_button: Button) -> f32 {
+    merge_trigger_axis_and_button(gamepad.value(axis), button_down(gamepad, trigger_button))
+}
+
+#[cfg(feature = "gamepad")]
 fn debug_gamepad_capture(
     gamepad: &gilrs::Gamepad<'_>,
     has_dpad_buttons: bool,
@@ -1978,6 +2025,21 @@ mod tests {
 
     #[cfg(feature = "gamepad")]
     #[test]
+    fn trigger_axis_button_fallback_supports_button_only_pads() {
+        assert_eq!(merge_trigger_axis_and_button(0.0, false), 0.0);
+        assert_eq!(merge_trigger_axis_and_button(0.0, true), 1.0);
+    }
+
+    #[cfg(feature = "gamepad")]
+    #[test]
+    fn trigger_axis_button_fallback_keeps_analog_values() {
+        assert_eq!(merge_trigger_axis_and_button(0.42, false), 0.42);
+        assert_eq!(merge_trigger_axis_and_button(0.75, true), 1.0);
+        assert_eq!(merge_trigger_axis_and_button(-1.0, false), 0.0);
+    }
+
+    #[cfg(feature = "gamepad")]
+    #[test]
     fn normalize_vertical_axis_keeps_non_windows_convention() {
         assert_eq!(normalize_vertical_axis(0.75), 0.75);
         assert_eq!(normalize_vertical_axis(-0.75), -0.75);
@@ -2029,6 +2091,26 @@ mod tests {
         assert_eq!(
             action_to_retro_binding("N64", "Z"),
             Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_L2))
+        );
+    }
+
+    #[test]
+    fn n64_primary_stick_axes_for_preference_uses_selected_stick() {
+        let state = CanonicalPadState {
+            left_x: 0.25,
+            left_y: -0.5,
+            right_x: -0.75,
+            right_y: 0.9,
+            ..Default::default()
+        };
+
+        assert_eq!(
+            n64_primary_stick_axes_for_preference(&state, N64PrimaryStick::Left),
+            (0.25, 0.5)
+        );
+        assert_eq!(
+            n64_primary_stick_axes_for_preference(&state, N64PrimaryStick::Right),
+            (-0.75, -0.9)
         );
     }
 
