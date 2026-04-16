@@ -1,4 +1,22 @@
 use super::*;
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+// Limit the number of silence warnings to avoid log spam.
+static SILENCE_WARN_COUNT: AtomicUsize = AtomicUsize::new(0);
+static UNDERFLOW_WARN_COUNT: AtomicUsize = AtomicUsize::new(0);
+// Limit "runtime not available" warnings (fires after core unload while the
+// cpal stream is still draining).
+static NO_RUNTIME_WARN_COUNT: AtomicUsize = AtomicUsize::new(0);
+
+fn audio_debug_enabled() -> bool {
+    match std::env::var("ARCADE_AUDIO_DEBUG") {
+        Ok(value) => {
+            let normalized = value.trim().to_ascii_lowercase();
+            !matches!(normalized.as_str(), "0" | "false" | "off" | "no")
+        }
+        Err(_) => false,
+    }
+}
 
 #[cfg(feature = "audio")]
 pub(super) struct AudioOutput {
@@ -23,6 +41,8 @@ impl AudioOutput {
             stream_config.buffer_size = buffer_size;
         }
         set_audio_output_sample_rate(sample_rate_hz as f64);
+        NO_RUNTIME_WARN_COUNT.store(0, Ordering::Relaxed);
+        SILENCE_WARN_COUNT.store(0, Ordering::Relaxed);
         let stream = match build_output_stream(&device, sample_format, &stream_config, channels) {
             Ok(stream) => stream,
             Err(err) if custom_buffer_size.is_some() => {
@@ -50,8 +70,9 @@ fn pick_buffer_size(
 ) -> Option<cpal::BufferSize> {
     match supported_config.buffer_size() {
         cpal::SupportedBufferSize::Range { min, max } => {
-            // Prefer ~16ms callback buffers for smoother pacing on bursty cores.
-            let target = (sample_rate_hz / 60).clamp(256, 2048);
+            // Prefer a buffer size based on the new AUDIO_TARGET_LATENCY_SECS.
+            let target =
+                (sample_rate_hz as f64 * AUDIO_TARGET_LATENCY_SECS).clamp(256.0, 2048.0) as u32;
             Some(cpal::BufferSize::Fixed(target.clamp(*min, *max)))
         }
         _ => None,
@@ -182,10 +203,7 @@ pub(super) unsafe extern "C" fn retro_audio_sample(left: i16, right: i16) {
     push_audio_samples(&[left, right]);
 }
 
-pub(super) unsafe extern "C" fn retro_audio_sample_batch(
-    data: *const i16,
-    frames: usize,
-) -> usize {
+pub(super) unsafe extern "C" fn retro_audio_sample_batch(data: *const i16, frames: usize) -> usize {
     if data.is_null() || frames == 0 {
         return 0;
     }
@@ -197,14 +215,53 @@ pub(super) unsafe extern "C" fn retro_audio_sample_batch(
 }
 
 fn push_audio_samples(samples: &[i16]) {
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+    static PUSH_COUNT: AtomicU64 = AtomicU64::new(0);
+    static LOGGED_FIRST_NONZERO: AtomicBool = AtomicBool::new(false);
+    static LAST_PUSH_SILENT: AtomicBool = AtomicBool::new(true);
+
     if samples.is_empty() {
+        warn!(
+            target: "arcade_libretro::audio",
+            "push_audio_samples called with empty slice"
+        );
         return;
     }
 
     let Some(runtime) = active_runtime() else {
         return;
     };
+
+    // Diagnostic: log first batch with non-zero samples so we can confirm
+    // the core is actually producing audio data.
+    let peak = samples.iter().map(|s| s.unsigned_abs()).max().unwrap_or(0);
+    let nonzero_count = samples.iter().filter(|s| **s != 0).count();
+    let is_silent = nonzero_count == 0;
+    let n = PUSH_COUNT.fetch_add(1, Ordering::Relaxed);
+    if n == 0 {
+        info!(
+            target: "arcade_libretro::audio",
+            call_index = n,
+            sample_len = samples.len(),
+            peak,
+            nonzero_count,
+            silent = is_silent,
+            "first audio input batch"
+        );
+    }
+    if peak > 0 && !LOGGED_FIRST_NONZERO.swap(true, Ordering::Relaxed) {
+        info!(
+            target: "arcade_libretro::audio",
+            call_index = n,
+            sample_len = samples.len(),
+            peak,
+            nonzero_count,
+            "audio input became non-silent"
+        );
+    }
+
     let mut state = runtime.audio_state.lock();
+    let queue_before = state.samples.len();
     let queue = &mut state.samples;
     let overflow = queue
         .len()
@@ -214,6 +271,24 @@ fn push_audio_samples(samples: &[i16]) {
         let _ = queue.pop_front();
     }
     queue.extend(samples.iter().copied());
+    let queue_after = queue.len();
+
+    let previous_silent = LAST_PUSH_SILENT.swap(is_silent, Ordering::Relaxed);
+    let debug_enabled = audio_debug_enabled();
+    if overflow > 0 || (debug_enabled && (previous_silent != is_silent || n % 500 == 0)) {
+        info!(
+            target: "arcade_libretro::audio",
+            call_index = n,
+            sample_len = samples.len(),
+            peak,
+            nonzero_count,
+            silent = is_silent,
+            queue_before,
+            queue_after,
+            overflow,
+            "audio input batch"
+        );
+    }
 }
 
 #[cfg(feature = "audio")]
@@ -229,6 +304,10 @@ fn audio_frames_for_latency(sample_rate_hz: f64, latency_secs: f64) -> usize {
 fn trim_audio_queue_for_latency(state: &mut AudioState) {
     let output_rate = state.output_sample_rate;
     if output_rate <= 0.0 {
+        warn!(
+            target: "arcade_libretro::audio",
+            "output_rate <= 0.0 in trim_audio_queue_for_latency"
+        );
         return;
     }
 
@@ -242,16 +321,49 @@ fn trim_audio_queue_for_latency(state: &mut AudioState) {
 
     let frames_to_drop = queued_frames.saturating_sub(target_frames);
     let samples_to_drop = frames_to_drop.saturating_mul(2).min(state.samples.len());
+    let queue_before = state.samples.len();
     state.samples.drain(..samples_to_drop);
     state.current_frame = None;
     state.next_frame = None;
     state.resample_phase = 0.0;
+    if audio_debug_enabled() || samples_to_drop > 0 {
+        info!(
+            target: "arcade_libretro::audio",
+            queue_before,
+            queue_after = state.samples.len(),
+            dropped_samples = samples_to_drop,
+            dropped_frames = frames_to_drop,
+            target_frames,
+            max_frames,
+            "trimmed audio queue for latency"
+        );
+    }
 }
 
 #[cfg(feature = "audio")]
 fn pop_stereo_frame(state: &mut AudioState) -> (i16, i16) {
+    let queue_before = state.samples.len();
+    let underflow = queue_before < 2;
     let left = state.samples.pop_front().unwrap_or(0);
     let right = state.samples.pop_front().unwrap_or(0);
+    if underflow {
+        if UNDERFLOW_WARN_COUNT.fetch_add(1, Ordering::Relaxed) < 20 {
+            eprintln!(
+                "[AUDIO-RS] underflow: q_before={queue_before} produced=({}, {}) q_after={}",
+                left,
+                right,
+                state.samples.len(),
+            );
+        }
+    }
+    if left == 0 && right == 0 {
+        if SILENCE_WARN_COUNT.fetch_add(1, Ordering::Relaxed) < 10 {
+            eprintln!(
+                "[AUDIO-RS] warning: pop_stereo_frame returned silence (underflow={underflow} q_before={queue_before} q_after={})",
+                state.samples.len(),
+            );
+        }
+    }
     (left, right)
 }
 
@@ -264,6 +376,12 @@ fn pop_stereo_i16_with_state(state: &mut AudioState) -> (i16, i16) {
         state.current_frame = None;
         state.next_frame = None;
         state.resample_phase = 0.0;
+        warn!(
+            target: "arcade_libretro::audio",
+            source_rate,
+            output_rate,
+            "source_rate or output_rate <= 0.0 in pop_stereo_i16_with_state"
+        );
         return pop_stereo_frame(state);
     }
 
@@ -285,6 +403,14 @@ fn pop_stereo_i16_with_state(state: &mut AudioState) -> (i16, i16) {
     let near_unity_ratio = (ratio - 1.0).abs() < 0.0005;
     if near_unity_ratio && state.current_frame.is_none() && state.next_frame.is_none() {
         state.resample_phase = 0.0;
+        if audio_debug_enabled() {
+            info!(
+                target: "arcade_libretro::audio",
+                ratio,
+                base_ratio,
+                "near_unity_ratio with empty interpolation state"
+            );
+        }
         return pop_stereo_frame(state);
     }
 
@@ -314,15 +440,37 @@ fn pop_stereo_i16_with_state(state: &mut AudioState) -> (i16, i16) {
 
 #[cfg(feature = "audio")]
 fn write_output_i16(output: &mut [i16], channels: usize) {
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+    static LOGGED_FORMAT: AtomicBool = AtomicBool::new(false);
+    static CB_COUNT: AtomicU64 = AtomicU64::new(0);
+    static LAST_CB_SILENT: AtomicBool = AtomicBool::new(true);
+
     if channels == 0 {
         return;
     }
 
+    if !LOGGED_FORMAT.swap(true, Ordering::Relaxed) {
+        info!(
+            target: "arcade_libretro::audio",
+            format = "i16",
+            channels,
+            buffer_len = output.len(),
+            "audio output callback initialized"
+        );
+    }
+
     let Some(runtime) = active_runtime() else {
         output.fill(0);
+        if NO_RUNTIME_WARN_COUNT.fetch_add(1, Ordering::Relaxed) < 3 {
+            warn!(
+                target: "arcade_libretro::audio",
+                "audio runtime not available in i16 callback; filling silence"
+            );
+        }
         return;
     };
     let mut state = runtime.audio_state.lock();
+    let queue_before = state.samples.len();
     trim_audio_queue_for_latency(&mut state);
     for frame in output.chunks_mut(channels) {
         let (left, right) = pop_stereo_i16_with_state(&mut state);
@@ -337,6 +485,27 @@ fn write_output_i16(output: &mut [i16], channels: usize) {
             *sample = 0;
         }
     }
+
+    let n = CB_COUNT.fetch_add(1, Ordering::Relaxed);
+    let out_peak: u16 = output.iter().map(|s| s.unsigned_abs()).max().unwrap_or(0);
+    let nonzero_out = output.iter().filter(|sample| **sample != 0).count();
+    let is_silent = nonzero_out == 0;
+    let previous_silent = LAST_CB_SILENT.swap(is_silent, Ordering::Relaxed);
+    let debug_enabled = audio_debug_enabled();
+    if n == 0 || (debug_enabled && (previous_silent != is_silent || n % 100 == 0)) {
+        info!(
+            target: "arcade_libretro::audio",
+            callback_index = n,
+            queue_before,
+            queue_after = state.samples.len(),
+            out_peak,
+            nonzero_out,
+            silent = is_silent,
+            source_rate = state.source_sample_rate,
+            output_rate = state.output_sample_rate,
+            "audio output callback (i16)"
+        );
+    }
 }
 
 #[cfg(feature = "audio")]
@@ -347,6 +516,12 @@ fn write_output_u16(output: &mut [u16], channels: usize) {
 
     let Some(runtime) = active_runtime() else {
         output.fill(i16::MAX as u16);
+        if NO_RUNTIME_WARN_COUNT.fetch_add(1, Ordering::Relaxed) < 3 {
+            warn!(
+                target: "arcade_libretro::audio",
+                "audio runtime not available in u16 callback; filling silence"
+            );
+        }
         return;
     };
     let mut state = runtime.audio_state.lock();
@@ -369,15 +544,37 @@ fn write_output_u16(output: &mut [u16], channels: usize) {
 
 #[cfg(feature = "audio")]
 fn write_output_f32(output: &mut [f32], channels: usize) {
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+    static LOGGED_FORMAT: AtomicBool = AtomicBool::new(false);
+    static CB_COUNT: AtomicU64 = AtomicU64::new(0);
+    static LAST_CB_SILENT: AtomicBool = AtomicBool::new(true);
+
     if channels == 0 {
         return;
     }
 
+    if !LOGGED_FORMAT.swap(true, Ordering::Relaxed) {
+        info!(
+            target: "arcade_libretro::audio",
+            format = "f32",
+            channels,
+            buffer_len = output.len(),
+            "audio output callback initialized"
+        );
+    }
+
     let Some(runtime) = active_runtime() else {
         output.fill(0.0);
+        if NO_RUNTIME_WARN_COUNT.fetch_add(1, Ordering::Relaxed) < 3 {
+            warn!(
+                target: "arcade_libretro::audio",
+                "audio runtime not available in f32 callback; filling silence"
+            );
+        }
         return;
     };
     let mut state = runtime.audio_state.lock();
+    let queue_before = state.samples.len();
     trim_audio_queue_for_latency(&mut state);
     for frame in output.chunks_mut(channels) {
         let (left, right) = pop_stereo_i16_with_state(&mut state);
@@ -391,5 +588,29 @@ fn write_output_f32(output: &mut [f32], channels: usize) {
         for sample in &mut frame[2..] {
             *sample = 0.0;
         }
+    }
+
+    let n = CB_COUNT.fetch_add(1, Ordering::Relaxed);
+    let out_peak: f32 = output.iter().map(|s| s.abs()).fold(0.0f32, f32::max);
+    let nonzero_out = output
+        .iter()
+        .filter(|sample| sample.abs() > f32::EPSILON)
+        .count();
+    let is_silent = nonzero_out == 0;
+    let previous_silent = LAST_CB_SILENT.swap(is_silent, Ordering::Relaxed);
+    let debug_enabled = audio_debug_enabled();
+    if n == 0 || (debug_enabled && (previous_silent != is_silent || n % 100 == 0)) {
+        info!(
+            target: "arcade_libretro::audio",
+            callback_index = n,
+            queue_before,
+            queue_after = state.samples.len(),
+            out_peak,
+            nonzero_out,
+            silent = is_silent,
+            source_rate = state.source_sample_rate,
+            output_rate = state.output_sample_rate,
+            "audio output callback (f32)"
+        );
     }
 }

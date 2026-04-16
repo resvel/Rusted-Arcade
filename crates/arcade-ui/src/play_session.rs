@@ -2,6 +2,7 @@ use eframe::egui;
 use tracing::{info, warn};
 
 use arcade_services::SaveOperationError;
+use std::sync::OnceLock;
 
 use crate::{app::NativeArcadeUiApp, state::HoldAction};
 
@@ -40,13 +41,7 @@ impl NativeArcadeUiApp {
             self.reset_play_clock();
             elapsed = frame_interval;
         }
-        let parallel_n64_target_pacing = self
-            .state
-            .play
-            .active_core
-            .as_deref()
-            .is_some_and(|core| core.eq_ignore_ascii_case("parallel_n64"));
-        let mupen64plus_next_target_pacing = self
+        let n64_target_pacing = self
             .state
             .play
             .active_core
@@ -58,12 +53,10 @@ impl NativeArcadeUiApp {
             .active_system
             .as_deref()
             .is_some_and(|system| system.eq_ignore_ascii_case("ARCADE"));
-        if parallel_n64_target_pacing {
+        if n64_target_pacing {
             let frame_budget = self.state.play.catch_up_frame_debt
                 + (elapsed.as_secs_f64() / frame_interval.as_secs_f64());
             if frame_budget < 1.0 {
-                // macOS timer jitter can still miss cadence with very short sleeps;
-                // request immediate repaint and let frame_budget gate retro_run.
                 ctx.request_repaint();
                 return;
             }
@@ -78,23 +71,23 @@ impl NativeArcadeUiApp {
             return;
         }
 
-        let frames_to_run = if parallel_n64_target_pacing {
+        let frames_to_run = if n64_target_pacing {
             let elapsed_frames = elapsed.as_secs_f64() / frame_interval.as_secs_f64();
             let frame_budget =
                 (self.state.play.catch_up_frame_debt + elapsed_frames).clamp(1.0, 3.0);
-            let frames_to_run = frame_budget.floor().clamp(1.0, 2.0) as u32;
+            let smooth_pacing = n64_smooth_pacing_enabled();
+            let max_frames = if smooth_pacing {
+                // Favor even pacing by default; only allow burst catch-up when we're
+                // substantially behind after a long stall.
+                if frame_budget >= 2.5 { 2.0 } else { 1.0 }
+            } else {
+                2.0
+            };
+            let frames_to_run = frame_budget.floor().clamp(1.0, max_frames) as u32;
             self.state.play.set_last_frame_run_at(now);
+            let debt_cap = if smooth_pacing { 0.75 } else { 1.0 };
             self.state.play.catch_up_frame_debt =
-                (frame_budget - frames_to_run as f64).clamp(0.0, 1.0);
-            frames_to_run
-        } else if mupen64plus_next_target_pacing {
-            let elapsed_frames = elapsed.as_secs_f64() / frame_interval.as_secs_f64();
-            let frame_budget =
-                (self.state.play.catch_up_frame_debt + elapsed_frames).clamp(1.0, 3.0);
-            let frames_to_run = frame_budget.floor().clamp(1.0, 2.0) as u32;
-            self.state.play.set_last_frame_run_at(now);
-            self.state.play.catch_up_frame_debt =
-                (frame_budget - frames_to_run as f64).clamp(0.0, 1.0);
+                (frame_budget - frames_to_run as f64).clamp(0.0, debt_cap);
             frames_to_run
         } else if arcade_low_latency_pacing {
             let elapsed_frames = elapsed.as_secs_f64() / frame_interval.as_secs_f64();
@@ -162,15 +155,29 @@ impl NativeArcadeUiApp {
             );
         }
 
-        if parallel_n64_target_pacing || mupen64plus_next_target_pacing {
-            // If emulation work already exceeded the target frame interval, request
-            // immediate repaint to avoid adding extra sleep and compounding lag.
+        if n64_target_pacing {
+            let smooth_pacing = n64_smooth_pacing_enabled();
+            if smooth_pacing && tick_work > frame_interval.saturating_mul(2) {
+                // A single long frame (e.g. shader compile) can create bursty catch-up.
+                // Cap debt so recovery stays smoother without changing average target FPS.
+                self.state.play.catch_up_frame_debt = self.state.play.catch_up_frame_debt.min(0.5);
+            }
+            let target_interval = frame_interval.saturating_mul(frames_executed.max(1));
             let post_tick_elapsed =
                 std::time::Instant::now().duration_since(self.state.play.last_frame_run_at);
-            if post_tick_elapsed < frame_interval {
-                ctx.request_repaint();
+            if post_tick_elapsed < target_interval {
+                if smooth_pacing {
+                    let remaining = target_interval - post_tick_elapsed;
+                    ctx.request_repaint_after(remaining.min(LOW_LATENCY_MAX_REPAINT_WAIT));
+                } else {
+                    ctx.request_repaint();
+                }
             } else {
-                self.state.play.catch_up_frame_debt = 0.0;
+                if smooth_pacing {
+                    self.state.play.catch_up_frame_debt = self.state.play.catch_up_frame_debt.min(0.5);
+                } else {
+                    self.state.play.catch_up_frame_debt = 0.0;
+                }
                 ctx.request_repaint();
             }
         } else if arcade_low_latency_pacing {
@@ -205,6 +212,7 @@ impl NativeArcadeUiApp {
 
     pub(crate) fn stop_play_session(&mut self) {
         self.state.play.reset_frontend_shortcut_latches();
+        self.prev_keyboard_keys_down.clear();
         if let Err(err) = self.host.unload() {
             self.state.play.set_status(format!("stop failed: {err}"));
         } else {
@@ -368,4 +376,15 @@ impl NativeArcadeUiApp {
             message,
         );
     }
+}
+
+fn n64_smooth_pacing_enabled() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| match std::env::var("ARCADE_N64_SMOOTH_PACING") {
+        Ok(value) => {
+            let normalized = value.trim().to_ascii_lowercase();
+            !matches!(normalized.as_str(), "0" | "false" | "off" | "no")
+        }
+        Err(_) => true,
+    })
 }

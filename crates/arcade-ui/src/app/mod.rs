@@ -2,6 +2,7 @@ mod status_bar;
 mod top_nav;
 mod viewport;
 
+use std::collections::HashSet;
 use std::fs;
 use std::sync::mpsc::Receiver;
 
@@ -9,6 +10,10 @@ use arcade_domain::{ManageOperationSummary, ManageProgressEvent};
 use arcade_libretro::{FrontendCapabilities, LibretroHost};
 use arcade_services::NativeServices;
 use eframe::egui;
+#[cfg(feature = "gamepad")]
+use std::collections::HashMap;
+#[cfg(feature = "gamepad")]
+use arcade_domain::DetectedPadIdentity;
 #[cfg(feature = "gamepad")]
 use gilrs::Gilrs;
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle, RawDisplayHandle, RawWindowHandle};
@@ -38,6 +43,10 @@ pub struct NativeArcadeUiApp {
     pub(crate) manage_job_rx: Option<Receiver<ManageUiMessage>>,
     #[cfg(feature = "gamepad")]
     pub(crate) gilrs: Option<Gilrs>,
+    #[cfg(feature = "gamepad")]
+    pub(crate) gamepad_identity_cache: HashMap<usize, DetectedPadIdentity>,
+    /// RETROK keycodes that were down last frame (for keyboard callback event generation).
+    pub(crate) prev_keyboard_keys_down: HashSet<u32>,
 }
 
 pub(crate) enum ManageUiMessage {
@@ -206,6 +215,9 @@ impl NativeArcadeUiApp {
             manage_job_rx: None,
             #[cfg(feature = "gamepad")]
             gilrs,
+            #[cfg(feature = "gamepad")]
+            gamepad_identity_cache: HashMap::new(),
+            prev_keyboard_keys_down: HashSet::new(),
         };
 
         #[cfg(feature = "gamepad")]
