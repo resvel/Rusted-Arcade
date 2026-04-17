@@ -58,6 +58,10 @@ pub struct CoverScrapeSettingsInput {
     pub gba_platform_ids: Vec<u32>,
     pub n64_platform_ids: Vec<u32>,
     pub arcade_platform_ids: Vec<u32>,
+    pub psx_platform_ids: Vec<u32>,
+    pub ps2_platform_ids: Vec<u32>,
+    pub dreamcast_platform_ids: Vec<u32>,
+    pub dos_platform_ids: Vec<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -301,11 +305,15 @@ const GBA_GAMEPAD_ACTIONS: [&str; 15] = [
     RESET_ACTION,
 ];
 
-const N64_GAMEPAD_ACTIONS: [&str; 19] = [
+const N64_GAMEPAD_ACTIONS: [&str; 23] = [
     "Up",
     "Down",
     "Left",
     "Right",
+    "Stick Up",
+    "Stick Down",
+    "Stick Left",
+    "Stick Right",
     "A",
     "B",
     "L",
@@ -341,6 +349,91 @@ const ARCADE_GAMEPAD_ACTIONS: [&str; 15] = [
     RESET_ACTION,
 ];
 
+const PSX_GAMEPAD_ACTIONS: [&str; 21] = [
+    "Up",
+    "Down",
+    "Left",
+    "Right",
+    "Cross",
+    "Circle",
+    "Square",
+    "Triangle",
+    "L1",
+    "R1",
+    "L2",
+    "R2",
+    "L3",
+    "R3",
+    "Start",
+    "Select",
+    EXIT_ACTION,
+    QUICK_SAVE_ACTION,
+    QUICK_LOAD_ACTION,
+    NEXT_SAVE_SLOT_ACTION,
+    RESET_ACTION,
+];
+
+const PS2_GAMEPAD_ACTIONS: [&str; 21] = [
+    "Up",
+    "Down",
+    "Left",
+    "Right",
+    "Cross",
+    "Circle",
+    "Square",
+    "Triangle",
+    "L1",
+    "R1",
+    "L2",
+    "R2",
+    "L3",
+    "R3",
+    "Start",
+    "Select",
+    EXIT_ACTION,
+    QUICK_SAVE_ACTION,
+    QUICK_LOAD_ACTION,
+    NEXT_SAVE_SLOT_ACTION,
+    RESET_ACTION,
+];
+
+const DREAMCAST_GAMEPAD_ACTIONS: [&str; 14] = [
+    "Up",
+    "Down",
+    "Left",
+    "Right",
+    "A",
+    "B",
+    "X",
+    "Y",
+    "Start",
+    EXIT_ACTION,
+    QUICK_SAVE_ACTION,
+    QUICK_LOAD_ACTION,
+    NEXT_SAVE_SLOT_ACTION,
+    RESET_ACTION,
+];
+
+const DOS_GAMEPAD_ACTIONS: [&str; 17] = [
+    "Up",
+    "Down",
+    "Left",
+    "Right",
+    "A",
+    "B",
+    "X",
+    "Y",
+    "L",
+    "R",
+    "Start",
+    "Select",
+    EXIT_ACTION,
+    QUICK_SAVE_ACTION,
+    QUICK_LOAD_ACTION,
+    NEXT_SAVE_SLOT_ACTION,
+    RESET_ACTION,
+];
+
 pub fn supported_gamepad_actions(system: &str) -> &'static [&'static str] {
     match system.trim().to_ascii_uppercase().as_str() {
         "NES" => &NES_GAMEPAD_ACTIONS,
@@ -350,6 +443,10 @@ pub fn supported_gamepad_actions(system: &str) -> &'static [&'static str] {
         "GBA" => &GBA_GAMEPAD_ACTIONS,
         "N64" => &N64_GAMEPAD_ACTIONS,
         "ARCADE" => &ARCADE_GAMEPAD_ACTIONS,
+        "PSX" => &PSX_GAMEPAD_ACTIONS,
+        "PS2" => &PS2_GAMEPAD_ACTIONS,
+        "DREAMCAST" => &DREAMCAST_GAMEPAD_ACTIONS,
+        "DOS" => &DOS_GAMEPAD_ACTIONS,
         _ => &NES_GAMEPAD_ACTIONS,
     }
 }
@@ -390,6 +487,10 @@ pub fn default_gamepad_mapping_for_system(system: &str) -> StoredGamepadMapping 
             insert_button(&mut actions, "Select", CanonicalButton::Select);
         }
         "N64" => {
+            insert_unassigned(&mut actions, "Stick Up");
+            insert_unassigned(&mut actions, "Stick Down");
+            insert_unassigned(&mut actions, "Stick Left");
+            insert_unassigned(&mut actions, "Stick Right");
             insert_button(&mut actions, "A", CanonicalButton::South);
             insert_button(&mut actions, "B", CanonicalButton::West);
             insert_button(&mut actions, "L", CanonicalButton::LeftShoulder);
@@ -408,6 +509,37 @@ pub fn default_gamepad_mapping_for_system(system: &str) -> StoredGamepadMapping 
             insert_button(&mut actions, "D", CanonicalButton::West);
             insert_button(&mut actions, "Start", CanonicalButton::Start);
             insert_button(&mut actions, "Coin", CanonicalButton::Select);
+        }
+        "PSX" | "PS2" => {
+            insert_button(&mut actions, "Cross", CanonicalButton::South);
+            insert_button(&mut actions, "Circle", CanonicalButton::East);
+            insert_button(&mut actions, "Square", CanonicalButton::West);
+            insert_button(&mut actions, "Triangle", CanonicalButton::North);
+            insert_button(&mut actions, "L1", CanonicalButton::LeftShoulder);
+            insert_button(&mut actions, "R1", CanonicalButton::RightShoulder);
+            insert_axis(&mut actions, "L2", CanonicalAxis::LeftTrigger, 1);
+            insert_axis(&mut actions, "R2", CanonicalAxis::RightTrigger, 1);
+            insert_button(&mut actions, "L3", CanonicalButton::LeftThumb);
+            insert_button(&mut actions, "R3", CanonicalButton::RightThumb);
+            insert_button(&mut actions, "Start", CanonicalButton::Start);
+            insert_button(&mut actions, "Select", CanonicalButton::Select);
+        }
+        "DREAMCAST" => {
+            insert_button(&mut actions, "A", CanonicalButton::South);
+            insert_button(&mut actions, "B", CanonicalButton::East);
+            insert_button(&mut actions, "X", CanonicalButton::West);
+            insert_button(&mut actions, "Y", CanonicalButton::North);
+            insert_button(&mut actions, "Start", CanonicalButton::Start);
+        }
+        "DOS" => {
+            insert_button(&mut actions, "A", CanonicalButton::South);
+            insert_button(&mut actions, "B", CanonicalButton::East);
+            insert_button(&mut actions, "X", CanonicalButton::West);
+            insert_button(&mut actions, "Y", CanonicalButton::North);
+            insert_button(&mut actions, "L", CanonicalButton::LeftShoulder);
+            insert_button(&mut actions, "R", CanonicalButton::RightShoulder);
+            insert_button(&mut actions, "Start", CanonicalButton::Start);
+            insert_button(&mut actions, "Select", CanonicalButton::Select);
         }
         _ => {
             insert_button(&mut actions, "A", CanonicalButton::South);
@@ -571,6 +703,15 @@ mod tests {
     }
 
     #[test]
+    fn n64_supported_actions_include_control_stick_directions() {
+        let actions = supported_gamepad_actions("N64");
+        assert!(actions.contains(&"Stick Up"));
+        assert!(actions.contains(&"Stick Down"));
+        assert!(actions.contains(&"Stick Left"));
+        assert!(actions.contains(&"Stick Right"));
+    }
+
+    #[test]
     fn default_mapping_assigns_exit_and_reset_but_leaves_other_shortcuts_unassigned() {
         let mapping = default_gamepad_mapping_for_system("NES");
         assert_eq!(
@@ -594,6 +735,10 @@ mod tests {
     fn n64_default_mapping_keeps_a_b_and_primary_c_buttons_in_physical_positions() {
         let mapping = default_gamepad_mapping_for_system("N64");
 
+        assert_eq!(mapping.actions.get("Stick Up"), Some(&None));
+        assert_eq!(mapping.actions.get("Stick Down"), Some(&None));
+        assert_eq!(mapping.actions.get("Stick Left"), Some(&None));
+        assert_eq!(mapping.actions.get("Stick Right"), Some(&None));
         assert_eq!(
             mapping.actions.get("A"),
             Some(&Some(MappingEntry::Button {

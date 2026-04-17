@@ -893,6 +893,8 @@ impl NativeArcadeUiApp {
         primary_stick_preference: Option<N64PrimaryStick>,
     ) -> FrontendShortcutState {
         let mapping = self.resolved_mapping_for(system, device);
+        let use_explicit_n64_stick_mapping =
+            normalize_system_name(system) == "N64" && n64_control_stick_mapping_enabled(&mapping);
 
         for action in supported_gamepad_actions(system) {
             let Some(Some(entry)) = mapping.actions.get(*action) else {
@@ -902,7 +904,8 @@ impl NativeArcadeUiApp {
                 continue;
             }
 
-            if let Some(binding) = action_to_retro_binding(system, action) {
+            if let Some(binding) = action_to_retro_binding(system, action, primary_stick_preference)
+            {
                 match binding {
                     RetroActionBinding::Joypad(joypad_id) => {
                         set_button(self, port, joypad_id, true)
@@ -916,7 +919,7 @@ impl NativeArcadeUiApp {
             }
         }
 
-        if system_supports_native_analog(system) {
+        if system_supports_native_analog(system) && !use_explicit_n64_stick_mapping {
             let preference = primary_stick_preference.unwrap_or(N64PrimaryStick::Left);
             let (primary_x, primary_y) = primary_stick_axes_for_system(system, state, preference);
             if primary_x.abs() > f32::EPSILON {
@@ -1787,6 +1790,17 @@ fn normalize_system_name(system: &str) -> String {
     }
 }
 
+fn n64_control_stick_mapping_enabled(mapping: &StoredGamepadMapping) -> bool {
+    ["Stick Up", "Stick Down", "Stick Left", "Stick Right"]
+        .into_iter()
+        .any(|action| {
+            mapping
+                .actions
+                .get(action)
+                .is_some_and(|entry| entry.is_some())
+        })
+}
+
 #[cfg(feature = "gamepad")]
 fn resolve_runtime_mapping_profile_from_keys(
     system: &str,
@@ -1977,13 +1991,42 @@ fn canonical_axis_value(state: &CanonicalPadState, axis: CanonicalAxis) -> f32 {
     }
 }
 
-fn action_to_retro_binding(system: &str, action: &str) -> Option<RetroActionBinding> {
+fn action_to_retro_binding(
+    system: &str,
+    action: &str,
+    primary_stick_preference: Option<N64PrimaryStick>,
+) -> Option<RetroActionBinding> {
     if normalize_system_name(system) == "N64" {
+        let primary_stick = primary_stick_preference.unwrap_or(N64PrimaryStick::Left);
+        let c_stick_index = match primary_stick {
+            N64PrimaryStick::Left => RETRO_DEVICE_INDEX_ANALOG_RIGHT,
+            N64PrimaryStick::Right => RETRO_DEVICE_INDEX_ANALOG_LEFT,
+        };
         return match action {
             "Up" => Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_UP)),
             "Down" => Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_DOWN)),
             "Left" => Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_LEFT)),
             "Right" => Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_RIGHT)),
+            "Stick Up" => Some(RetroActionBinding::Analog {
+                index: RETRO_DEVICE_INDEX_ANALOG_LEFT,
+                axis_id: RETRO_DEVICE_ID_ANALOG_Y,
+                value: 1.0,
+            }),
+            "Stick Down" => Some(RetroActionBinding::Analog {
+                index: RETRO_DEVICE_INDEX_ANALOG_LEFT,
+                axis_id: RETRO_DEVICE_ID_ANALOG_Y,
+                value: -1.0,
+            }),
+            "Stick Left" => Some(RetroActionBinding::Analog {
+                index: RETRO_DEVICE_INDEX_ANALOG_LEFT,
+                axis_id: RETRO_DEVICE_ID_ANALOG_X,
+                value: -1.0,
+            }),
+            "Stick Right" => Some(RetroActionBinding::Analog {
+                index: RETRO_DEVICE_INDEX_ANALOG_LEFT,
+                axis_id: RETRO_DEVICE_ID_ANALOG_X,
+                value: 1.0,
+            }),
             "A" => Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_B)),
             "B" => Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_Y)),
             "L" => Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_L)),
@@ -1993,12 +2036,12 @@ fn action_to_retro_binding(system: &str, action: &str) -> Option<RetroActionBind
             "C-Up" => Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_X)),
             "C-Right" => Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_A)),
             "C-Left" => Some(RetroActionBinding::Analog {
-                index: RETRO_DEVICE_INDEX_ANALOG_RIGHT,
+                index: c_stick_index,
                 axis_id: RETRO_DEVICE_ID_ANALOG_X,
                 value: -1.0,
             }),
             "C-Down" => Some(RetroActionBinding::Analog {
-                index: RETRO_DEVICE_INDEX_ANALOG_RIGHT,
+                index: c_stick_index,
                 axis_id: RETRO_DEVICE_ID_ANALOG_Y,
                 value: 1.0,
             }),
@@ -2930,23 +2973,55 @@ mod tests {
     #[test]
     fn n64_action_bindings_match_libretro_controller_layout() {
         assert_eq!(
-            action_to_retro_binding("N64", "A"),
+            action_to_retro_binding("N64", "A", None),
             Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_B))
         );
         assert_eq!(
-            action_to_retro_binding("N64", "B"),
+            action_to_retro_binding("N64", "B", None),
             Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_Y))
         );
         assert_eq!(
-            action_to_retro_binding("N64", "C-Up"),
+            action_to_retro_binding("N64", "Stick Left", None),
+            Some(RetroActionBinding::Analog {
+                index: RETRO_DEVICE_INDEX_ANALOG_LEFT,
+                axis_id: RETRO_DEVICE_ID_ANALOG_X,
+                value: -1.0,
+            })
+        );
+        assert_eq!(
+            action_to_retro_binding("N64", "Stick Right", None),
+            Some(RetroActionBinding::Analog {
+                index: RETRO_DEVICE_INDEX_ANALOG_LEFT,
+                axis_id: RETRO_DEVICE_ID_ANALOG_X,
+                value: 1.0,
+            })
+        );
+        assert_eq!(
+            action_to_retro_binding("N64", "Stick Up", None),
+            Some(RetroActionBinding::Analog {
+                index: RETRO_DEVICE_INDEX_ANALOG_LEFT,
+                axis_id: RETRO_DEVICE_ID_ANALOG_Y,
+                value: 1.0,
+            })
+        );
+        assert_eq!(
+            action_to_retro_binding("N64", "Stick Down", None),
+            Some(RetroActionBinding::Analog {
+                index: RETRO_DEVICE_INDEX_ANALOG_LEFT,
+                axis_id: RETRO_DEVICE_ID_ANALOG_Y,
+                value: -1.0,
+            })
+        );
+        assert_eq!(
+            action_to_retro_binding("N64", "C-Up", None),
             Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_X))
         );
         assert_eq!(
-            action_to_retro_binding("N64", "C-Right"),
+            action_to_retro_binding("N64", "C-Right", None),
             Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_A))
         );
         assert_eq!(
-            action_to_retro_binding("N64", "C-Left"),
+            action_to_retro_binding("N64", "C-Left", None),
             Some(RetroActionBinding::Analog {
                 index: RETRO_DEVICE_INDEX_ANALOG_RIGHT,
                 axis_id: RETRO_DEVICE_ID_ANALOG_X,
@@ -2954,7 +3029,7 @@ mod tests {
             })
         );
         assert_eq!(
-            action_to_retro_binding("N64", "C-Down"),
+            action_to_retro_binding("N64", "C-Down", None),
             Some(RetroActionBinding::Analog {
                 index: RETRO_DEVICE_INDEX_ANALOG_RIGHT,
                 axis_id: RETRO_DEVICE_ID_ANALOG_Y,
@@ -2962,9 +3037,45 @@ mod tests {
             })
         );
         assert_eq!(
-            action_to_retro_binding("N64", "Z"),
+            action_to_retro_binding("N64", "Z", None),
             Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_L2))
         );
+    }
+
+    #[test]
+    fn n64_c_button_analog_binding_uses_opposite_selected_primary_stick() {
+        assert_eq!(
+            action_to_retro_binding("N64", "C-Left", Some(N64PrimaryStick::Right)),
+            Some(RetroActionBinding::Analog {
+                index: RETRO_DEVICE_INDEX_ANALOG_LEFT,
+                axis_id: RETRO_DEVICE_ID_ANALOG_X,
+                value: -1.0,
+            })
+        );
+        assert_eq!(
+            action_to_retro_binding("N64", "C-Down", Some(N64PrimaryStick::Right)),
+            Some(RetroActionBinding::Analog {
+                index: RETRO_DEVICE_INDEX_ANALOG_LEFT,
+                axis_id: RETRO_DEVICE_ID_ANALOG_Y,
+                value: 1.0,
+            })
+        );
+    }
+
+    #[test]
+    fn n64_control_stick_mapping_enabled_only_when_assigned() {
+        let mapping = default_gamepad_mapping_for_system("N64");
+        assert!(!n64_control_stick_mapping_enabled(&mapping));
+
+        let mut mapped = mapping.clone();
+        mapped.actions.insert(
+            String::from("Stick Up"),
+            Some(MappingEntry::Axis {
+                axis: CanonicalAxis::RightStickY,
+                direction: -1,
+            }),
+        );
+        assert!(n64_control_stick_mapping_enabled(&mapped));
     }
 
     #[test]
