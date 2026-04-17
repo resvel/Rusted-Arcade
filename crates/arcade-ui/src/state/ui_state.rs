@@ -15,6 +15,63 @@ pub(crate) enum SettingsScrollTarget {
     TheGamesDbConfig,
 }
 
+#[derive(Default, Clone)]
+pub(crate) struct ControllerInputButtonDebug {
+    pub(crate) code: Option<u32>,
+    pub(crate) gilrs_is_pressed: bool,
+    pub(crate) is_pressed: bool,
+    pub(crate) effective_is_pressed: bool,
+    pub(crate) data_pressed: Option<bool>,
+    pub(crate) data_value: Option<f32>,
+}
+
+#[derive(Default, Clone)]
+pub(crate) struct ControllerInputDebugSnapshot {
+    pub(crate) port: u32,
+    pub(crate) name: String,
+    pub(crate) vendor_id: Option<String>,
+    pub(crate) product_id: Option<String>,
+    pub(crate) mapping_name: Option<String>,
+    pub(crate) runtime_system: Option<String>,
+    pub(crate) runtime_mapping_key: Option<String>,
+    pub(crate) runtime_mapping_source: Option<String>,
+    pub(crate) dpad_up: bool,
+    pub(crate) dpad_down: bool,
+    pub(crate) dpad_left: bool,
+    pub(crate) dpad_right: bool,
+    pub(crate) south: bool,
+    pub(crate) east: bool,
+    pub(crate) north: bool,
+    pub(crate) west: bool,
+    pub(crate) left_shoulder: bool,
+    pub(crate) right_shoulder: bool,
+    pub(crate) left_trigger: f32,
+    pub(crate) right_trigger: f32,
+    pub(crate) select: bool,
+    pub(crate) start: bool,
+    pub(crate) left_thumb: bool,
+    pub(crate) raw_dpad_x: f32,
+    pub(crate) raw_dpad_y: f32,
+    pub(crate) raw_left_x: f32,
+    pub(crate) raw_left_y: f32,
+    pub(crate) raw_right_x: f32,
+    pub(crate) raw_right_y: f32,
+    pub(crate) mapped_left_x: f32,
+    pub(crate) mapped_left_y: f32,
+    pub(crate) mapped_right_x: f32,
+    pub(crate) mapped_right_y: f32,
+    pub(crate) dpad_up_debug: ControllerInputButtonDebug,
+    pub(crate) dpad_down_debug: ControllerInputButtonDebug,
+    pub(crate) guide_debug: ControllerInputButtonDebug,
+    pub(crate) right_thumb_debug: ControllerInputButtonDebug,
+}
+
+#[derive(Default)]
+pub(crate) struct ControllerInputDebugState {
+    pub(crate) open: bool,
+    pub(crate) snapshots: Vec<ControllerInputDebugSnapshot>,
+}
+
 pub(crate) struct ArcadeUiState {
     pub(crate) current_view: AppView,
     pub(crate) rom_catalog: HashMap<String, RomCard>,
@@ -25,6 +82,7 @@ pub(crate) struct ArcadeUiState {
     pub(crate) manage: ManageState,
     pub(crate) menu_nav: MenuNavState,
     pub(crate) controller_mapping: ControllerMappingState,
+    pub(crate) controller_input_debug: ControllerInputDebugState,
     pub(crate) play: PlaySessionState,
     pub(crate) settings_scroll_target: Option<SettingsScrollTarget>,
 }
@@ -47,6 +105,7 @@ impl Default for ArcadeUiState {
             manage: ManageState::default(),
             menu_nav: MenuNavState::default(),
             controller_mapping: ControllerMappingState::default(),
+            controller_input_debug: ControllerInputDebugState::default(),
             play: PlaySessionState::default(),
             settings_scroll_target: None,
         }

@@ -14,6 +14,8 @@ use arcade_domain::{
     SYSTEM_DEFAULT_MAPPING_KEY,
 };
 
+#[cfg(feature = "gamepad")]
+use crate::state::{ControllerInputButtonDebug, ControllerInputDebugSnapshot};
 use crate::{
     app::NativeArcadeUiApp,
     state::{ControllerMappingCacheKey, MappingEditorScope, MenuFocusRegion, MenuNavDirection},
@@ -21,7 +23,7 @@ use crate::{
 #[cfg(feature = "gamepad")]
 use gilrs::{ev::Code, Axis, Button, GamepadId};
 #[cfg(feature = "gamepad")]
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 const RETRO_DEVICE_JOYPAD: u32 = 1;
 const RETRO_DEVICE_ANALOG: u32 = 5;
@@ -156,29 +158,60 @@ pub(crate) struct RawDpadState {
     axis_y: f32,
 }
 
+#[cfg(feature = "gamepad")]
+#[derive(Clone, Copy)]
+enum RuntimeMappingSource {
+    DeviceOverride,
+    SystemDefault,
+    BuiltInDefault,
+}
+
+#[cfg(feature = "gamepad")]
+impl RuntimeMappingSource {
+    fn label(self) -> &'static str {
+        match self {
+            RuntimeMappingSource::DeviceOverride => "Active Device Override",
+            RuntimeMappingSource::SystemDefault => "System Default",
+            RuntimeMappingSource::BuiltInDefault => "System Default (Built-in)",
+        }
+    }
+}
+
+#[cfg(feature = "gamepad")]
+struct RuntimeEffectiveMappingProfile {
+    system: String,
+    mapping_key: String,
+    source: RuntimeMappingSource,
+}
+
 impl NativeArcadeUiApp {
     pub(crate) fn apply_keyboard_and_gamepad_input(&mut self, ctx: &egui::Context) {
         self.host.clear_input_state();
 
         let system = self.active_input_system();
-        let n64_primary_stick = if normalize_system_name(&system) == "N64" {
+        let primary_stick_preference = if system_uses_primary_stick_selector(&system) {
             Some(self.services.n64_primary_stick())
         } else {
             None
         };
         let keyboard_state = self.capture_keyboard_state(ctx);
-        let mut shortcuts =
-            self.apply_system_mapping_to_host(0, &keyboard_state, &system, None, n64_primary_stick);
+        let mut shortcuts = self.apply_system_mapping_to_host(
+            0,
+            &keyboard_state,
+            &system,
+            None,
+            primary_stick_preference,
+        );
         shortcuts.return_pressed |= ctx.input(|i| i.key_down(egui::Key::Escape));
 
         #[cfg(feature = "gamepad")]
-        for capture in self.capture_gamepad_state() {
+        for capture in self.capture_gamepad_state(&system) {
             let capture_shortcuts = self.apply_system_mapping_to_host(
                 capture.port,
                 &capture.state,
                 &system,
                 Some(&capture.identity),
-                n64_primary_stick,
+                primary_stick_preference,
             );
             shortcuts.merge(capture_shortcuts);
         }
@@ -189,6 +222,19 @@ impl NativeArcadeUiApp {
     pub(crate) fn tick_frontend_navigation(&mut self, ctx: &egui::Context) {
         if !ctx.input(|i| i.focused) {
             self.clear_menu_repeat_state();
+            return;
+        }
+
+        if matches!(self.state.current_view, crate::app::AppView::Settings)
+            && self.state.controller_input_debug.open
+        {
+            #[cfg(feature = "gamepad")]
+            {
+                let system = self.active_input_system();
+                let _ = self.capture_gamepad_state(&system);
+            }
+            self.clear_menu_repeat_state();
+            ctx.request_repaint_after(Duration::from_millis(50));
             return;
         }
 
@@ -519,7 +565,9 @@ impl NativeArcadeUiApp {
         let mut input = input;
 
         #[cfg(feature = "gamepad")]
-        for capture in self.capture_gamepad_state() {
+        let system = self.active_input_system();
+        #[cfg(feature = "gamepad")]
+        for capture in self.capture_gamepad_state(&system) {
             input.left |= capture.state.dpad_left;
             input.right |= capture.state.dpad_right;
             input.up |= capture.state.dpad_up;
@@ -551,10 +599,26 @@ impl NativeArcadeUiApp {
     }
 
     #[cfg(feature = "gamepad")]
-    fn capture_gamepad_state(&mut self) -> Vec<GamepadCapture> {
+    fn capture_gamepad_state(&mut self, runtime_system: &str) -> Vec<GamepadCapture> {
         let Some(gilrs) = self.gilrs.as_mut() else {
             self.state.input_debug.clear();
+            self.state.controller_input_debug.snapshots.clear();
             return Vec::new();
+        };
+        let normalized_runtime_system = normalize_system_name(runtime_system);
+        let debug_open = self.state.controller_input_debug.open;
+        let saved_mapping_keys = if debug_open {
+            self.services
+                .list_gamepad_mappings(&normalized_runtime_system)
+                .map(|records| {
+                    records
+                        .into_iter()
+                        .map(|record| record.name)
+                        .collect::<Vec<String>>()
+                })
+                .unwrap_or_default()
+        } else {
+            Vec::new()
         };
         let identity_cache = &mut self.gamepad_identity_cache;
         let raw_dpad_state_cache = &mut self.raw_dpad_state_cache;
@@ -569,9 +633,12 @@ impl NativeArcadeUiApp {
             .map(|(id, _)| (usize::from(id), id))
             .collect::<Vec<_>>();
         connected.sort_by(|left, right| left.0.cmp(&right.0));
-        raw_dpad_state_cache.retain(|id, _| connected.iter().any(|(connected_id, _)| connected_id == id));
+        raw_dpad_state_cache
+            .retain(|id, _| connected.iter().any(|(connected_id, _)| connected_id == id));
 
         let mut captures = Vec::with_capacity(connected.len().min(MAX_GAMEPAD_PLAYERS as usize));
+        let mut debug_snapshots =
+            Vec::with_capacity(connected.len().min(MAX_GAMEPAD_PLAYERS as usize));
         let mut input_debug = String::new();
         for (port, (_, id)) in connected
             .into_iter()
@@ -585,36 +652,63 @@ impl NativeArcadeUiApp {
                 .unwrap_or_default();
             let invert_vertical = should_invert_vertical_axis(gamepad.vendor_id(), gamepad.name());
             let has_dpad_buttons = gamepad_has_dpad_buttons(&gamepad);
-            let has_mapped_dpad_axes =
-                gamepad.axis_code(Axis::DPadX).is_some() || gamepad.axis_code(Axis::DPadY).is_some();
+            let has_mapped_dpad_axes = gamepad.axis_code(Axis::DPadX).is_some()
+                || gamepad.axis_code(Axis::DPadY).is_some();
             let has_raw_dpad_state = raw_dpad.up
                 || raw_dpad.down
                 || raw_dpad.left
                 || raw_dpad.right
                 || raw_dpad.axis_x.abs() >= DIGITAL_FALLBACK_THRESHOLD
                 || raw_dpad.axis_y.abs() >= DIGITAL_FALLBACK_THRESHOLD;
-            let has_explicit_dpad_input = has_dpad_buttons || has_mapped_dpad_axes || has_raw_dpad_state;
+            let has_explicit_dpad_input =
+                has_dpad_buttons || has_mapped_dpad_axes || has_raw_dpad_state;
             let raw_dpad_x = gamepad.value(Axis::DPadX);
             let raw_dpad_y = gamepad.value(Axis::DPadY);
             let effective_raw_dpad_x = merge_dpad_axis_value(raw_dpad_x, raw_dpad.axis_x);
             let effective_raw_dpad_y = merge_dpad_axis_value(raw_dpad_y, raw_dpad.axis_y);
             let raw_left_x = gamepad.value(Axis::LeftStickX);
             let raw_left_y = gamepad.value(Axis::LeftStickY);
-            let dpad_up_pressed = (has_dpad_buttons && button_down(&gamepad, Button::DPadUp))
-                || raw_dpad.up;
-            let dpad_down_pressed = (has_dpad_buttons && button_down(&gamepad, Button::DPadDown))
-                || raw_dpad.down;
-            let dpad_left_pressed = (has_dpad_buttons && button_down(&gamepad, Button::DPadLeft))
-                || raw_dpad.left;
-            let dpad_right_pressed = (has_dpad_buttons && button_down(&gamepad, Button::DPadRight))
-                || raw_dpad.right;
+            let raw_right_x = gamepad.value(Axis::RightStickX);
+            let raw_right_y = gamepad.value(Axis::RightStickY);
+            let dpad_up_debug = button_debug_data(&gamepad, Button::DPadUp);
+            let dpad_down_debug = button_debug_data(&gamepad, Button::DPadDown);
+            let dpad_left_debug = button_debug_data(&gamepad, Button::DPadLeft);
+            let dpad_right_debug = button_debug_data(&gamepad, Button::DPadRight);
+            let mut guide_debug = button_debug_data(&gamepad, Button::Mode);
+            let mut right_thumb_debug = button_debug_data(&gamepad, Button::RightThumb);
+            let dpad_up_pressed = (has_dpad_buttons && dpad_up_debug.is_pressed) || raw_dpad.up;
+            let dpad_down_pressed =
+                (has_dpad_buttons && dpad_down_debug.is_pressed) || raw_dpad.down;
+            let dpad_left_pressed =
+                (has_dpad_buttons && dpad_left_debug.is_pressed) || raw_dpad.left;
+            let dpad_right_pressed =
+                (has_dpad_buttons && dpad_right_debug.is_pressed) || raw_dpad.right;
+            let dpad_debugs = [
+                &dpad_up_debug,
+                &dpad_down_debug,
+                &dpad_left_debug,
+                &dpad_right_debug,
+            ];
+            let dpad_active =
+                dpad_up_pressed || dpad_down_pressed || dpad_left_pressed || dpad_right_pressed;
+            let guide_pressed =
+                deghost_non_dpad_button_against_active_dpad(&guide_debug, &dpad_debugs);
+            let right_thumb_pressed =
+                deghost_non_dpad_button_against_active_dpad(&right_thumb_debug, &dpad_debugs);
+            guide_debug.effective_is_pressed =
+                strict_safety_effective_non_dpad_button(&guide_debug, &dpad_debugs, dpad_active);
+            right_thumb_debug.effective_is_pressed = strict_safety_effective_non_dpad_button(
+                &right_thumb_debug,
+                &dpad_debugs,
+                dpad_active,
+            );
             let dpad_x = effective_raw_dpad_x;
             // gilrs already normalizes DPadY with platform reversal rules; applying
             // our Sony stick inversion here would double-invert on macOS.
             let dpad_y = normalize_dpad_vertical_axis(effective_raw_dpad_y);
             let left_x = raw_left_x;
             let left_y = normalize_vertical_axis(raw_left_y, invert_vertical);
-            let right_y = normalize_vertical_axis(gamepad.value(Axis::RightStickY), invert_vertical);
+            let right_y = normalize_vertical_axis(raw_right_y, invert_vertical);
             let dpad_fallback_x = if has_explicit_dpad_input { 0.0 } else { left_x };
             let dpad_fallback_y = if has_explicit_dpad_input { 0.0 } else { left_y };
             let state = CanonicalPadState {
@@ -622,22 +716,22 @@ impl NativeArcadeUiApp {
                 dpad_down: direction_active(dpad_down_pressed, dpad_y, dpad_fallback_y, true),
                 dpad_left: direction_active(dpad_left_pressed, dpad_x, dpad_fallback_x, false),
                 dpad_right: direction_active(dpad_right_pressed, dpad_x, dpad_fallback_x, true),
-                south: button_down(&gamepad, Button::South),
-                east: button_down(&gamepad, Button::East),
-                north: button_down(&gamepad, Button::North),
-                west: button_down(&gamepad, Button::West),
-                left_shoulder: button_down(&gamepad, Button::LeftTrigger),
-                right_shoulder: button_down(&gamepad, Button::RightTrigger),
-                guide: button_down(&gamepad, Button::Mode),
+                south: button_pressed_digital(&gamepad, Button::South),
+                east: button_pressed_digital(&gamepad, Button::East),
+                north: button_pressed_digital(&gamepad, Button::North),
+                west: button_pressed_digital(&gamepad, Button::West),
+                left_shoulder: button_pressed_digital(&gamepad, Button::LeftTrigger),
+                right_shoulder: button_pressed_digital(&gamepad, Button::RightTrigger),
+                guide: guide_pressed,
                 left_trigger: trigger_axis_value(&gamepad, Axis::LeftZ, Button::LeftTrigger2),
                 right_trigger: trigger_axis_value(&gamepad, Axis::RightZ, Button::RightTrigger2),
-                select: button_down(&gamepad, Button::Select),
-                start: button_down(&gamepad, Button::Start),
-                left_thumb: button_down(&gamepad, Button::LeftThumb),
-                right_thumb: button_down(&gamepad, Button::RightThumb),
+                select: button_pressed_digital(&gamepad, Button::Select),
+                start: button_pressed_digital(&gamepad, Button::Start),
+                left_thumb: button_pressed_digital(&gamepad, Button::LeftThumb),
+                right_thumb: right_thumb_pressed,
                 left_x,
                 left_y,
-                right_x: gamepad.value(Axis::RightStickX),
+                right_x: raw_right_x,
                 right_y,
             };
 
@@ -648,6 +742,8 @@ impl NativeArcadeUiApp {
                 effective_raw_dpad_y,
                 raw_left_x,
                 raw_left_y,
+                raw_right_x,
+                raw_right_y,
                 &state,
             );
             if input_debug.is_empty() && std::env::var_os("ARCADE_INPUT_DEBUG").is_some() {
@@ -658,6 +754,8 @@ impl NativeArcadeUiApp {
                     effective_raw_dpad_y,
                     raw_left_x,
                     raw_left_y,
+                    raw_right_x,
+                    raw_right_y,
                     &state,
                 );
             }
@@ -670,6 +768,61 @@ impl NativeArcadeUiApp {
                 identity_cache.insert(cache_key, built.clone());
                 built
             };
+            let runtime_profile = if debug_open {
+                Some(resolve_runtime_mapping_profile_from_keys(
+                    &normalized_runtime_system,
+                    Some(identity.device_key.as_str()),
+                    &saved_mapping_keys,
+                ))
+            } else {
+                None
+            };
+
+            debug_snapshots.push(ControllerInputDebugSnapshot {
+                port: port as u32,
+                name: identity.name.clone(),
+                vendor_id: identity.vendor_id.clone(),
+                product_id: identity.product_id.clone(),
+                mapping_name: identity.mapping_name.clone(),
+                runtime_system: runtime_profile
+                    .as_ref()
+                    .map(|profile| profile.system.clone()),
+                runtime_mapping_key: runtime_profile
+                    .as_ref()
+                    .map(|profile| profile.mapping_key.clone()),
+                runtime_mapping_source: runtime_profile
+                    .as_ref()
+                    .map(|profile| profile.source.label().to_string()),
+                dpad_up: state.dpad_up,
+                dpad_down: state.dpad_down,
+                dpad_left: state.dpad_left,
+                dpad_right: state.dpad_right,
+                south: state.south,
+                east: state.east,
+                north: state.north,
+                west: state.west,
+                left_shoulder: state.left_shoulder,
+                right_shoulder: state.right_shoulder,
+                left_trigger: state.left_trigger,
+                right_trigger: state.right_trigger,
+                select: state.select,
+                start: state.start,
+                left_thumb: state.left_thumb,
+                raw_dpad_x: effective_raw_dpad_x,
+                raw_dpad_y: effective_raw_dpad_y,
+                raw_left_x,
+                raw_left_y,
+                raw_right_x,
+                raw_right_y,
+                mapped_left_x: state.left_x,
+                mapped_left_y: state.left_y,
+                mapped_right_x: state.right_x,
+                mapped_right_y: state.right_y,
+                dpad_up_debug,
+                dpad_down_debug,
+                guide_debug,
+                right_thumb_debug,
+            });
 
             captures.push(GamepadCapture {
                 port: port as u32,
@@ -679,6 +832,7 @@ impl NativeArcadeUiApp {
         }
 
         self.state.input_debug = input_debug;
+        self.state.controller_input_debug.snapshots = debug_snapshots;
         captures
     }
 
@@ -736,7 +890,7 @@ impl NativeArcadeUiApp {
         state: &CanonicalPadState,
         system: &str,
         device: Option<&DetectedPadIdentity>,
-        n64_primary_stick: Option<N64PrimaryStick>,
+        primary_stick_preference: Option<N64PrimaryStick>,
     ) -> FrontendShortcutState {
         let mapping = self.resolved_mapping_for(system, device);
 
@@ -763,8 +917,8 @@ impl NativeArcadeUiApp {
         }
 
         if system_supports_native_analog(system) {
-            let preference = n64_primary_stick.unwrap_or(N64PrimaryStick::Left);
-            let (primary_x, primary_y) = n64_primary_stick_axes_for_preference(state, preference);
+            let preference = primary_stick_preference.unwrap_or(N64PrimaryStick::Left);
+            let (primary_x, primary_y) = primary_stick_axes_for_system(system, state, preference);
             if primary_x.abs() > f32::EPSILON {
                 set_analog(
                     self,
@@ -1633,18 +1787,55 @@ fn normalize_system_name(system: &str) -> String {
     }
 }
 
-fn n64_primary_stick_axes_for_preference(
-    state: &CanonicalPadState,
-    preference: N64PrimaryStick,
-) -> (f32, f32) {
-    match preference {
-        N64PrimaryStick::Left => (state.left_x, n64_native_analog_y(state.left_y)),
-        N64PrimaryStick::Right => (state.right_x, n64_native_analog_y(state.right_y)),
+#[cfg(feature = "gamepad")]
+fn resolve_runtime_mapping_profile_from_keys(
+    system: &str,
+    device_key: Option<&str>,
+    saved_mapping_keys: &[String],
+) -> RuntimeEffectiveMappingProfile {
+    if let Some(device_key) = device_key {
+        if saved_mapping_keys.iter().any(|key| key == device_key) {
+            return RuntimeEffectiveMappingProfile {
+                system: system.to_string(),
+                mapping_key: device_key.to_string(),
+                source: RuntimeMappingSource::DeviceOverride,
+            };
+        }
+    }
+
+    let source = if saved_mapping_keys
+        .iter()
+        .any(|key| key == SYSTEM_DEFAULT_MAPPING_KEY)
+    {
+        RuntimeMappingSource::SystemDefault
+    } else {
+        RuntimeMappingSource::BuiltInDefault
+    };
+    RuntimeEffectiveMappingProfile {
+        system: system.to_string(),
+        mapping_key: SYSTEM_DEFAULT_MAPPING_KEY.to_string(),
+        source,
     }
 }
 
-fn n64_native_analog_y(value: f32) -> f32 {
-    -value
+fn primary_stick_axes_for_system(
+    system: &str,
+    state: &CanonicalPadState,
+    preference: N64PrimaryStick,
+) -> (f32, f32) {
+    let (x, y) = match preference {
+        N64PrimaryStick::Left => (state.left_x, state.left_y),
+        N64PrimaryStick::Right => (state.right_x, state.right_y),
+    };
+    (x, native_analog_y_for_system(system, y))
+}
+
+fn native_analog_y_for_system(system: &str, value: f32) -> f32 {
+    if system.eq_ignore_ascii_case("N64") {
+        -value
+    } else {
+        value
+    }
 }
 
 fn mapping_entry_is_active(
@@ -1887,11 +2078,94 @@ fn is_playable_gamepad(gamepad: &gilrs::Gamepad<'_>) -> bool {
 }
 
 #[cfg(feature = "gamepad")]
-fn button_down(gamepad: &gilrs::Gamepad<'_>, button: Button) -> bool {
-    gamepad
-        .button_data(button)
-        .map(|data| data.is_pressed() || data.value() >= BUTTON_ACTIVE_THRESHOLD)
-        .unwrap_or_else(|| gamepad.is_pressed(button))
+fn button_debug_data(gamepad: &gilrs::Gamepad<'_>, button: Button) -> ControllerInputButtonDebug {
+    let data = gamepad.button_data(button);
+    let raw_pressed = digital_button_active(data.map(|entry| entry.is_pressed()));
+    ControllerInputButtonDebug {
+        code: gamepad.button_code(button).map(|code| code.into_u32()),
+        gilrs_is_pressed: gamepad.is_pressed(button),
+        is_pressed: raw_pressed,
+        effective_is_pressed: raw_pressed,
+        data_pressed: data.map(|entry| entry.is_pressed()),
+        data_value: data.map(|entry| entry.value()),
+    }
+}
+
+fn digital_button_active(data_pressed: Option<bool>) -> bool {
+    data_pressed.unwrap_or(false)
+}
+
+fn valued_button_active(
+    data_pressed: Option<bool>,
+    data_value: Option<f32>,
+    threshold: f32,
+) -> bool {
+    digital_button_active(data_pressed) || data_value.unwrap_or(0.0) >= threshold
+}
+
+#[cfg(feature = "gamepad")]
+fn button_pressed_digital(gamepad: &gilrs::Gamepad<'_>, button: Button) -> bool {
+    let data = gamepad.button_data(button);
+    digital_button_active(data.map(|d| d.is_pressed()))
+}
+
+#[cfg(feature = "gamepad")]
+fn button_pressed_with_value_fallback(gamepad: &gilrs::Gamepad<'_>, button: Button) -> bool {
+    let data = gamepad.button_data(button);
+    valued_button_active(
+        data.map(|d| d.is_pressed()),
+        data.map(|d| d.value()),
+        BUTTON_ACTIVE_THRESHOLD,
+    )
+}
+
+#[cfg(feature = "gamepad")]
+fn deghost_non_dpad_button_against_active_dpad(
+    button: &ControllerInputButtonDebug,
+    dpad_buttons: &[&ControllerInputButtonDebug],
+) -> bool {
+    if !button.is_pressed {
+        return false;
+    }
+
+    let Some(button_code) = button.code else {
+        return true;
+    };
+
+    let collides_with_active_dpad = dpad_buttons
+        .iter()
+        .any(|dpad| dpad.is_pressed && dpad.code == Some(button_code));
+    !collides_with_active_dpad
+}
+
+#[cfg(feature = "gamepad")]
+fn strict_safety_effective_non_dpad_button(
+    button: &ControllerInputButtonDebug,
+    dpad_buttons: &[&ControllerInputButtonDebug],
+    dpad_active: bool,
+) -> bool {
+    if !button.is_pressed {
+        return false;
+    }
+    if !dpad_active {
+        return true;
+    }
+
+    let Some(button_code) = button.code else {
+        return false;
+    };
+
+    let mut dpad_codes = HashSet::with_capacity(dpad_buttons.len());
+    for dpad in dpad_buttons {
+        let Some(dpad_code) = dpad.code else {
+            return false;
+        };
+        if !dpad_codes.insert(dpad_code) {
+            return false;
+        }
+    }
+
+    !dpad_codes.contains(&button_code)
 }
 
 #[cfg(feature = "gamepad")]
@@ -1936,12 +2210,7 @@ fn update_raw_dpad_state_from_event(cache: &mut HashMap<usize, RawDpadState>, ev
 }
 
 #[cfg(feature = "gamepad")]
-fn apply_dpad_button_event(
-    state: &mut RawDpadState,
-    button: Button,
-    code: Code,
-    pressed: bool,
-) {
+fn apply_dpad_button_event(state: &mut RawDpadState, button: Button, code: Code, pressed: bool) {
     match button {
         Button::DPadUp => {
             state.up = pressed;
@@ -2021,7 +2290,8 @@ fn apply_dpad_axis_event(state: &mut RawDpadState, axis: Axis, code: Code, value
 fn apply_dpad_axis_usage(state: &mut RawDpadState, page: u16, usage: u16, value: f32) -> bool {
     let active = value >= BUTTON_ACTIVE_THRESHOLD;
     match (page, usage) {
-        (HID_PAGE_BUTTON, HID_USAGE_BTN_DPAD_UP) | (HID_PAGE_GENERIC_DESKTOP, HID_USAGE_GD_DPAD_UP) => {
+        (HID_PAGE_BUTTON, HID_USAGE_BTN_DPAD_UP)
+        | (HID_PAGE_GENERIC_DESKTOP, HID_USAGE_GD_DPAD_UP) => {
             state.up = active;
             state.down = false;
             state.axis_y = if active { -1.0 } else { 0.0 };
@@ -2061,21 +2331,24 @@ fn decode_hid_page_usage(code: Code) -> (u16, u16) {
 #[cfg(feature = "gamepad")]
 fn apply_dpad_button_usage(state: &mut RawDpadState, page: u16, usage: u16, pressed: bool) -> bool {
     match (page, usage) {
-        (HID_PAGE_BUTTON, HID_USAGE_BTN_DPAD_UP) | (HID_PAGE_GENERIC_DESKTOP, HID_USAGE_GD_DPAD_UP) => {
+        (HID_PAGE_BUTTON, HID_USAGE_BTN_DPAD_UP)
+        | (HID_PAGE_GENERIC_DESKTOP, HID_USAGE_GD_DPAD_UP) => {
             state.up = pressed;
             if pressed {
                 state.down = false;
             }
             true
         }
-        (HID_PAGE_BUTTON, HID_USAGE_BTN_DPAD_DOWN) | (HID_PAGE_GENERIC_DESKTOP, HID_USAGE_GD_DPAD_DOWN) => {
+        (HID_PAGE_BUTTON, HID_USAGE_BTN_DPAD_DOWN)
+        | (HID_PAGE_GENERIC_DESKTOP, HID_USAGE_GD_DPAD_DOWN) => {
             state.down = pressed;
             if pressed {
                 state.up = false;
             }
             true
         }
-        (HID_PAGE_BUTTON, HID_USAGE_BTN_DPAD_LEFT) | (HID_PAGE_GENERIC_DESKTOP, HID_USAGE_GD_DPAD_LEFT) => {
+        (HID_PAGE_BUTTON, HID_USAGE_BTN_DPAD_LEFT)
+        | (HID_PAGE_GENERIC_DESKTOP, HID_USAGE_GD_DPAD_LEFT) => {
             state.left = pressed;
             if pressed {
                 state.right = false;
@@ -2136,7 +2409,10 @@ fn merge_trigger_axis_and_button(axis_value: f32, trigger_button_pressed: bool) 
 
 #[cfg(feature = "gamepad")]
 fn trigger_axis_value(gamepad: &gilrs::Gamepad<'_>, axis: Axis, trigger_button: Button) -> f32 {
-    merge_trigger_axis_and_button(gamepad.value(axis), button_down(gamepad, trigger_button))
+    merge_trigger_axis_and_button(
+        gamepad.value(axis),
+        button_pressed_with_value_fallback(gamepad, trigger_button),
+    )
 }
 
 #[cfg(feature = "gamepad")]
@@ -2147,6 +2423,8 @@ fn debug_gamepad_capture(
     raw_dpad_y: f32,
     raw_left_x: f32,
     raw_left_y: f32,
+    raw_right_x: f32,
+    raw_right_y: f32,
     state: &CanonicalPadState,
 ) {
     if std::env::var_os("ARCADE_INPUT_DEBUG").is_none() {
@@ -2160,12 +2438,15 @@ fn debug_gamepad_capture(
         || raw_dpad_y.abs() >= DIGITAL_FALLBACK_THRESHOLD;
     let left_stick_activity = raw_left_x.abs() >= DIGITAL_FALLBACK_THRESHOLD
         || raw_left_y.abs() >= DIGITAL_FALLBACK_THRESHOLD;
+    let right_stick_activity = raw_right_x.abs() >= DIGITAL_FALLBACK_THRESHOLD
+        || raw_right_y.abs() >= DIGITAL_FALLBACK_THRESHOLD;
     let mapped_direction_activity =
         state.dpad_up || state.dpad_down || state.dpad_left || state.dpad_right;
 
     if !dpad_button_activity
         && !dpad_axis_activity
         && !left_stick_activity
+        && !right_stick_activity
         && !mapped_direction_activity
     {
         return;
@@ -2183,6 +2464,12 @@ fn debug_gamepad_capture(
         raw_dpad_y,
         raw_left_x,
         raw_left_y,
+        raw_right_x,
+        raw_right_y,
+        mapped_left_x = state.left_x,
+        mapped_left_y = state.left_y,
+        mapped_right_x = state.right_x,
+        mapped_right_y = state.right_y,
         mapped_up = state.dpad_up,
         mapped_down = state.dpad_down,
         mapped_left = state.dpad_left,
@@ -2199,10 +2486,12 @@ fn format_gamepad_capture_debug_line(
     raw_dpad_y: f32,
     raw_left_x: f32,
     raw_left_y: f32,
+    raw_right_x: f32,
+    raw_right_y: f32,
     state: &CanonicalPadState,
 ) -> String {
     format!(
-        "INPUT {} | btns U{} D{} L{} R{} | has_btns {} | dpad ({:.2},{:.2}) | stick ({:.2},{:.2}) | mapped U{} D{} L{} R{}",
+        "INPUT {} | btns U{} D{} L{} R{} | has_btns {} | dpad ({:.2},{:.2}) | Lstick raw({:.2},{:.2}) mapped({:.2},{:.2}) | Rstick raw({:.2},{:.2}) mapped({:.2},{:.2}) | mapped U{} D{} L{} R{}",
         gamepad.name(),
         if gamepad.is_pressed(Button::DPadUp) { 1 } else { 0 },
         if gamepad.is_pressed(Button::DPadDown) { 1 } else { 0 },
@@ -2213,6 +2502,12 @@ fn format_gamepad_capture_debug_line(
         raw_dpad_y,
         raw_left_x,
         raw_left_y,
+        state.left_x,
+        state.left_y,
+        raw_right_x,
+        raw_right_y,
+        state.right_x,
+        state.right_y,
         if state.dpad_up { 1 } else { 0 },
         if state.dpad_down { 1 } else { 0 },
         if state.dpad_left { 1 } else { 0 },
@@ -2235,7 +2530,11 @@ fn should_invert_vertical_axis(vendor_id: Option<u16>, name: &str) -> bool {
 
 #[cfg(feature = "gamepad")]
 fn normalize_vertical_axis(value: f32, invert: bool) -> f32 {
-    if invert { -value } else { value }
+    if invert {
+        -value
+    } else {
+        value
+    }
 }
 
 #[cfg(feature = "gamepad")]
@@ -2243,8 +2542,12 @@ fn normalize_dpad_vertical_axis(value: f32) -> f32 {
     value
 }
 
+fn system_uses_primary_stick_selector(system: &str) -> bool {
+    system.eq_ignore_ascii_case("N64") || system.eq_ignore_ascii_case("DREAMCAST")
+}
+
 fn system_supports_native_analog(system: &str) -> bool {
-    matches!(normalize_system_name(system).as_str(), "N64")
+    system_uses_primary_stick_selector(system)
 }
 
 fn normalize_mapping_threshold(value: f32) -> f32 {
@@ -2327,6 +2630,201 @@ mod tests {
         assert_eq!(merge_trigger_axis_and_button(-1.0, false), 0.0);
     }
 
+    #[test]
+    fn digital_button_active_rejects_value_only_noise() {
+        assert!(!digital_button_active(Some(false)));
+        assert!(!digital_button_active(None));
+    }
+
+    #[test]
+    fn digital_button_active_honors_pressed_sources() {
+        assert!(digital_button_active(Some(true)));
+    }
+
+    #[test]
+    fn valued_button_active_keeps_trigger_value_fallback_behavior() {
+        assert!(valued_button_active(Some(false), Some(0.20), 0.10));
+        assert!(!valued_button_active(Some(false), Some(0.05), 0.10));
+    }
+
+    #[cfg(feature = "gamepad")]
+    #[test]
+    fn deghost_non_dpad_button_suppresses_same_code_as_active_dpad() {
+        let suspect = ControllerInputButtonDebug {
+            code: Some(42),
+            is_pressed: true,
+            ..Default::default()
+        };
+        let dpad_active = ControllerInputButtonDebug {
+            code: Some(42),
+            is_pressed: true,
+            ..Default::default()
+        };
+        assert!(!deghost_non_dpad_button_against_active_dpad(
+            &suspect,
+            &[&dpad_active]
+        ));
+    }
+
+    #[cfg(feature = "gamepad")]
+    #[test]
+    fn deghost_non_dpad_button_keeps_unique_or_inactive_codes() {
+        let suspect = ControllerInputButtonDebug {
+            code: Some(42),
+            is_pressed: true,
+            ..Default::default()
+        };
+        let dpad_different = ControllerInputButtonDebug {
+            code: Some(99),
+            is_pressed: true,
+            ..Default::default()
+        };
+        let dpad_same_but_idle = ControllerInputButtonDebug {
+            code: Some(42),
+            is_pressed: false,
+            ..Default::default()
+        };
+        assert!(deghost_non_dpad_button_against_active_dpad(
+            &suspect,
+            &[&dpad_different]
+        ));
+        assert!(deghost_non_dpad_button_against_active_dpad(
+            &suspect,
+            &[&dpad_same_but_idle]
+        ));
+    }
+
+    #[cfg(feature = "gamepad")]
+    #[test]
+    fn strict_safety_effective_non_dpad_button_suppresses_missing_or_ambiguous_codes() {
+        let suspect_missing = ControllerInputButtonDebug {
+            code: None,
+            is_pressed: true,
+            ..Default::default()
+        };
+        let dpad_up = ControllerInputButtonDebug {
+            code: Some(1),
+            is_pressed: true,
+            ..Default::default()
+        };
+        let dpad_down = ControllerInputButtonDebug {
+            code: Some(2),
+            is_pressed: false,
+            ..Default::default()
+        };
+        let dpad_left = ControllerInputButtonDebug {
+            code: Some(3),
+            is_pressed: false,
+            ..Default::default()
+        };
+        let dpad_right = ControllerInputButtonDebug {
+            code: Some(4),
+            is_pressed: false,
+            ..Default::default()
+        };
+        assert!(!strict_safety_effective_non_dpad_button(
+            &suspect_missing,
+            &[&dpad_up, &dpad_down, &dpad_left, &dpad_right],
+            true
+        ));
+
+        let suspect = ControllerInputButtonDebug {
+            code: Some(9),
+            is_pressed: true,
+            ..Default::default()
+        };
+        let ambiguous_up = ControllerInputButtonDebug {
+            code: Some(7),
+            is_pressed: true,
+            ..Default::default()
+        };
+        let ambiguous_down = ControllerInputButtonDebug {
+            code: Some(7),
+            is_pressed: false,
+            ..Default::default()
+        };
+        assert!(!strict_safety_effective_non_dpad_button(
+            &suspect,
+            &[&ambiguous_up, &ambiguous_down, &dpad_left, &dpad_right],
+            true
+        ));
+    }
+
+    #[cfg(feature = "gamepad")]
+    #[test]
+    fn strict_safety_effective_non_dpad_button_allows_distinct_codes() {
+        let suspect = ControllerInputButtonDebug {
+            code: Some(9),
+            is_pressed: true,
+            ..Default::default()
+        };
+        let dpad_up = ControllerInputButtonDebug {
+            code: Some(1),
+            is_pressed: true,
+            ..Default::default()
+        };
+        let dpad_down = ControllerInputButtonDebug {
+            code: Some(2),
+            is_pressed: false,
+            ..Default::default()
+        };
+        let dpad_left = ControllerInputButtonDebug {
+            code: Some(3),
+            is_pressed: false,
+            ..Default::default()
+        };
+        let dpad_right = ControllerInputButtonDebug {
+            code: Some(4),
+            is_pressed: false,
+            ..Default::default()
+        };
+        assert!(strict_safety_effective_non_dpad_button(
+            &suspect,
+            &[&dpad_up, &dpad_down, &dpad_left, &dpad_right],
+            true
+        ));
+        assert!(strict_safety_effective_non_dpad_button(
+            &suspect,
+            &[&dpad_up, &dpad_down, &dpad_left, &dpad_right],
+            false
+        ));
+    }
+
+    #[cfg(feature = "gamepad")]
+    #[test]
+    fn runtime_mapping_profile_prefers_device_override_then_system_default() {
+        let saved = vec![
+            String::from(SYSTEM_DEFAULT_MAPPING_KEY),
+            String::from("054c:0ce6:DualSense"),
+        ];
+        let device_profile =
+            resolve_runtime_mapping_profile_from_keys("NES", Some("054c:0ce6:DualSense"), &saved);
+        assert_eq!(
+            device_profile.source.label(),
+            RuntimeMappingSource::DeviceOverride.label()
+        );
+        assert_eq!(device_profile.mapping_key, "054c:0ce6:DualSense");
+
+        let system_profile =
+            resolve_runtime_mapping_profile_from_keys("NES", Some("missing"), &saved);
+        assert_eq!(
+            system_profile.source.label(),
+            RuntimeMappingSource::SystemDefault.label()
+        );
+        assert_eq!(system_profile.mapping_key, SYSTEM_DEFAULT_MAPPING_KEY);
+    }
+
+    #[cfg(feature = "gamepad")]
+    #[test]
+    fn runtime_mapping_profile_uses_builtin_default_without_saved_records() {
+        let profile = resolve_runtime_mapping_profile_from_keys("NES", Some("missing"), &[]);
+        assert_eq!(
+            profile.source.label(),
+            RuntimeMappingSource::BuiltInDefault.label()
+        );
+        assert_eq!(profile.mapping_key, SYSTEM_DEFAULT_MAPPING_KEY);
+    }
+
     #[cfg(feature = "gamepad")]
     #[test]
     fn normalize_vertical_axis_keeps_non_windows_convention() {
@@ -2366,7 +2864,12 @@ mod tests {
             true
         ));
         assert!(state.up);
-        assert!(!apply_dpad_button_usage(&mut state, HID_PAGE_BUTTON, 0x1234, true));
+        assert!(!apply_dpad_button_usage(
+            &mut state,
+            HID_PAGE_BUTTON,
+            0x1234,
+            true
+        ));
     }
 
     #[cfg(feature = "gamepad")]
@@ -2402,18 +2905,26 @@ mod tests {
     #[cfg(feature = "gamepad")]
     #[test]
     fn ps_controller_detection_requests_vertical_inversion() {
-        assert!(should_invert_vertical_axis(Some(SONY_VENDOR_ID), "DualSense Wireless Controller"));
+        assert!(should_invert_vertical_axis(
+            Some(SONY_VENDOR_ID),
+            "DualSense Wireless Controller"
+        ));
         assert!(should_invert_vertical_axis(None, "Wireless Controller"));
-        assert!(!should_invert_vertical_axis(Some(0x045e), "Xbox Wireless Controller"));
+        assert!(!should_invert_vertical_axis(
+            Some(0x045e),
+            "Xbox Wireless Controller"
+        ));
     }
 
     #[test]
-    fn only_n64_forwards_native_analog_axes_by_default() {
+    fn single_stick_systems_forward_native_analog_axes_by_default() {
         assert!(!system_supports_native_analog("NES"));
         assert!(!system_supports_native_analog("SNES"));
         assert!(!system_supports_native_analog("ARCADE"));
         assert!(system_supports_native_analog("N64"));
         assert!(system_supports_native_analog("n64"));
+        assert!(system_supports_native_analog("DREAMCAST"));
+        assert!(system_supports_native_analog("dreamcast"));
     }
 
     #[test]
@@ -2457,7 +2968,7 @@ mod tests {
     }
 
     #[test]
-    fn n64_primary_stick_axes_for_preference_uses_selected_stick() {
+    fn primary_stick_axes_follow_selected_stick_and_system_y_convention() {
         let state = CanonicalPadState {
             left_x: 0.25,
             left_y: -0.5,
@@ -2467,12 +2978,20 @@ mod tests {
         };
 
         assert_eq!(
-            n64_primary_stick_axes_for_preference(&state, N64PrimaryStick::Left),
+            primary_stick_axes_for_system("N64", &state, N64PrimaryStick::Left),
             (0.25, 0.5)
         );
         assert_eq!(
-            n64_primary_stick_axes_for_preference(&state, N64PrimaryStick::Right),
+            primary_stick_axes_for_system("N64", &state, N64PrimaryStick::Right),
             (-0.75, -0.9)
+        );
+        assert_eq!(
+            primary_stick_axes_for_system("DREAMCAST", &state, N64PrimaryStick::Left),
+            (0.25, -0.5)
+        );
+        assert_eq!(
+            primary_stick_axes_for_system("DREAMCAST", &state, N64PrimaryStick::Right),
+            (-0.75, 0.9)
         );
     }
 
