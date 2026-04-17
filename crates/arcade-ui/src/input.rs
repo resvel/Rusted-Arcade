@@ -46,6 +46,7 @@ const RETRO_DEVICE_INDEX_ANALOG_RIGHT: u32 = 1;
 const RETRO_DEVICE_INDEX_ANALOG_BUTTON: u32 = 2;
 const RETRO_DEVICE_ID_ANALOG_X: u32 = 0;
 const RETRO_DEVICE_ID_ANALOG_Y: u32 = 1;
+const DIRECTIONAL_SHORTCUT_GUARD_THRESHOLD: f32 = 0.45;
 
 #[cfg(feature = "gamepad")]
 const DIGITAL_FALLBACK_THRESHOLD: f32 = 0.45;
@@ -1670,9 +1671,9 @@ fn frontend_shortcuts_from_mapping(
 ) -> FrontendShortcutState {
     FrontendShortcutState {
         reset: mapped_action_is_active(mapping, RESET_ACTION, state),
-        quick_save: mapped_action_is_active(mapping, QUICK_SAVE_ACTION, state),
-        quick_load: mapped_action_is_active(mapping, QUICK_LOAD_ACTION, state),
-        next_save_slot: mapped_action_is_active(mapping, NEXT_SAVE_SLOT_ACTION, state),
+        quick_save: mapped_shortcut_action_is_active(mapping, QUICK_SAVE_ACTION, state),
+        quick_load: mapped_shortcut_action_is_active(mapping, QUICK_LOAD_ACTION, state),
+        next_save_slot: mapped_shortcut_action_is_active(mapping, NEXT_SAVE_SLOT_ACTION, state),
         return_pressed: mapped_exit_action_is_active(mapping, state),
     }
 }
@@ -1694,6 +1695,58 @@ fn mapped_action_is_active(
         return false;
     };
     mapping_entry_is_active(state, entry, mapping.threshold)
+}
+
+fn mapped_shortcut_action_is_active(
+    mapping: &StoredGamepadMapping,
+    action: &str,
+    state: &CanonicalPadState,
+) -> bool {
+    let Some(Some(entry)) = mapping.actions.get(action) else {
+        return false;
+    };
+    if !mapping_entry_is_active(state, entry, mapping.threshold) {
+        return false;
+    }
+
+    // Guard against controller cross-talk where D-pad movement can momentarily
+    // alias to meta buttons on some drivers. If directional input is active,
+    // only allow shortcut actions that are explicitly mapped to directional entries.
+    if directional_input_active(state) && !mapping_entry_is_directional(entry) {
+        return false;
+    }
+
+    true
+}
+
+fn mapping_entry_is_directional(entry: &MappingEntry) -> bool {
+    match entry {
+        MappingEntry::Button { button } => matches!(
+            button,
+            CanonicalButton::DPadUp
+                | CanonicalButton::DPadDown
+                | CanonicalButton::DPadLeft
+                | CanonicalButton::DPadRight
+        ),
+        MappingEntry::Axis { axis, .. } => matches!(
+            axis,
+            CanonicalAxis::LeftStickX
+                | CanonicalAxis::LeftStickY
+                | CanonicalAxis::RightStickX
+                | CanonicalAxis::RightStickY
+        ),
+    }
+}
+
+fn directional_input_active(state: &CanonicalPadState) -> bool {
+    state.dpad_up
+        || state.dpad_down
+        || state.dpad_left
+        || state.dpad_right
+        || state.left_x.abs() >= DIRECTIONAL_SHORTCUT_GUARD_THRESHOLD
+        || state.left_y.abs() >= DIRECTIONAL_SHORTCUT_GUARD_THRESHOLD
+        || state.right_x.abs() >= DIRECTIONAL_SHORTCUT_GUARD_THRESHOLD
+        || state.right_y.abs() >= DIRECTIONAL_SHORTCUT_GUARD_THRESHOLD
 }
 
 fn consume_rising_edge(was_held: &mut bool, is_held: bool) -> bool {
@@ -2421,6 +2474,67 @@ mod tests {
             n64_primary_stick_axes_for_preference(&state, N64PrimaryStick::Right),
             (-0.75, -0.9)
         );
+    }
+
+    #[test]
+    fn mapped_shortcut_is_blocked_when_directional_input_is_active() {
+        let mut mapping = default_gamepad_mapping_for_system("NES");
+        mapping.actions.insert(
+            QUICK_LOAD_ACTION.to_string(),
+            Some(MappingEntry::Button {
+                button: CanonicalButton::Guide,
+            }),
+        );
+        let state = CanonicalPadState {
+            dpad_down: true,
+            guide: true,
+            ..Default::default()
+        };
+        assert!(!mapped_shortcut_action_is_active(
+            &mapping,
+            QUICK_LOAD_ACTION,
+            &state
+        ));
+    }
+
+    #[test]
+    fn mapped_shortcut_allows_non_directional_when_directional_input_is_idle() {
+        let mut mapping = default_gamepad_mapping_for_system("NES");
+        mapping.actions.insert(
+            QUICK_LOAD_ACTION.to_string(),
+            Some(MappingEntry::Button {
+                button: CanonicalButton::Guide,
+            }),
+        );
+        let state = CanonicalPadState {
+            guide: true,
+            ..Default::default()
+        };
+        assert!(mapped_shortcut_action_is_active(
+            &mapping,
+            QUICK_LOAD_ACTION,
+            &state
+        ));
+    }
+
+    #[test]
+    fn mapped_shortcut_allows_directional_mapping_during_directional_input() {
+        let mut mapping = default_gamepad_mapping_for_system("NES");
+        mapping.actions.insert(
+            QUICK_LOAD_ACTION.to_string(),
+            Some(MappingEntry::Button {
+                button: CanonicalButton::DPadUp,
+            }),
+        );
+        let state = CanonicalPadState {
+            dpad_up: true,
+            ..Default::default()
+        };
+        assert!(mapped_shortcut_action_is_active(
+            &mapping,
+            QUICK_LOAD_ACTION,
+            &state
+        ));
     }
 
     #[cfg(feature = "gamepad")]

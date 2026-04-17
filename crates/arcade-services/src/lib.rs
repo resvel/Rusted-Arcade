@@ -8,13 +8,13 @@ use std::time::Duration;
 use anyhow::{anyhow, Result};
 use arcade_data::{DataError, Database, ScanUpsertOutcome, ScannedRomInput};
 use arcade_domain::{
-    apply_device_preset_defaults, default_gamepad_mapping_for_system, get_arcade_compatibility,
+    default_gamepad_mapping_for_system, get_arcade_compatibility,
     resolve_core, resolve_effective_core_override, resolve_path_from_root, AppConfig,
     CoverScrapePlatformIds, CoverScrapeRunOptions, CoverScrapeSettingsInput, CoverScrapingConfig,
     DetectedPadIdentity, ManageOperationKind, ManageOperationSummary, ManageProgressEvent,
-    ManageRomStatus, ManageScope, ManagementConfig, PathsConfig, RomCard,
-    RomQuery, SaveLimits, SaveSlotData, SaveSlotSummary,
-    SavedGamepadMappingSummary, StoredGamepadMapping, SYSTEM_DEFAULT_MAPPING_KEY,
+    ManageRomStatus, ManageScope, ManagementConfig, N64PrimaryStick, PathsConfig, RomCard,
+    RomQuery, SaveLimits, SaveSlotData, SaveSlotSummary, SavedGamepadMappingSummary,
+    StoredGamepadMapping, SYSTEM_DEFAULT_MAPPING_KEY,
 };
 use sha1::{Digest, Sha1};
 use tracing::warn;
@@ -70,6 +70,13 @@ impl NativeServices {
         match self.config.lock() {
             Ok(config) => Arc::new(config.clone()),
             Err(poison) => Arc::new(poison.into_inner().clone()),
+        }
+    }
+
+    pub fn n64_primary_stick(&self) -> N64PrimaryStick {
+        match self.config.lock() {
+            Ok(config) => config.emulation.n64.primary_stick,
+            Err(poison) => poison.into_inner().emulation.n64.primary_stick,
         }
     }
 
@@ -213,7 +220,7 @@ impl NativeServices {
             }
         }
 
-        let mut mapping = if let Some(record) = self.db.load_gamepad_mapping(
+        let mapping = if let Some(record) = self.db.load_gamepad_mapping(
             self.local_profile_id(),
             &system,
             SYSTEM_DEFAULT_MAPPING_KEY,
@@ -232,10 +239,6 @@ impl NativeServices {
         } else {
             default_gamepad_mapping_for_system(&system)
         };
-
-        if let Some(device) = device {
-            apply_device_preset_defaults(&mut mapping, device);
-        }
 
         Ok(mapping)
     }
@@ -299,6 +302,9 @@ impl NativeServices {
             gba: input.gba_platform_ids,
             n64: input.n64_platform_ids,
             arcade: input.arcade_platform_ids,
+            psx: input.psx_platform_ids,
+            ps2: input.ps2_platform_ids,
+            dreamcast: input.dreamcast_platform_ids,
         };
         config.save_to_path(self.config_path.as_ref())?;
         Ok(())
@@ -329,6 +335,17 @@ impl NativeServices {
         }
 
         Ok(AppConfigUpdateOutcome { restart_required })
+    }
+
+    pub fn update_n64_primary_stick(&self, primary_stick: N64PrimaryStick) -> Result<()> {
+        let mut config = self
+            .config
+            .lock()
+            .map_err(|_| anyhow!("config lock poisoned"))?;
+
+        config.emulation.n64.primary_stick = primary_stick;
+        config.save_to_path(self.config_path.as_ref())?;
+        Ok(())
     }
 
     pub fn list_manage_roms(&self, scope: &ManageScope) -> Result<Vec<ManageRomStatus>> {
@@ -631,7 +648,7 @@ struct ScanTarget {
     max_bytes: Option<u64>,
 }
 
-const SCAN_TARGETS: [ScanTarget; 8] = [
+const SCAN_TARGETS: [ScanTarget; 12] = [
     ScanTarget {
         folder: "nes",
         system: "NES",
@@ -687,6 +704,34 @@ const SCAN_TARGETS: [ScanTarget; 8] = [
         emulator_core: "mame2003",
         extensions: &[".zip"],
         max_bytes: Some(150 * 1024 * 1024),
+    },
+    ScanTarget {
+        folder: "psx",
+        system: "PSX",
+        emulator_core: "psx",
+        extensions: &[".cue", ".img", ".iso", ".pbp", ".chd"],
+        max_bytes: None,
+    },
+    ScanTarget {
+        folder: "ps2",
+        system: "PS2",
+        emulator_core: "ps2",
+        extensions: &[".iso", ".chd", ".gz", ".cso"],
+        max_bytes: None,
+    },
+    ScanTarget {
+        folder: "dreamcast",
+        system: "DREAMCAST",
+        emulator_core: "dreamcast",
+        extensions: &[".cdi", ".gdi", ".chd"],
+        max_bytes: None,
+    },
+    ScanTarget {
+        folder: "dos",
+        system: "DOS",
+        emulator_core: "dos",
+        extensions: &[".zip", ".exe", ".com", ".bat"],
+        max_bytes: None,
     },
 ];
 
@@ -998,6 +1043,9 @@ fn platform_ids_for_system<'a>(config: &'a CoverScrapingConfig, system: &str) ->
         "GBA" => &config.platform_ids.gba,
         "N64" => &config.platform_ids.n64,
         "ARCADE" => &config.platform_ids.arcade,
+        "PSX" => &config.platform_ids.psx,
+        "PS2" => &config.platform_ids.ps2,
+        "DREAMCAST" => &config.platform_ids.dreamcast,
         _ => &[],
     }
 }
@@ -1174,8 +1222,8 @@ mod tests {
     use super::*;
     use arcade_data::Database;
     use arcade_domain::{
-        CanonicalButton, MappingEntry, N64PreferredCore, PathsConfig, NEXT_SAVE_SLOT_ACTION,
-        QUICK_LOAD_ACTION, QUICK_SAVE_ACTION, SYSTEM_DEFAULT_MAPPING_KEY,
+        CanonicalButton, MappingEntry, N64PreferredCore, N64PrimaryStick, PathsConfig,
+        NEXT_SAVE_SLOT_ACTION, QUICK_LOAD_ACTION, QUICK_SAVE_ACTION, SYSTEM_DEFAULT_MAPPING_KEY,
     };
     use chrono::Utc;
     use rusqlite::params;
@@ -1399,7 +1447,7 @@ mod tests {
     }
 
     #[test]
-    fn recognized_devices_get_preset_shortcuts_when_no_override_exists() {
+    fn recognized_devices_do_not_get_implicit_shortcuts_without_saved_mapping() {
         let tmp = TempDir::new().expect("tempdir");
         let config = make_config(&tmp);
         let db = Database::open(&config).expect("open db");
@@ -1421,21 +1469,15 @@ mod tests {
 
         assert_eq!(
             resolved.actions.get(QUICK_SAVE_ACTION),
-            Some(&Some(MappingEntry::Button {
-                button: CanonicalButton::LeftThumb,
-            }))
+            Some(&None)
         );
         assert_eq!(
             resolved.actions.get(QUICK_LOAD_ACTION),
-            Some(&Some(MappingEntry::Button {
-                button: CanonicalButton::RightThumb,
-            }))
+            Some(&None)
         );
         assert_eq!(
             resolved.actions.get(NEXT_SAVE_SLOT_ACTION),
-            Some(&Some(MappingEntry::Button {
-                button: CanonicalButton::Guide,
-            }))
+            Some(&None)
         );
     }
 
@@ -1460,6 +1502,10 @@ mod tests {
                 gba_platform_ids: vec![5],
                 n64_platform_ids: vec![3],
                 arcade_platform_ids: vec![23],
+                psx_platform_ids: vec![10],
+                ps2_platform_ids: vec![11],
+                dreamcast_platform_ids: vec![16],
+                dos_platform_ids: vec![1],
             })
             .expect("save settings");
 
@@ -1549,6 +1595,26 @@ mod tests {
                 .map(|s| s.as_str()),
             Some("4x")
         );
+    }
+
+    #[test]
+    fn update_n64_primary_stick_persists_to_config() {
+        let tmp = TempDir::new().expect("tempdir");
+        let config = make_config(&tmp);
+        let config_path = config_path_for(&config);
+        let db = Database::open(&config).expect("open db");
+        let services =
+            NativeServices::bootstrap(config.clone(), config_path.clone(), db).expect("bootstrap");
+
+        services
+            .update_n64_primary_stick(N64PrimaryStick::Right)
+            .expect("save n64 primary stick");
+
+        let active = services.config();
+        assert_eq!(active.emulation.n64.primary_stick, N64PrimaryStick::Right);
+
+        let (saved, _) = AppConfig::load_or_create(Some(&config_path)).expect("reload config");
+        assert_eq!(saved.emulation.n64.primary_stick, N64PrimaryStick::Right);
     }
 
     #[test]
