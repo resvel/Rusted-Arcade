@@ -1,8 +1,8 @@
 use std::collections::{BTreeMap, HashMap};
+use std::sync::Arc;
 
 use arcade_domain::{
     default_gamepad_mapping_for_system, MappingEntry, StoredGamepadMapping,
-    SYSTEM_DEFAULT_MAPPING_KEY,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -11,16 +11,12 @@ pub(crate) struct ControllerMappingCacheKey {
     pub(crate) mapping_key: String,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum MappingEditorScope {
-    SystemDefault,
-    ActiveDevice,
-}
-
 pub(crate) struct ControllerMappingState {
     pub(crate) expanded: bool,
     pub(crate) advanced_expanded: bool,
-    pub(crate) selected_scope: MappingEditorScope,
+    pub(crate) selected_device_key: Option<String>,
+    pub(crate) pending_device_switch_key: Option<String>,
+    pub(crate) pending_device_switch_label: Option<String>,
     pub(crate) loaded_system: String,
     pub(crate) loaded_key: String,
     pub(crate) loaded_actions: BTreeMap<String, Option<MappingEntry>>,
@@ -29,7 +25,7 @@ pub(crate) struct ControllerMappingState {
     pub(crate) threshold: f32,
     /// The system selected in the Input Settings panel (Settings view).
     pub(crate) input_system: String,
-    mapping_cache: HashMap<ControllerMappingCacheKey, StoredGamepadMapping>,
+    mapping_cache: HashMap<ControllerMappingCacheKey, Arc<StoredGamepadMapping>>,
 }
 
 impl Default for ControllerMappingState {
@@ -38,7 +34,9 @@ impl Default for ControllerMappingState {
         Self {
             expanded: true,
             advanced_expanded: false,
-            selected_scope: MappingEditorScope::SystemDefault,
+            selected_device_key: None,
+            pending_device_switch_key: None,
+            pending_device_switch_label: None,
             loaded_system: String::new(),
             loaded_key: String::new(),
             loaded_actions: default_mapping.actions.clone(),
@@ -60,29 +58,46 @@ impl ControllerMappingState {
         self.advanced_expanded = !self.advanced_expanded;
     }
 
-    pub(crate) fn select_scope(&mut self, scope: MappingEditorScope) {
-        if self.selected_scope == scope {
+    pub(crate) fn selected_device_key(&self) -> Option<&str> {
+        self.selected_device_key.as_deref()
+    }
+
+    pub(crate) fn set_selected_device_key(&mut self, device_key: Option<String>) {
+        if self.selected_device_key == device_key {
             return;
         }
-
-        self.selected_scope = scope;
+        self.selected_device_key = device_key;
         self.loaded_key.clear();
+        self.clear_pending_device_switch();
     }
 
-    pub(crate) fn normalize_scope(&mut self, has_active_device: bool) {
-        if self.selected_scope == MappingEditorScope::ActiveDevice && !has_active_device {
-            self.select_scope(MappingEditorScope::SystemDefault);
+    pub(crate) fn queue_pending_device_switch(&mut self, key: String, label: String) {
+        self.pending_device_switch_key = Some(key);
+        self.pending_device_switch_label = Some(label);
+    }
+
+    pub(crate) fn pending_device_switch(&self) -> Option<(&str, &str)> {
+        match (
+            self.pending_device_switch_key.as_deref(),
+            self.pending_device_switch_label.as_deref(),
+        ) {
+            (Some(key), Some(label)) => Some((key, label)),
+            _ => None,
         }
     }
 
-    pub(crate) fn desired_mapping_key(&self, active_device_key: Option<&str>) -> String {
-        if self.selected_scope == MappingEditorScope::ActiveDevice {
-            active_device_key
-                .map(ToOwned::to_owned)
-                .unwrap_or_else(|| SYSTEM_DEFAULT_MAPPING_KEY.to_string())
-        } else {
-            SYSTEM_DEFAULT_MAPPING_KEY.to_string()
-        }
+    pub(crate) fn clear_pending_device_switch(&mut self) {
+        self.pending_device_switch_key = None;
+        self.pending_device_switch_label = None;
+    }
+
+    pub(crate) fn apply_pending_device_switch(&mut self) {
+        let Some(key) = self.pending_device_switch_key.take() else {
+            return;
+        };
+        self.selected_device_key = Some(key);
+        self.loaded_key.clear();
+        self.pending_device_switch_label = None;
     }
 
     pub(crate) fn needs_reload(&self, system: &str, desired_key: &str) -> bool {
@@ -123,7 +138,7 @@ impl ControllerMappingState {
     pub(crate) fn cache_get(
         &self,
         cache_key: &ControllerMappingCacheKey,
-    ) -> Option<StoredGamepadMapping> {
+    ) -> Option<Arc<StoredGamepadMapping>> {
         self.mapping_cache.get(cache_key).cloned()
     }
 
@@ -132,7 +147,7 @@ impl ControllerMappingState {
         cache_key: ControllerMappingCacheKey,
         mapping: StoredGamepadMapping,
     ) {
-        self.mapping_cache.insert(cache_key, mapping);
+        self.mapping_cache.insert(cache_key, Arc::new(mapping));
     }
 
     pub(crate) fn invalidate_cache_for_system(&mut self, system: &str) {
@@ -141,5 +156,27 @@ impl ControllerMappingState {
 
     pub(crate) fn set_action(&mut self, key: String, selected: Option<MappingEntry>) {
         self.actions.insert(key, selected);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ControllerMappingState;
+
+    #[test]
+    fn pending_switch_tracks_confirm_and_cancel() {
+        let mut state = ControllerMappingState::default();
+        state.set_selected_device_key(Some(String::from("device-a")));
+        state.queue_pending_device_switch(String::from("device-b"), String::from("Pad B"));
+        assert_eq!(state.pending_device_switch(), Some(("device-b", "Pad B")));
+
+        state.clear_pending_device_switch();
+        assert!(state.pending_device_switch().is_none());
+        assert_eq!(state.selected_device_key(), Some("device-a"));
+
+        state.queue_pending_device_switch(String::from("device-c"), String::from("Pad C"));
+        state.apply_pending_device_switch();
+        assert_eq!(state.selected_device_key(), Some("device-c"));
+        assert!(state.pending_device_switch().is_none());
     }
 }

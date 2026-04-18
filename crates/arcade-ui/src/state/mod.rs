@@ -7,11 +7,14 @@ mod selection;
 mod ui_state;
 
 pub(crate) use controller_mapping::{
-    ControllerMappingCacheKey, ControllerMappingState, MappingEditorScope,
+    ControllerMappingCacheKey, ControllerMappingState,
 };
 pub(crate) use library::{LibraryCacheKey, LibraryState};
 pub(crate) use manage::ManageState;
 pub(crate) use menu_nav::{MenuFocusRegion, MenuNavDirection, MenuNavState};
 pub(crate) use play::{HoldAction, PlaySessionState};
 pub(crate) use selection::RomSelectionState;
-pub(crate) use ui_state::{ArcadeUiState, SettingsScrollTarget};
+pub(crate) use ui_state::{
+    ArcadeUiState, ControllerAssignmentSource, ControllerInputButtonDebug,
+    ControllerInputDebugSnapshot, SettingsScrollTarget,
+};

@@ -1,8 +1,9 @@
 use crate::app::NativeArcadeUiApp;
+use crate::input::ControllerMappingTarget;
 use crate::render::fit_size;
-use crate::state::{MappingEditorScope, MenuFocusRegion};
+use crate::state::MenuFocusRegion;
 use crate::theme::{ThemePalette, SYSTEM_FILTERS};
-use arcade_domain::DetectedPadIdentity;
+use arcade_domain::{DetectedPadIdentity, N64PrimaryStick};
 use eframe::egui;
 
 const ALPHA_FILTERS: [&str; 28] = [
@@ -203,35 +204,41 @@ impl NativeArcadeUiApp {
             52.0
         };
         let palette = self.palette();
-        let action_labels = if active_system == "ALL" {
-            Vec::new()
+        let action_labels: &[&str] = if active_system == "ALL" {
+            &[]
         } else {
-            self.supported_mapping_actions(&active_system).to_vec()
+            self.supported_mapping_actions(&active_system)
         };
         let action_count = action_labels.len();
         let preview_texture = self.system_controller_texture(ctx, &active_system);
-        let (active_device, has_device, dirty) = if active_system == "ALL" {
-            (None, false, false)
+        let (mapping_targets, selected_target, has_device, dirty) = if active_system == "ALL" {
+            (Vec::new(), None, false, false)
         } else {
-            self.sync_controller_mapping_editor();
-            let active_device = self.active_detected_gamepad_identity();
-            let has_device = active_device.is_some();
+            let mapping_targets = self.connected_controller_mapping_targets();
+            self.sync_controller_mapping_editor(&mapping_targets);
+            let selected_target = self
+                .state
+                .controller_mapping
+                .selected_device_key()
+                .and_then(|selected| {
+                    mapping_targets
+                        .iter()
+                        .find(|target| target.identity.device_key == selected)
+                        .cloned()
+                });
+            let has_device = selected_target.is_some();
             let dirty = self.controller_mapping_is_dirty();
-            (active_device, has_device, dirty)
+            (mapping_targets, selected_target, has_device, dirty)
         };
-        let using_device_override = self.state.controller_mapping.selected_scope
-            == MappingEditorScope::ActiveDevice
-            && has_device;
         let summary_line = if active_system == "ALL" {
             String::from("Choose a system to edit mappings.")
-        } else if using_device_override {
-            let device_name = active_device
-                .as_ref()
-                .map(|device| device.name.as_str())
-                .unwrap_or("connected controller");
-            format!("Editing {active_system} override for {device_name}")
+        } else if let Some(target) = selected_target.as_ref() {
+            format!(
+                "Editing {active_system} mapping for {}",
+                target.identity.name
+            )
         } else {
-            format!("Editing {active_system} system defaults")
+            format!("Connect a controller to edit {active_system} mappings.")
         };
         let min_panel_height = if !self.state.controller_mapping.expanded {
             84.0
@@ -272,11 +279,7 @@ impl NativeArcadeUiApp {
                             }
                             badge_chip(
                                 ui,
-                                if using_device_override {
-                                    "Device Override"
-                                } else {
-                                    "System Default"
-                                },
+                                "Device Mapping",
                                 palette.panel,
                                 palette.border,
                                 palette.text_muted,
@@ -322,6 +325,48 @@ impl NativeArcadeUiApp {
                     .size(11.5)
                     .color(palette.text_muted),
             );
+            if system_uses_primary_stick_selector(&active_system) {
+                let mut selected_stick = self.services.n64_primary_stick();
+                let system_label = if active_system.trim().eq_ignore_ascii_case("DREAMCAST") {
+                    "Dreamcast"
+                } else {
+                    "N64"
+                };
+                ui.add_space(2.0);
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(
+                        egui::RichText::new("Primary Analog Stick")
+                            .size(11.5)
+                            .color(palette.text_muted),
+                    );
+                    for (label, value) in [
+                        ("Left Stick", N64PrimaryStick::Left),
+                        ("Right Stick", N64PrimaryStick::Right),
+                    ] {
+                        if scope_chip(ui, label, true, selected_stick == value, &palette).clicked() {
+                            if value != selected_stick {
+                                match self.services.update_n64_primary_stick(value) {
+                                    Ok(()) => {
+                                        selected_stick = value;
+                                        self.state.status = format!(
+                                            "{system_label} primary stick set to {}.",
+                                            if value == N64PrimaryStick::Left {
+                                                "Left Stick"
+                                            } else {
+                                                "Right Stick"
+                                            }
+                                        );
+                                    }
+                                    Err(err) => {
+                                        self.state.status =
+                                            format!("Failed to save primary stick preference: {err}");
+                                    }
+                                }
+                            }
+                        }
+                    }
+                });
+            }
             ui.label(
                 egui::RichText::new(
                     "Use mouse or keyboard to edit bindings and save mappings. Controller navigation can browse this panel, but not operate the dropdown editor yet.",
@@ -361,139 +406,25 @@ impl NativeArcadeUiApp {
                         &palette,
                         max_image_height,
                     );
-
-                    egui::Frame::new()
-                        .fill(palette.panel)
-                        .stroke(egui::Stroke::new(1.0, palette.border))
-                        .corner_radius(egui::CornerRadius::same(10))
-                        .inner_margin(egui::Margin::same(6))
-                        .show(&mut columns[1], |ui| {
-                            ui.label(
-                                egui::RichText::new("Profile")
-                                    .size(11.5)
-                                    .color(palette.text_muted),
-                            );
-                            ui.horizontal_wrapped(|ui| {
-                                let system_default_selected = self.state.controller_mapping.selected_scope
-                                    == MappingEditorScope::SystemDefault;
-                                if scope_chip(
-                                    ui,
-                                    "System Default",
-                                    true,
-                                    system_default_selected,
-                                    &palette,
-                                )
-                                .clicked()
-                                {
-                                    self.state
-                                        .controller_mapping
-                                        .select_scope(MappingEditorScope::SystemDefault);
-                                }
-
-                                let device_selected = self.state.controller_mapping.selected_scope
-                                    == MappingEditorScope::ActiveDevice;
-                                if scope_chip(
-                                    ui,
-                                    "Active Device Override",
-                                    has_device,
-                                    device_selected,
-                                    &palette,
-                                )
-                                .clicked()
-                                {
-                                    self.state
-                                        .controller_mapping
-                                        .select_scope(MappingEditorScope::ActiveDevice);
-                                }
-                            });
-
-                            ui.add_space(1.0);
-                            if let Some(device) = active_device.as_ref() {
-                                ui.label(
-                                    egui::RichText::new(device.name.as_str())
-                                        .size(12.0)
-                                        .strong()
-                                        .color(palette.text),
-                                );
-                                draw_device_preset_hint(ui, device, &palette);
-                            } else {
-                                ui.label(
-                                    egui::RichText::new(
-                                        "No controller connected. Device overrides are unavailable.",
-                                    )
-                                    .size(11.5)
-                                    .color(palette.text_muted),
-                                );
-                            }
-                        });
+                    self.draw_mapping_device_tabs_card(
+                        &mut columns[1],
+                        &mapping_targets,
+                        selected_target.as_ref(),
+                    );
                 });
             } else {
                 draw_controller_preview(ui, preview_texture.as_ref(), &palette, max_image_height);
+                self.draw_mapping_device_tabs_card(ui, &mapping_targets, selected_target.as_ref());
+            }
 
-                egui::Frame::new()
-                    .fill(palette.panel)
-                    .stroke(egui::Stroke::new(1.0, palette.border))
-                    .corner_radius(egui::CornerRadius::same(10))
-                    .inner_margin(egui::Margin::same(6))
-                    .show(ui, |ui| {
-                        ui.label(
-                            egui::RichText::new("Profile")
-                                .size(11.5)
-                                .color(palette.text_muted),
-                        );
-                        ui.horizontal_wrapped(|ui| {
-                            let system_default_selected = self.state.controller_mapping.selected_scope
-                                == MappingEditorScope::SystemDefault;
-                            if scope_chip(
-                                ui,
-                                "System Default",
-                                true,
-                                system_default_selected,
-                                &palette,
-                            )
-                            .clicked()
-                            {
-                                self.state
-                                    .controller_mapping
-                                    .select_scope(MappingEditorScope::SystemDefault);
-                            }
-
-                            let device_selected = self.state.controller_mapping.selected_scope
-                                == MappingEditorScope::ActiveDevice;
-                            if scope_chip(
-                                ui,
-                                "Active Device Override",
-                                has_device,
-                                device_selected,
-                                &palette,
-                            )
-                            .clicked()
-                            {
-                                self.state
-                                    .controller_mapping
-                                    .select_scope(MappingEditorScope::ActiveDevice);
-                            }
-                        });
-
-                        ui.add_space(1.0);
-                        if let Some(device) = active_device.as_ref() {
-                            ui.label(
-                                egui::RichText::new(device.name.as_str())
-                                    .size(12.0)
-                                    .strong()
-                                    .color(palette.text),
-                            );
-                            draw_device_preset_hint(ui, device, &palette);
-                        } else {
-                            ui.label(
-                                egui::RichText::new(
-                                    "No controller connected. Device overrides are unavailable.",
-                                )
-                                .size(11.5)
-                                .color(palette.text_muted),
-                            );
-                        }
-                    });
+            if !has_device {
+                ui.add_space(4.0);
+                ui.label(
+                    egui::RichText::new("Connect a controller to edit and save per-device mappings.")
+                        .size(11.2)
+                        .color(palette.text_muted),
+                );
+                return;
             }
 
             let options = self.mapping_entry_options();
@@ -607,6 +538,14 @@ impl NativeArcadeUiApp {
                 if ui.add(reset_button).clicked() {
                     self.reset_controller_mapping_editor_to_defaults();
                 }
+                let clear_button =
+                    egui::Button::new(egui::RichText::new("Clear Current Bindings").size(11.5))
+                        .fill(palette.panel)
+                        .stroke(egui::Stroke::new(1.0, palette.border))
+                        .corner_radius(egui::CornerRadius::same(255));
+                if ui.add(clear_button).clicked() {
+                    self.clear_controller_mapping_editor_bindings();
+                }
                 let save_button = egui::Button::new(egui::RichText::new("Save Mapping").size(11.5))
                     .fill(palette.accent_soft)
                     .stroke(egui::Stroke::new(1.0, palette.accent))
@@ -618,11 +557,83 @@ impl NativeArcadeUiApp {
         });
     }
 
-    pub(crate) fn draw_alpha_toolbar(
+    fn draw_mapping_device_tabs_card(
         &mut self,
         ui: &mut egui::Ui,
-        show_manage: bool,
-    ) -> bool {
+        targets: &[ControllerMappingTarget],
+        selected_target: Option<&ControllerMappingTarget>,
+    ) {
+        let palette = self.palette();
+        egui::Frame::new()
+            .fill(palette.panel)
+            .stroke(egui::Stroke::new(1.0, palette.border))
+            .corner_radius(egui::CornerRadius::same(10))
+            .inner_margin(egui::Margin::same(6))
+            .show(ui, |ui| {
+                ui.label(
+                    egui::RichText::new("Controllers")
+                        .size(11.5)
+                        .color(palette.text_muted),
+                );
+
+                if targets.is_empty() {
+                    ui.label(
+                        egui::RichText::new("No controller connected.")
+                            .size(11.5)
+                            .color(palette.text_muted),
+                    );
+                    return;
+                }
+
+                ui.horizontal_wrapped(|ui| {
+                    for target in targets {
+                        let selected = selected_target
+                            .is_some_and(|selected| selected.identity.device_key == target.identity.device_key);
+                        let label = mapping_target_tab_label(target);
+                        if scope_chip(ui, label.as_str(), true, selected, &palette).clicked() {
+                            self.request_controller_mapping_target_switch(target);
+                        }
+                    }
+                });
+
+                let pending_label = self
+                    .state
+                    .controller_mapping
+                    .pending_device_switch()
+                    .map(|(_, label)| label.to_string());
+                if let Some(label) = pending_label {
+                    ui.add_space(4.0);
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label(
+                            egui::RichText::new(format!(
+                                "Unsaved changes. Switch to {label} and discard current edits?"
+                            ))
+                            .size(11.0)
+                            .color(palette.text_muted),
+                        );
+                        if scope_chip(ui, "Keep Editing", true, false, &palette).clicked() {
+                            self.cancel_pending_controller_mapping_target_switch();
+                        }
+                        if scope_chip(ui, "Discard & Switch", true, false, &palette).clicked() {
+                            self.confirm_pending_controller_mapping_target_switch();
+                        }
+                    });
+                }
+
+                if let Some(selected) = selected_target {
+                    ui.add_space(1.0);
+                    ui.label(
+                        egui::RichText::new(selected.identity.name.as_str())
+                            .size(12.0)
+                            .strong()
+                            .color(palette.text),
+                    );
+                    draw_device_preset_hint(ui, &selected.identity, &palette);
+                }
+            });
+    }
+
+    pub(crate) fn draw_alpha_toolbar(&mut self, ui: &mut egui::Ui, show_manage: bool) -> bool {
         let palette = self.palette();
         let mut changed = false;
 
@@ -676,8 +687,7 @@ impl NativeArcadeUiApp {
         }
         let palette = self.palette();
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            let focused =
-                self.state.menu_nav.focus_region == MenuFocusRegion::LibraryManageButton;
+            let focused = self.state.menu_nav.focus_region == MenuFocusRegion::LibraryManageButton;
             let focus_t = ui
                 .ctx()
                 .animate_bool(ui.id().with("library-manage-button-focus"), focused);
@@ -767,6 +777,14 @@ fn use_wrapped_system_toolbar(width: f32) -> bool {
 
 fn use_wrapped_alpha_toolbar(width: f32) -> bool {
     width >= 860.0
+}
+
+fn mapping_target_tab_label(target: &ControllerMappingTarget) -> String {
+    if let Some(slot) = target.player_slot {
+        format!("P{} {}", slot + 1, target.identity.name)
+    } else {
+        target.identity.name.clone()
+    }
 }
 
 fn badge_chip(
@@ -872,4 +890,9 @@ fn blend_color(from: egui::Color32, to: egui::Color32, t: f32) -> egui::Color32 
         mix(from.b(), to.b()),
         mix(from.a(), to.a()),
     )
+}
+
+fn system_uses_primary_stick_selector(system: &str) -> bool {
+    let normalized = system.trim().to_ascii_uppercase();
+    matches!(normalized.as_str(), "N64" | "DREAMCAST")
 }

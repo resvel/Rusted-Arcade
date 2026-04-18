@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -15,10 +16,12 @@ use arcade_domain::{
 };
 
 #[cfg(feature = "gamepad")]
-use crate::state::{ControllerInputButtonDebug, ControllerInputDebugSnapshot};
+use crate::state::{
+    ControllerAssignmentSource, ControllerInputButtonDebug, ControllerInputDebugSnapshot,
+};
 use crate::{
     app::NativeArcadeUiApp,
-    state::{ControllerMappingCacheKey, MappingEditorScope, MenuFocusRegion, MenuNavDirection},
+    state::{ControllerMappingCacheKey, MenuFocusRegion, MenuNavDirection},
 };
 #[cfg(feature = "gamepad")]
 use gilrs::{ev::Code, Axis, Button, GamepadId};
@@ -147,6 +150,13 @@ struct GamepadCapture {
     state: CanonicalPadState,
 }
 
+#[derive(Clone)]
+pub(crate) struct ControllerMappingTarget {
+    pub(crate) identity: DetectedPadIdentity,
+    pub(crate) player_slot: Option<u8>,
+    pub(crate) connect_seq: u64,
+}
+
 #[cfg(feature = "gamepad")]
 #[derive(Default, Clone, Copy)]
 pub(crate) struct RawDpadState {
@@ -221,7 +231,13 @@ impl NativeArcadeUiApp {
 
     pub(crate) fn tick_frontend_navigation(&mut self, ctx: &egui::Context) {
         if !ctx.input(|i| i.focused) {
+            #[cfg(feature = "gamepad")]
+            {
+                let system = self.active_input_system();
+                let _ = self.capture_gamepad_state(&system);
+            }
             self.clear_menu_repeat_state();
+            ctx.request_repaint_after(Duration::from_millis(120));
             return;
         }
 
@@ -379,21 +395,18 @@ impl NativeArcadeUiApp {
         }
     }
 
-    pub(crate) fn sync_controller_mapping_editor(&mut self) {
+    #[cfg(feature = "gamepad")]
+    pub(crate) fn sync_controller_mapping_editor(&mut self, targets: &[ControllerMappingTarget]) {
         let system = self.state.controller_mapping.input_system.clone();
         if system == "ALL" || system.is_empty() {
             return;
         }
 
-        let active_device = self.active_detected_gamepad_identity();
-        self.state
-            .controller_mapping
-            .normalize_scope(active_device.is_some());
-        let desired_key = self.state.controller_mapping.desired_mapping_key(
-            active_device
-                .as_ref()
-                .map(|device| device.device_key.as_str()),
-        );
+        self.reconcile_selected_controller_mapping_target(targets);
+        let Some(selected_target) = self.selected_controller_mapping_target(targets) else {
+            return;
+        };
+        let desired_key = selected_target.identity.device_key.clone();
 
         if !self
             .state
@@ -405,11 +418,7 @@ impl NativeArcadeUiApp {
 
         let mapping = self.resolved_mapping_for(
             &system,
-            if self.state.controller_mapping.selected_scope == MappingEditorScope::ActiveDevice {
-                active_device.as_ref()
-            } else {
-                None
-            },
+            Some(&selected_target.identity),
         );
         let threshold = normalize_mapping_threshold(mapping.threshold);
 
@@ -420,6 +429,9 @@ impl NativeArcadeUiApp {
             threshold,
         );
     }
+
+    #[cfg(not(feature = "gamepad"))]
+    pub(crate) fn sync_controller_mapping_editor(&mut self, _targets: &[ControllerMappingTarget]) {}
 
     pub(crate) fn reset_controller_mapping_editor_to_defaults(&mut self) {
         let system = self.state.controller_mapping.input_system.clone();
@@ -434,6 +446,62 @@ impl NativeArcadeUiApp {
             .reset_to_defaults(&system, normalized_threshold);
     }
 
+    pub(crate) fn clear_controller_mapping_editor_bindings(&mut self) {
+        let system = self.state.controller_mapping.input_system.clone();
+        if system == "ALL" || system.is_empty() {
+            return;
+        }
+
+        clear_mapping_actions(
+            &mut self.state.controller_mapping.actions,
+            supported_gamepad_actions(&system),
+        );
+    }
+
+    #[cfg(feature = "gamepad")]
+    pub(crate) fn request_controller_mapping_target_switch(
+        &mut self,
+        target: &ControllerMappingTarget,
+    ) {
+        if self.state.controller_mapping.selected_device_key() == Some(target.identity.device_key.as_str()) {
+            return;
+        }
+
+        if self.controller_mapping_is_dirty() {
+            self.state.controller_mapping.queue_pending_device_switch(
+                target.identity.device_key.clone(),
+                target.identity.name.clone(),
+            );
+        } else {
+            self.state
+                .controller_mapping
+                .set_selected_device_key(Some(target.identity.device_key.clone()));
+        }
+    }
+
+    #[cfg(feature = "gamepad")]
+    pub(crate) fn cancel_pending_controller_mapping_target_switch(&mut self) {
+        self.state.controller_mapping.clear_pending_device_switch();
+    }
+
+    #[cfg(feature = "gamepad")]
+    pub(crate) fn confirm_pending_controller_mapping_target_switch(&mut self) {
+        self.state.controller_mapping.apply_pending_device_switch();
+    }
+
+    #[cfg(not(feature = "gamepad"))]
+    pub(crate) fn request_controller_mapping_target_switch(
+        &mut self,
+        _target: &ControllerMappingTarget,
+    ) {
+    }
+
+    #[cfg(not(feature = "gamepad"))]
+    pub(crate) fn cancel_pending_controller_mapping_target_switch(&mut self) {}
+
+    #[cfg(not(feature = "gamepad"))]
+    pub(crate) fn confirm_pending_controller_mapping_target_switch(&mut self) {}
+
     pub(crate) fn save_controller_mapping_from_editor(&mut self) {
         let system = self.state.controller_mapping.input_system.clone();
         if system == "ALL" || system.is_empty() {
@@ -442,26 +510,21 @@ impl NativeArcadeUiApp {
             return;
         }
 
-        let active_device = self.active_detected_gamepad_identity();
-        let (mapping_key, vendor_id, product_id, device_meta) =
-            if self.state.controller_mapping.selected_scope == MappingEditorScope::ActiveDevice {
-                let Some(device) = active_device.as_ref() else {
-                    self.state.status =
-                        String::from("No controller connected for a device override.");
-                    return;
-                };
-                (
-                    device.device_key.as_str(),
-                    device.vendor_id.as_deref(),
-                    device.product_id.as_deref(),
-                    Some(StoredDeviceMeta {
-                        id: Some(device.device_key.clone()),
-                        mapping: device.mapping_name.clone(),
-                    }),
-                )
-            } else {
-                (SYSTEM_DEFAULT_MAPPING_KEY, None, None, None)
-            };
+        let targets = self.connected_controller_mapping_targets();
+        self.reconcile_selected_controller_mapping_target(&targets);
+        let Some(target) = self.selected_controller_mapping_target(&targets) else {
+            self.state.status =
+                String::from("No controller connected for saving a device mapping.");
+            return;
+        };
+        let device = &target.identity;
+        let mapping_key = device.device_key.as_str();
+        let vendor_id = device.vendor_id.as_deref();
+        let product_id = device.product_id.as_deref();
+        let device_meta = Some(StoredDeviceMeta {
+            id: Some(device.device_key.clone()),
+            mapping: device.mapping_name.clone(),
+        });
         let normalized_threshold =
             normalize_mapping_threshold(self.state.controller_mapping.threshold);
 
@@ -484,11 +547,7 @@ impl NativeArcadeUiApp {
                 self.state
                     .controller_mapping
                     .mark_saved(normalized_threshold);
-                self.state.status = if mapping_key == SYSTEM_DEFAULT_MAPPING_KEY {
-                    format!("Saved {} controller defaults.", system)
-                } else {
-                    format!("Saved {} controller override for {}.", system, mapping_key)
-                };
+                self.state.status = format!("Saved {} controller mapping for {}.", system, mapping_key);
             }
             Err(err) => {
                 self.state.status = format!("Could not save controller mapping: {err}");
@@ -504,23 +563,156 @@ impl NativeArcadeUiApp {
             ))
     }
 
-    pub(crate) fn active_detected_gamepad_identity(&mut self) -> Option<DetectedPadIdentity> {
-        #[cfg(feature = "gamepad")]
-        {
-            let gilrs = self.gilrs.as_ref()?;
-            let mut connected = gilrs
-                .gamepads()
-                .filter(|(_, gamepad)| gamepad.is_connected() && is_playable_gamepad(gamepad))
-                .collect::<Vec<_>>();
-            connected.sort_by(|left, right| left.0.to_string().cmp(&right.0.to_string()));
-            let (id, gamepad) = connected.into_iter().next()?;
-            Some(build_detected_pad_identity(id, &gamepad))
+    fn reconcile_selected_controller_mapping_target(
+        &mut self,
+        targets: &[ControllerMappingTarget],
+    ) {
+        if targets.is_empty() {
+            self.state.controller_mapping.set_selected_device_key(None);
+            return;
         }
 
-        #[cfg(not(feature = "gamepad"))]
-        {
-            None
+        let pending_key = self
+            .state
+            .controller_mapping
+            .pending_device_switch()
+            .map(|(key, _)| key.to_string());
+        if let Some(key) = pending_key {
+            if !targets.iter().any(|target| target.identity.device_key == key) {
+                self.state.controller_mapping.clear_pending_device_switch();
+            }
         }
+
+        let selected_valid = self
+            .state
+            .controller_mapping
+            .selected_device_key();
+        let next_selected = resolved_selected_mapping_device_key(selected_valid, targets);
+        self.state
+            .controller_mapping
+            .set_selected_device_key(next_selected);
+    }
+
+    fn selected_controller_mapping_target<'a>(
+        &self,
+        targets: &'a [ControllerMappingTarget],
+    ) -> Option<&'a ControllerMappingTarget> {
+        let selected_key = self.state.controller_mapping.selected_device_key()?;
+        targets
+            .iter()
+            .find(|target| target.identity.device_key == selected_key)
+    }
+
+    #[cfg(feature = "gamepad")]
+    pub(crate) fn connected_controller_mapping_targets(&mut self) -> Vec<ControllerMappingTarget> {
+        let connected = self.poll_connected_gamepads();
+        let Some(gilrs) = self.gilrs.as_ref() else {
+            return Vec::new();
+        };
+        let identity_cache = &mut self.gamepad_identity_cache;
+        let mut targets = Vec::new();
+        for (id_usize, id, is_playable) in connected {
+            if !is_playable {
+                continue;
+            }
+            let gamepad = gilrs.gamepad(id);
+            let identity = if let Some(existing) = identity_cache.get(&id_usize) {
+                existing.clone()
+            } else {
+                let built = build_detected_pad_identity(id, &gamepad);
+                identity_cache.insert(id_usize, built.clone());
+                built
+            };
+            targets.push(ControllerMappingTarget {
+                identity,
+                player_slot: self.gamepad_slot_assignments.get(&id_usize).copied(),
+                connect_seq: self
+                    .gamepad_connect_order
+                    .get(&id_usize)
+                    .copied()
+                    .unwrap_or(u64::MAX),
+            });
+        }
+
+        targets.sort_by(|left, right| {
+            match (left.player_slot, right.player_slot) {
+                (Some(a), Some(b)) => a.cmp(&b),
+                (Some(_), None) => std::cmp::Ordering::Less,
+                (None, Some(_)) => std::cmp::Ordering::Greater,
+                (None, None) => left.connect_seq.cmp(&right.connect_seq),
+            }
+            .then(left.identity.name.cmp(&right.identity.name))
+        });
+        targets
+    }
+
+    #[cfg(not(feature = "gamepad"))]
+    pub(crate) fn connected_controller_mapping_targets(&mut self) -> Vec<ControllerMappingTarget> {
+        Vec::new()
+    }
+
+    #[cfg(feature = "gamepad")]
+    fn poll_connected_gamepads(&mut self) -> Vec<(usize, GamepadId, bool)> {
+        let Some(gilrs) = self.gilrs.as_mut() else {
+            return Vec::new();
+        };
+
+        while let Some(event) = gilrs.next_event() {
+            update_raw_dpad_state_from_event(&mut self.raw_dpad_state_cache, event);
+        }
+
+        let mut connected = gilrs
+            .gamepads()
+            .filter(|(_, gamepad)| gamepad.is_connected())
+            .map(|(id, gamepad)| (usize::from(id), id, is_playable_gamepad(&gamepad)))
+            .collect::<Vec<_>>();
+        connected.sort_by(|left, right| left.0.cmp(&right.0));
+
+        let connected_ids = connected.iter().map(|(id, _, _)| *id).collect::<Vec<_>>();
+        let connected_id_set = connected_ids.iter().copied().collect::<HashSet<_>>();
+        let playable_ids = connected
+            .iter()
+            .filter_map(|(id, _, is_playable)| is_playable.then_some(*id))
+            .collect::<Vec<_>>();
+
+        self.raw_dpad_state_cache
+            .retain(|id, _| connected_id_set.contains(id));
+        self.gamepad_identity_cache
+            .retain(|id, _| connected_id_set.contains(id));
+
+        reconcile_player_slot_assignments(
+            &mut self.gamepad_connect_order,
+            &mut self.gamepad_slot_assignments,
+            &mut self.next_gamepad_connect_seq,
+            &connected_ids,
+            &playable_ids,
+            MAX_GAMEPAD_PLAYERS,
+        );
+
+        connected.sort_by(|left, right| {
+            match (
+                self.gamepad_slot_assignments.get(&left.0).copied(),
+                self.gamepad_slot_assignments.get(&right.0).copied(),
+            ) {
+                (Some(a), Some(b)) => a.cmp(&b),
+                (Some(_), None) => std::cmp::Ordering::Less,
+                (None, Some(_)) => std::cmp::Ordering::Greater,
+                (None, None) => self
+                    .gamepad_connect_order
+                    .get(&left.0)
+                    .copied()
+                    .unwrap_or(u64::MAX)
+                    .cmp(
+                        &self
+                            .gamepad_connect_order
+                            .get(&right.0)
+                            .copied()
+                            .unwrap_or(u64::MAX),
+                    ),
+            }
+            .then(left.0.cmp(&right.0))
+        });
+        connected
     }
 
     pub(crate) fn invalidate_gamepad_mapping_cache_for_system(&mut self, system: &str) {
@@ -600,11 +792,14 @@ impl NativeArcadeUiApp {
 
     #[cfg(feature = "gamepad")]
     fn capture_gamepad_state(&mut self, runtime_system: &str) -> Vec<GamepadCapture> {
-        let Some(gilrs) = self.gilrs.as_mut() else {
+        if self.gilrs.is_none() {
             self.state.input_debug.clear();
             self.state.controller_input_debug.snapshots.clear();
+            self.state.controller_input_debug.connected_total = 0;
+            self.state.controller_input_debug.assigned_playable_total = 0;
+            self.state.controller_input_debug.unassigned_total = 0;
             return Vec::new();
-        };
+        }
         let normalized_runtime_system = normalize_system_name(runtime_system);
         let debug_open = self.state.controller_input_debug.open;
         let saved_mapping_keys = if debug_open {
@@ -620,34 +815,91 @@ impl NativeArcadeUiApp {
         } else {
             Vec::new()
         };
-        let identity_cache = &mut self.gamepad_identity_cache;
-        let raw_dpad_state_cache = &mut self.raw_dpad_state_cache;
-
-        while let Some(event) = gilrs.next_event() {
-            update_raw_dpad_state_from_event(raw_dpad_state_cache, event);
-        }
-
-        let mut connected = gilrs
-            .gamepads()
-            .filter(|(_, gamepad)| gamepad.is_connected() && is_playable_gamepad(gamepad))
-            .map(|(id, _)| (usize::from(id), id))
-            .collect::<Vec<_>>();
+        let mut connected = {
+            let raw_dpad_state_cache = &mut self.raw_dpad_state_cache;
+            let Some(gilrs) = self.gilrs.as_mut() else {
+                self.state.input_debug.clear();
+                self.state.controller_input_debug.snapshots.clear();
+                self.state.controller_input_debug.connected_total = 0;
+                self.state.controller_input_debug.assigned_playable_total = 0;
+                self.state.controller_input_debug.unassigned_total = 0;
+                return Vec::new();
+            };
+            while let Some(event) = gilrs.next_event() {
+                update_raw_dpad_state_from_event(raw_dpad_state_cache, event);
+            }
+            gilrs
+                .gamepads()
+                .filter(|(_, gamepad)| gamepad.is_connected())
+                .map(|(id, gamepad)| (usize::from(id), id, is_playable_gamepad(&gamepad)))
+                .collect::<Vec<_>>()
+        };
         connected.sort_by(|left, right| left.0.cmp(&right.0));
-        raw_dpad_state_cache
-            .retain(|id, _| connected.iter().any(|(connected_id, _)| connected_id == id));
 
-        let mut captures = Vec::with_capacity(connected.len().min(MAX_GAMEPAD_PLAYERS as usize));
-        let mut debug_snapshots =
-            Vec::with_capacity(connected.len().min(MAX_GAMEPAD_PLAYERS as usize));
+        let connected_ids = connected.iter().map(|(id, _, _)| *id).collect::<Vec<_>>();
+        let connected_id_set = connected_ids.iter().copied().collect::<HashSet<_>>();
+        let playable_ids = connected
+            .iter()
+            .filter_map(|(id, _, playable)| playable.then_some(*id))
+            .collect::<Vec<_>>();
+
+        self.raw_dpad_state_cache
+            .retain(|id, _| connected_id_set.contains(id));
+        self.gamepad_identity_cache
+            .retain(|id, _| connected_id_set.contains(id));
+
+        reconcile_player_slot_assignments(
+            &mut self.gamepad_connect_order,
+            &mut self.gamepad_slot_assignments,
+            &mut self.next_gamepad_connect_seq,
+            &connected_ids,
+            &playable_ids,
+            MAX_GAMEPAD_PLAYERS,
+        );
+
+        connected.sort_by(|left, right| {
+            let left_slot = self.gamepad_slot_assignments.get(&left.0).copied();
+            let right_slot = self.gamepad_slot_assignments.get(&right.0).copied();
+            match (left_slot, right_slot) {
+                (Some(a), Some(b)) => a.cmp(&b),
+                (Some(_), None) => std::cmp::Ordering::Less,
+                (None, Some(_)) => std::cmp::Ordering::Greater,
+                (None, None) => {
+                    let left_seq = self
+                        .gamepad_connect_order
+                        .get(&left.0)
+                        .copied()
+                        .unwrap_or(u64::MAX);
+                    let right_seq = self
+                        .gamepad_connect_order
+                        .get(&right.0)
+                        .copied()
+                        .unwrap_or(u64::MAX);
+                    left_seq.cmp(&right_seq).then(left.0.cmp(&right.0))
+                }
+            }
+        });
+
+        let Some(gilrs) = self.gilrs.as_ref() else {
+            self.state.input_debug.clear();
+            self.state.controller_input_debug.snapshots.clear();
+            self.state.controller_input_debug.connected_total = 0;
+            self.state.controller_input_debug.assigned_playable_total = 0;
+            self.state.controller_input_debug.unassigned_total = 0;
+            return Vec::new();
+        };
+
+        let assigned_playable_total = self.gamepad_slot_assignments.len();
+        let mut captures = Vec::with_capacity(assigned_playable_total);
+        let mut debug_snapshots = Vec::with_capacity(connected.len());
         let mut input_debug = String::new();
-        for (port, (_, id)) in connected
-            .into_iter()
-            .take(MAX_GAMEPAD_PLAYERS as usize)
-            .enumerate()
-        {
+        let input_debug_enabled = std::env::var_os("ARCADE_INPUT_DEBUG").is_some();
+        let identity_cache = &mut self.gamepad_identity_cache;
+        for (id_usize, id, is_playable) in connected {
             let gamepad = gilrs.gamepad(id);
-            let raw_dpad = raw_dpad_state_cache
-                .get(&usize::from(id))
+            let raw_dpad = self
+                .raw_dpad_state_cache
+                .get(&id_usize)
                 .copied()
                 .unwrap_or_default();
             let invert_vertical = should_invert_vertical_axis(gamepad.vendor_id(), gamepad.name());
@@ -746,21 +998,7 @@ impl NativeArcadeUiApp {
                 raw_right_y,
                 &state,
             );
-            if input_debug.is_empty() && std::env::var_os("ARCADE_INPUT_DEBUG").is_some() {
-                input_debug = format_gamepad_capture_debug_line(
-                    &gamepad,
-                    has_dpad_buttons,
-                    effective_raw_dpad_x,
-                    effective_raw_dpad_y,
-                    raw_left_x,
-                    raw_left_y,
-                    raw_right_x,
-                    raw_right_y,
-                    &state,
-                );
-            }
-
-            let cache_key = usize::from(id);
+            let cache_key = id_usize;
             let identity = if let Some(existing) = identity_cache.get(&cache_key) {
                 existing.clone()
             } else {
@@ -777,9 +1015,38 @@ impl NativeArcadeUiApp {
             } else {
                 None
             };
+            let assigned_slot = self.gamepad_slot_assignments.get(&cache_key).copied();
+            let assignment_source = if !is_playable {
+                ControllerAssignmentSource::Unsupported
+            } else if assigned_slot.is_some() {
+                ControllerAssignmentSource::Assigned
+            } else {
+                ControllerAssignmentSource::UnassignedOverLimit
+            };
+            let connect_seq = self
+                .gamepad_connect_order
+                .get(&cache_key)
+                .copied()
+                .unwrap_or(u64::MAX);
+            if input_debug_enabled && input_debug.is_empty() && assigned_slot.is_some() {
+                input_debug = format_gamepad_capture_debug_line(
+                    &gamepad,
+                    has_dpad_buttons,
+                    effective_raw_dpad_x,
+                    effective_raw_dpad_y,
+                    raw_left_x,
+                    raw_left_y,
+                    raw_right_x,
+                    raw_right_y,
+                    &state,
+                );
+            }
 
             debug_snapshots.push(ControllerInputDebugSnapshot {
-                port: port as u32,
+                player_slot: assigned_slot,
+                is_playable,
+                assignment_source,
+                connect_seq,
                 name: identity.name.clone(),
                 vendor_id: identity.vendor_id.clone(),
                 product_id: identity.product_id.clone(),
@@ -824,15 +1091,24 @@ impl NativeArcadeUiApp {
                 right_thumb_debug,
             });
 
-            captures.push(GamepadCapture {
-                port: port as u32,
-                identity,
-                state,
-            });
+            if let Some(slot) = assigned_slot {
+                captures.push(GamepadCapture {
+                    port: slot as u32,
+                    identity,
+                    state,
+                });
+            }
         }
+        captures.sort_by_key(|capture| capture.port);
+        sort_debug_snapshots_for_display(&mut debug_snapshots);
 
         self.state.input_debug = input_debug;
+        let connected_total = debug_snapshots.len();
         self.state.controller_input_debug.snapshots = debug_snapshots;
+        self.state.controller_input_debug.connected_total = connected_total;
+        self.state.controller_input_debug.assigned_playable_total = assigned_playable_total;
+        self.state.controller_input_debug.unassigned_total =
+            connected_total.saturating_sub(assigned_playable_total);
         captures
     }
 
@@ -1790,6 +2066,33 @@ fn normalize_system_name(system: &str) -> String {
     }
 }
 
+fn resolved_selected_mapping_device_key(
+    current: Option<&str>,
+    targets: &[ControllerMappingTarget],
+) -> Option<String> {
+    if targets.is_empty() {
+        return None;
+    }
+    if let Some(current) = current {
+        if targets
+            .iter()
+            .any(|target| target.identity.device_key == current)
+        {
+            return Some(current.to_string());
+        }
+    }
+    Some(targets[0].identity.device_key.clone())
+}
+
+fn clear_mapping_actions(
+    actions: &mut BTreeMap<String, Option<MappingEntry>>,
+    supported_actions: &[&str],
+) {
+    for action in supported_actions {
+        actions.insert((*action).to_string(), None);
+    }
+}
+
 fn n64_control_stick_mapping_enabled(mapping: &StoredGamepadMapping) -> bool {
     ["Stick Up", "Stick Down", "Stick Left", "Stick Right"]
         .into_iter()
@@ -1799,6 +2102,82 @@ fn n64_control_stick_mapping_enabled(mapping: &StoredGamepadMapping) -> bool {
                 .get(action)
                 .is_some_and(|entry| entry.is_some())
         })
+}
+
+#[cfg(feature = "gamepad")]
+fn reconcile_player_slot_assignments(
+    connect_order: &mut HashMap<usize, u64>,
+    assignments: &mut HashMap<usize, u8>,
+    next_connect_seq: &mut u64,
+    connected_ids: &[usize],
+    playable_ids: &[usize],
+    max_players: u8,
+) {
+    let connected_set = connected_ids.iter().copied().collect::<HashSet<_>>();
+    for id in connected_ids {
+        if connect_order.contains_key(id) {
+            continue;
+        }
+        connect_order.insert(*id, *next_connect_seq);
+        *next_connect_seq = next_connect_seq.saturating_add(1);
+    }
+    connect_order.retain(|id, _| connected_set.contains(id));
+
+    let playable_set = playable_ids.iter().copied().collect::<HashSet<_>>();
+    assignments.retain(|id, slot| {
+        connected_set.contains(id) && playable_set.contains(id) && *slot < max_players
+    });
+
+    let mut used_slots = assignments.values().copied().collect::<HashSet<_>>();
+    let mut unassigned_playable = playable_ids
+        .iter()
+        .filter(|id| connected_set.contains(id) && !assignments.contains_key(id))
+        .copied()
+        .collect::<Vec<_>>();
+    unassigned_playable.sort_by(|left, right| {
+        let left_seq = connect_order.get(left).copied().unwrap_or(u64::MAX);
+        let right_seq = connect_order.get(right).copied().unwrap_or(u64::MAX);
+        left_seq.cmp(&right_seq).then(left.cmp(right))
+    });
+
+    for id in unassigned_playable {
+        if let Some(slot) = next_available_player_slot(max_players, &used_slots) {
+            assignments.insert(id, slot);
+            used_slots.insert(slot);
+        } else {
+            break;
+        }
+    }
+}
+
+#[cfg(feature = "gamepad")]
+fn next_available_player_slot(max_players: u8, used_slots: &HashSet<u8>) -> Option<u8> {
+    (0..max_players).find(|slot| !used_slots.contains(slot))
+}
+
+#[cfg(feature = "gamepad")]
+fn sort_debug_snapshots_for_display(snapshots: &mut [ControllerInputDebugSnapshot]) {
+    snapshots.sort_by(|left, right| {
+        let left_rank = match left.assignment_source {
+            ControllerAssignmentSource::Assigned => 0,
+            ControllerAssignmentSource::UnassignedOverLimit => 1,
+            ControllerAssignmentSource::Unsupported => 2,
+        };
+        let right_rank = match right.assignment_source {
+            ControllerAssignmentSource::Assigned => 0,
+            ControllerAssignmentSource::UnassignedOverLimit => 1,
+            ControllerAssignmentSource::Unsupported => 2,
+        };
+        left_rank
+            .cmp(&right_rank)
+            .then(
+                left.player_slot
+                    .unwrap_or(u8::MAX)
+                    .cmp(&right.player_slot.unwrap_or(u8::MAX)),
+            )
+            .then(left.connect_seq.cmp(&right.connect_seq))
+            .then(left.name.cmp(&right.name))
+    });
 }
 
 #[cfg(feature = "gamepad")]
@@ -2690,6 +3069,105 @@ mod tests {
         assert!(!valued_button_active(Some(false), Some(0.05), 0.10));
     }
 
+    #[test]
+    fn resolved_selected_mapping_device_key_keeps_current_when_present() {
+        let targets = vec![
+            ControllerMappingTarget {
+                identity: DetectedPadIdentity {
+                    device_key: String::from("054c:09cc:PS4"),
+                    name: String::from("PS4"),
+                    vendor_id: Some(String::from("054c")),
+                    product_id: Some(String::from("09cc")),
+                    mapping_name: Some(String::from("SdlMappings")),
+                },
+                player_slot: Some(0),
+                connect_seq: 0,
+            },
+            ControllerMappingTarget {
+                identity: DetectedPadIdentity {
+                    device_key: String::from("045e:02fd:Xbox"),
+                    name: String::from("Xbox"),
+                    vendor_id: Some(String::from("045e")),
+                    product_id: Some(String::from("02fd")),
+                    mapping_name: Some(String::from("SdlMappings")),
+                },
+                player_slot: Some(1),
+                connect_seq: 1,
+            },
+        ];
+
+        let selected =
+            resolved_selected_mapping_device_key(Some("045e:02fd:Xbox"), &targets);
+        assert_eq!(selected.as_deref(), Some("045e:02fd:Xbox"));
+    }
+
+    #[test]
+    fn resolved_selected_mapping_device_key_falls_back_to_first_target() {
+        let targets = vec![
+            ControllerMappingTarget {
+                identity: DetectedPadIdentity {
+                    device_key: String::from("054c:09cc:PS4"),
+                    name: String::from("PS4"),
+                    vendor_id: Some(String::from("054c")),
+                    product_id: Some(String::from("09cc")),
+                    mapping_name: Some(String::from("SdlMappings")),
+                },
+                player_slot: Some(0),
+                connect_seq: 0,
+            },
+            ControllerMappingTarget {
+                identity: DetectedPadIdentity {
+                    device_key: String::from("054c:0ce6:PS5"),
+                    name: String::from("PS5"),
+                    vendor_id: Some(String::from("054c")),
+                    product_id: Some(String::from("0ce6")),
+                    mapping_name: Some(String::from("SdlMappings")),
+                },
+                player_slot: Some(1),
+                connect_seq: 1,
+            },
+        ];
+
+        let selected =
+            resolved_selected_mapping_device_key(Some("missing"), &targets);
+        assert_eq!(selected.as_deref(), Some("054c:09cc:PS4"));
+    }
+
+    #[test]
+    fn clear_mapping_actions_unassigns_supported_actions_only() {
+        let mut actions = BTreeMap::from([
+            (
+                String::from("A"),
+                Some(MappingEntry::Button {
+                    button: CanonicalButton::South,
+                }),
+            ),
+            (
+                String::from("B"),
+                Some(MappingEntry::Button {
+                    button: CanonicalButton::East,
+                }),
+            ),
+            (
+                String::from("Custom"),
+                Some(MappingEntry::Button {
+                    button: CanonicalButton::Guide,
+                }),
+            ),
+        ]);
+
+        clear_mapping_actions(&mut actions, &["A", "B"]);
+
+        assert_eq!(actions.get("A"), Some(&None));
+        assert_eq!(actions.get("B"), Some(&None));
+        assert_eq!(
+            actions.get("Custom"),
+            Some(&Some(MappingEntry::Button {
+                button: CanonicalButton::Guide,
+            }))
+        );
+    }
+
     #[cfg(feature = "gamepad")]
     #[test]
     fn deghost_non_dpad_button_suppresses_same_code_as_active_dpad() {
@@ -2866,6 +3344,120 @@ mod tests {
             RuntimeMappingSource::BuiltInDefault.label()
         );
         assert_eq!(profile.mapping_key, SYSTEM_DEFAULT_MAPPING_KEY);
+    }
+
+    #[cfg(feature = "gamepad")]
+    #[test]
+    fn reconcile_assignments_uses_first_come_with_four_player_cap() {
+        let mut connect_order = HashMap::new();
+        let mut assignments = HashMap::new();
+        let mut next_seq = 0;
+        reconcile_player_slot_assignments(
+            &mut connect_order,
+            &mut assignments,
+            &mut next_seq,
+            &[20, 10, 30, 40, 50],
+            &[20, 10, 30, 40, 50],
+            MAX_GAMEPAD_PLAYERS,
+        );
+
+        assert_eq!(assignments.get(&20), Some(&0));
+        assert_eq!(assignments.get(&10), Some(&1));
+        assert_eq!(assignments.get(&30), Some(&2));
+        assert_eq!(assignments.get(&40), Some(&3));
+        assert!(!assignments.contains_key(&50));
+    }
+
+    #[cfg(feature = "gamepad")]
+    #[test]
+    fn reconcile_assignments_refills_lowest_free_slot_after_disconnect() {
+        let mut connect_order = HashMap::new();
+        let mut assignments = HashMap::new();
+        let mut next_seq = 0;
+        reconcile_player_slot_assignments(
+            &mut connect_order,
+            &mut assignments,
+            &mut next_seq,
+            &[1, 2, 3, 4],
+            &[1, 2, 3, 4],
+            MAX_GAMEPAD_PLAYERS,
+        );
+        reconcile_player_slot_assignments(
+            &mut connect_order,
+            &mut assignments,
+            &mut next_seq,
+            &[1, 3, 4, 5],
+            &[1, 3, 4, 5],
+            MAX_GAMEPAD_PLAYERS,
+        );
+
+        assert_eq!(assignments.get(&1), Some(&0));
+        assert_eq!(assignments.get(&5), Some(&1));
+        assert_eq!(assignments.get(&3), Some(&2));
+        assert_eq!(assignments.get(&4), Some(&3));
+    }
+
+    #[cfg(feature = "gamepad")]
+    #[test]
+    fn reconcile_assignments_skips_non_playable_pads() {
+        let mut connect_order = HashMap::new();
+        let mut assignments = HashMap::new();
+        let mut next_seq = 0;
+        reconcile_player_slot_assignments(
+            &mut connect_order,
+            &mut assignments,
+            &mut next_seq,
+            &[1, 2, 3],
+            &[1, 3],
+            MAX_GAMEPAD_PLAYERS,
+        );
+
+        assert_eq!(assignments.len(), 2);
+        assert!(assignments.contains_key(&1));
+        assert!(!assignments.contains_key(&2));
+        assert!(assignments.contains_key(&3));
+    }
+
+    #[cfg(feature = "gamepad")]
+    #[test]
+    fn sort_debug_snapshots_prioritizes_assigned_then_unassigned_then_unsupported() {
+        let mut snapshots = vec![
+            ControllerInputDebugSnapshot {
+                name: String::from("unassigned"),
+                assignment_source: ControllerAssignmentSource::UnassignedOverLimit,
+                player_slot: None,
+                connect_seq: 2,
+                ..Default::default()
+            },
+            ControllerInputDebugSnapshot {
+                name: String::from("player2"),
+                assignment_source: ControllerAssignmentSource::Assigned,
+                player_slot: Some(1),
+                connect_seq: 5,
+                ..Default::default()
+            },
+            ControllerInputDebugSnapshot {
+                name: String::from("unsupported"),
+                assignment_source: ControllerAssignmentSource::Unsupported,
+                player_slot: None,
+                connect_seq: 1,
+                ..Default::default()
+            },
+            ControllerInputDebugSnapshot {
+                name: String::from("player1"),
+                assignment_source: ControllerAssignmentSource::Assigned,
+                player_slot: Some(0),
+                connect_seq: 7,
+                ..Default::default()
+            },
+        ];
+
+        sort_debug_snapshots_for_display(&mut snapshots);
+
+        assert_eq!(snapshots[0].name, "player1");
+        assert_eq!(snapshots[1].name, "player2");
+        assert_eq!(snapshots[2].name, "unassigned");
+        assert_eq!(snapshots[3].name, "unsupported");
     }
 
     #[cfg(feature = "gamepad")]
