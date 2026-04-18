@@ -73,10 +73,17 @@ pub struct CoverScrapeRunOptions {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct LocalCoverRelinkRunOptions {
+    pub systems: Vec<String>,
+    pub missing_only: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum ManageOperationKind {
     SmartScan,
     RemoveFromLibrary,
     ScrapeMissingCovers,
+    RelinkLocalCovers,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -91,8 +98,10 @@ pub struct ManageProgressEvent {
 pub struct ManageOperationSummary {
     pub kind: Option<ManageOperationKind>,
     pub created: usize,
+    pub matched: usize,
     pub updated: usize,
     pub removed: usize,
+    pub missing: usize,
     pub unchanged: usize,
     pub skipped: usize,
     pub failed: usize,

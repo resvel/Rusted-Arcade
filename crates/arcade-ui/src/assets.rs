@@ -107,13 +107,21 @@ impl NativeArcadeUiApp {
 
         Self::paint_background_gradient(ui, rect, palette.bg_top, palette.bg_bottom);
         if let Some(texture) = self.all_systems_background_texture(ctx) {
-            Self::paint_tiled_background_texture(
-                ui,
-                rect,
-                &texture,
-                0.55,
-                Color32::from_rgba_premultiplied(214, 228, 235, 44),
-            );
+            let size = texture.size_vec2();
+            if size.x > 0.0 && size.y > 0.0 {
+                let width_scale = rect.width() / size.x;
+                let height_scale = rect.height() / size.y;
+                let scale = width_scale.max(height_scale);
+                let draw_size = egui::vec2(size.x * scale, size.y * scale);
+                let draw_rect = egui::Rect::from_center_size(rect.center(), draw_size);
+                let uv = egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0));
+                ui.painter().image(
+                    texture.id(),
+                    draw_rect,
+                    uv,
+                    Color32::from_rgba_premultiplied(214, 228, 235, 64),
+                );
+            }
         }
         let mut side_art: Vec<&PathBuf> =
             Vec::with_capacity(assets.devices.len() + assets.controllers.len());
@@ -154,29 +162,6 @@ impl NativeArcadeUiApp {
         mesh.colored_vertex(rect.left_bottom(), bottom);
         mesh.indices.extend_from_slice(&[0, 1, 2, 0, 2, 3]);
         ui.painter().add(egui::Shape::mesh(mesh));
-    }
-
-    fn paint_tiled_background_texture(
-        ui: &egui::Ui,
-        rect: egui::Rect,
-        texture: &TextureHandle,
-        tile_scale: f32,
-        tint: Color32,
-    ) {
-        let size = texture.size_vec2();
-        if rect.width() <= 0.0 || rect.height() <= 0.0 || size.x <= 0.0 || size.y <= 0.0 {
-            return;
-        }
-
-        let tile_scale = tile_scale.max(0.1);
-        let uv = egui::Rect::from_min_max(
-            egui::Pos2::ZERO,
-            egui::pos2(
-                rect.width() / (size.x * tile_scale),
-                rect.height() / (size.y * tile_scale),
-            ),
-        );
-        ui.painter().image(texture.id(), rect, uv, tint);
     }
 
     fn paint_vertical_art_stack(

@@ -11,9 +11,10 @@ use arcade_domain::{
     default_gamepad_mapping_for_system, get_arcade_compatibility, resolve_core,
     resolve_effective_core_override, resolve_path_from_root, AppConfig, CoverScrapePlatformIds,
     CoverScrapeRunOptions, CoverScrapeSettingsInput, CoverScrapingConfig, DetectedPadIdentity,
-    ManageOperationKind, ManageOperationSummary, ManageProgressEvent, ManageRomStatus, ManageScope,
-    ManagementConfig, N64PrimaryStick, PathsConfig, RomCard, RomQuery, SaveLimits, SaveSlotData,
-    SaveSlotSummary, SavedGamepadMappingSummary, StoredGamepadMapping, SYSTEM_DEFAULT_MAPPING_KEY,
+    LocalCoverRelinkRunOptions, ManageOperationKind, ManageOperationSummary,
+    ManageProgressEvent, ManageRomStatus, ManageScope, ManagementConfig, N64PrimaryStick,
+    PathsConfig, RomCard, RomQuery, SaveLimits, SaveSlotData, SaveSlotSummary,
+    SavedGamepadMappingSummary, StoredGamepadMapping, SYSTEM_DEFAULT_MAPPING_KEY,
 };
 use sha1::{Digest, Sha1};
 use tracing::warn;
@@ -349,6 +350,7 @@ impl NativeServices {
 
     pub fn list_manage_roms(&self, scope: &ManageScope) -> Result<Vec<ManageRomStatus>> {
         let config = self.current_config()?;
+        let public_root = resolve_public_root(&config.paths.rom_root)?;
         let mut items = self
             .list_all_roms(scope)?
             .into_iter()
@@ -364,8 +366,8 @@ impl NativeServices {
                         .rom
                         .cover_path
                         .as_deref()
-                        .map(|value| !value.trim().is_empty())
-                        .unwrap_or(false),
+                        .and_then(|value| resolve_local_cover_asset_path(&public_root, value))
+                        .is_some(),
                 }
             })
             .collect::<Vec<_>>();
@@ -386,6 +388,7 @@ impl NativeServices {
     ) -> Result<ManageOperationSummary> {
         let config = self.current_config()?;
         let public_root = resolve_public_root(&config.paths.rom_root)?;
+        let local_cover_index = build_local_cover_index(&public_root)?;
         let existing_roms = self.list_all_roms(&ManageScope::AllSystems)?;
         let mut slug_set = existing_roms
             .iter()
@@ -442,11 +445,13 @@ impl NativeServices {
             let slug = unique_slug_for_scan(existing_slug, &title, &mut slug_set);
             path_to_slug.insert(stored_file_path.clone(), slug.clone());
             let checksum = hash_file(path)?;
-            let cover_path = if target.system == "ARCADE" && target.emulator_core == "mame2003" {
-                resolve_local_arcade_cover_path(&arcade_cover_index, &slug, &stored_file_path)
-            } else {
-                None
-            };
+            let cover_path = resolve_local_cover_path_for_scan(
+                &local_cover_index,
+                &arcade_cover_index,
+                target.system,
+                &slug,
+                &stored_file_path,
+            );
 
             match self.db.upsert_scanned_rom(ScannedRomInput {
                 system: target.system,
@@ -475,6 +480,77 @@ impl NativeServices {
         summary.message = format!(
             "Smart scan complete: {} created, {} updated, {} unchanged, {} skipped.",
             summary.created, summary.updated, summary.unchanged, summary.skipped
+        );
+        Ok(summary)
+    }
+
+    pub fn relink_local_covers(
+        &self,
+        run: LocalCoverRelinkRunOptions,
+        mut progress: impl FnMut(ManageProgressEvent),
+    ) -> Result<ManageOperationSummary> {
+        let config = self.current_config()?;
+        let public_root = resolve_public_root(&config.paths.rom_root)?;
+        let local_cover_index = build_local_cover_index(&public_root)?;
+        let arcade_cover_index = build_arcade_cover_index(&public_root)?;
+        let allowed_systems = run
+            .systems
+            .iter()
+            .map(|system| normalize_system(system))
+            .collect::<HashSet<_>>();
+        let mut candidates = self
+            .list_all_roms(&ManageScope::AllSystems)?
+            .into_iter()
+            .filter(|rom| allowed_systems.contains(&normalize_system(&rom.rom.system)))
+            .collect::<Vec<_>>();
+        candidates.sort_by(|left, right| left.display_title.cmp(&right.display_title));
+
+        let total = candidates.len();
+        let mut summary = ManageOperationSummary {
+            kind: Some(ManageOperationKind::RelinkLocalCovers),
+            ..ManageOperationSummary::default()
+        };
+
+        for (index, rom) in candidates.iter().enumerate() {
+            let has_cover_path = rom
+                .rom
+                .cover_path
+                .as_deref()
+                .map(|value| !value.trim().is_empty())
+                .unwrap_or(false);
+            // Enforce fill-missing-only globally to avoid overwriting user-linked covers.
+            if has_cover_path {
+                if !run.missing_only {
+                    // Explicitly keep existing behavior: relink never overwrites current coverPath.
+                }
+                summary.skipped += 1;
+            } else if let Some(cover_path) = resolve_local_cover_path_for_scan(
+                &local_cover_index,
+                &arcade_cover_index,
+                &rom.rom.system,
+                &rom.rom.slug,
+                &rom.rom.file_path,
+            ) {
+                summary.matched += 1;
+                match self.db.update_rom_cover_path(&rom.rom.id, &cover_path) {
+                    Ok(()) => summary.updated += 1,
+                    Err(_) => summary.failed += 1,
+                }
+            } else {
+                summary.missing += 1;
+            }
+
+            progress(ManageProgressEvent {
+                kind: ManageOperationKind::RelinkLocalCovers,
+                processed: index + 1,
+                total: Some(total),
+                message: format!("Relinked local cover for {}", rom.display_title),
+            });
+        }
+
+        summary.message = format!(
+            "Local cover relink complete: {} matched, {} updated, {} missing, {} skipped, {} failed.",
+            summary.matched, summary.updated, summary.missing, summary.skipped, summary.failed
         );
         Ok(summary)
     }
@@ -932,6 +1008,196 @@ fn resolve_public_root(rom_root: &Path) -> Result<PathBuf> {
     Ok(fallback)
 }
 
+const LOCAL_COVER_EXTENSIONS: [&str; 4] = ["jpg", "png", "jpeg", "webp"];
+
+#[derive(Default)]
+struct LocalCoverIndex {
+    systems: HashMap<String, SystemCoverIndex>,
+}
+
+#[derive(Default)]
+struct SystemCoverIndex {
+    exact_paths: HashMap<String, String>,
+}
+
+fn build_local_cover_index(public_root: &Path) -> Result<LocalCoverIndex> {
+    let covers_root = public_root.join("covers");
+    let entries = match fs::read_dir(&covers_root) {
+        Ok(entries) => entries,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(LocalCoverIndex::default())
+        }
+        Err(err) => return Err(err.into()),
+    };
+
+    let mut index = LocalCoverIndex::default();
+    for entry in entries {
+        let entry = entry?;
+        let system_dir = entry.path();
+        if !system_dir.is_dir() {
+            continue;
+        }
+        let system_key = entry.file_name().to_string_lossy().to_ascii_lowercase();
+        if system_key.trim().is_empty() {
+            continue;
+        }
+
+        let system_entries = match fs::read_dir(&system_dir) {
+            Ok(entries) => entries,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(err) => return Err(err.into()),
+        };
+
+        let system_index = index.systems.entry(system_key.clone()).or_default();
+        for file in system_entries {
+            let file = file?;
+            let path = file.path();
+            if !path.is_file() {
+                continue;
+            }
+
+            let extension = path
+                .extension()
+                .and_then(|value| value.to_str())
+                .map(str::to_ascii_lowercase);
+            let Some(extension) = extension else {
+                continue;
+            };
+            if !LOCAL_COVER_EXTENSIONS.contains(&extension.as_str()) {
+                continue;
+            }
+
+            let stem = path
+                .file_stem()
+                .and_then(|value| value.to_str())
+                .map(str::to_ascii_lowercase);
+            let Some(stem) = stem else {
+                continue;
+            };
+            if stem.trim().is_empty() {
+                continue;
+            }
+
+            let file_name = path.file_name().and_then(|value| value.to_str());
+            let Some(file_name) = file_name else {
+                continue;
+            };
+            let candidate_public_path = format!("/covers/{system_key}/{file_name}");
+            if let Some(existing_public_path) = system_index.exact_paths.get(&stem) {
+                let existing_rank = cover_extension_rank_from_public_path(existing_public_path);
+                let candidate_rank = cover_extension_rank(extension.as_str());
+                if candidate_rank > existing_rank {
+                    continue;
+                }
+                if candidate_rank == existing_rank
+                    && candidate_public_path.to_ascii_lowercase()
+                        >= existing_public_path.to_ascii_lowercase()
+                {
+                    continue;
+                }
+            }
+            system_index
+                .exact_paths
+                .insert(stem, candidate_public_path);
+        }
+    }
+
+    Ok(index)
+}
+
+fn cover_extension_rank(extension: &str) -> usize {
+    LOCAL_COVER_EXTENSIONS
+        .iter()
+        .position(|candidate| candidate.eq_ignore_ascii_case(extension))
+        .unwrap_or(usize::MAX)
+}
+
+fn cover_extension_rank_from_public_path(path: &str) -> usize {
+    Path::new(path)
+        .extension()
+        .and_then(|value| value.to_str())
+        .map(cover_extension_rank)
+        .unwrap_or(usize::MAX)
+}
+
+fn resolve_local_cover_path_for_scan(
+    local_cover_index: &LocalCoverIndex,
+    arcade_cover_index: &HashMap<String, String>,
+    system: &str,
+    slug: &str,
+    stored_file_path: &str,
+) -> Option<String> {
+    if let Some(path) = resolve_local_cover_path_for_slug(local_cover_index, system, slug) {
+        return Some(path);
+    }
+    if normalize_system(system) == "ARCADE" {
+        return resolve_local_arcade_cover_path(arcade_cover_index, slug, stored_file_path);
+    }
+    None
+}
+
+fn resolve_local_cover_path_for_slug(
+    local_cover_index: &LocalCoverIndex,
+    system: &str,
+    slug: &str,
+) -> Option<String> {
+    let system_key = normalize_system(system).to_ascii_lowercase();
+    let system_index = local_cover_index.systems.get(&system_key)?;
+    let slug = slug.trim().to_ascii_lowercase();
+    if slug.is_empty() {
+        return None;
+    }
+
+    if let Some(path) = system_index.exact_paths.get(&slug) {
+        return Some(path.clone());
+    }
+
+    if let Some(base_slug) = strip_trailing_numeric_suffix(&slug) {
+        if let Some(path) = system_index.exact_paths.get(base_slug) {
+            return Some(path.clone());
+        }
+    }
+
+    let prefix = format!("{slug}-");
+    let mut candidate = None;
+    for stem in system_index.exact_paths.keys() {
+        if !stem.starts_with(&prefix) {
+            continue;
+        }
+        if candidate.is_some() {
+            return None;
+        }
+        candidate = Some(stem.as_str());
+    }
+    candidate.and_then(|stem| system_index.exact_paths.get(stem)).cloned()
+}
+
+fn strip_trailing_numeric_suffix(slug: &str) -> Option<&str> {
+    let (base, suffix) = slug.rsplit_once('-')?;
+    if base.trim().is_empty() || suffix.trim().is_empty() {
+        return None;
+    }
+    if !suffix.chars().all(|ch| ch.is_ascii_digit()) {
+        return None;
+    }
+    Some(base)
+}
+
+fn resolve_local_cover_asset_path(public_root: &Path, raw_path: &str) -> Option<PathBuf> {
+    let trimmed = raw_path.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let direct = PathBuf::from(trimmed);
+    if direct.is_absolute() && direct.exists() {
+        return Some(direct);
+    }
+
+    let candidate = public_root.join(trimmed.trim_start_matches('/'));
+    candidate.exists().then_some(candidate)
+}
+
 fn build_arcade_cover_index(public_root: &Path) -> Result<HashMap<String, String>> {
     let mut index = HashMap::new();
     let dir = public_root.join("covers").join("arcade-mame2003");
@@ -1221,8 +1487,9 @@ mod tests {
     use super::*;
     use arcade_data::Database;
     use arcade_domain::{
-        CanonicalButton, MappingEntry, N64PreferredCore, N64PrimaryStick, PathsConfig,
-        NEXT_SAVE_SLOT_ACTION, QUICK_LOAD_ACTION, QUICK_SAVE_ACTION, SYSTEM_DEFAULT_MAPPING_KEY,
+        CanonicalButton, LocalCoverRelinkRunOptions, MappingEntry, N64PreferredCore,
+        N64PrimaryStick, PathsConfig, RomQuery, NEXT_SAVE_SLOT_ACTION, QUICK_LOAD_ACTION,
+        QUICK_SAVE_ACTION, SYSTEM_DEFAULT_MAPPING_KEY,
     };
     use chrono::Utc;
     use rusqlite::params;
@@ -1644,6 +1911,132 @@ mod tests {
             )
             .expect_err("missing key should fail");
         assert_eq!(err.to_string(), "TheGamesDB API key is not configured.");
+    }
+
+    #[test]
+    fn local_cover_matcher_supports_exact_alias_and_unique_variant() {
+        let tmp = TempDir::new().expect("tempdir");
+        let public_root = tmp.path().join("public");
+        let covers_dir = public_root.join("covers").join("nes");
+        std::fs::create_dir_all(&covers_dir).expect("create cover dir");
+        std::fs::write(covers_dir.join("contra-u.jpg"), b"cover").expect("write contra cover");
+        std::fs::write(covers_dir.join("mario-u-a1.png"), b"cover").expect("write mario variant");
+        std::fs::write(covers_dir.join("zelda-u-a1.jpg"), b"cover").expect("write zelda variant");
+        std::fs::write(covers_dir.join("zelda-u-a2.jpg"), b"cover").expect("write zelda variant");
+
+        let index = build_local_cover_index(&public_root).expect("build index");
+        assert_eq!(
+            resolve_local_cover_path_for_slug(&index, "NES", "contra-u"),
+            Some(String::from("/covers/nes/contra-u.jpg"))
+        );
+        assert_eq!(
+            resolve_local_cover_path_for_slug(&index, "NES", "contra-u-2"),
+            Some(String::from("/covers/nes/contra-u.jpg"))
+        );
+        assert_eq!(
+            resolve_local_cover_path_for_slug(&index, "NES", "mario-u"),
+            Some(String::from("/covers/nes/mario-u-a1.png"))
+        );
+        assert_eq!(
+            resolve_local_cover_path_for_slug(&index, "NES", "zelda-u"),
+            None
+        );
+        assert_eq!(
+            resolve_local_cover_path_for_slug(&index, "NES", "super-mario-u"),
+            None
+        );
+    }
+
+    #[test]
+    fn relink_local_covers_updates_only_missing_cover_paths() {
+        let tmp = TempDir::new().expect("tempdir");
+        let config = make_config(&tmp);
+        let db = Database::open(&config).expect("open db");
+        let conn = rusqlite::Connection::open(&config.paths.db_path).expect("open sqlite");
+        let now = Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
+        conn.execute(
+            "INSERT INTO \"Rom\" (id, system, slug, title, filePath, updatedAt)
+             VALUES ('rom-missing', 'NES', 'contra-u', 'Contra (U)', 'roms/nes/Contra (U).nes', ?1)",
+            params![now.clone()],
+        )
+        .expect("insert rom-missing");
+        conn.execute(
+            "INSERT INTO \"Rom\" (id, system, slug, title, filePath, coverPath, updatedAt)
+             VALUES ('rom-existing', 'NES', 'mario-u', 'Mario (U)', 'roms/nes/Mario (U).nes', '/covers/nes/existing.jpg', ?1)",
+            params![now],
+        )
+        .expect("insert rom-existing");
+
+        let covers_dir = tmp.path().join("public").join("covers").join("nes");
+        std::fs::create_dir_all(&covers_dir).expect("create cover dir");
+        std::fs::write(covers_dir.join("contra-u.jpg"), b"cover").expect("write cover");
+        std::fs::write(covers_dir.join("existing.jpg"), b"cover").expect("write existing cover");
+
+        let services = NativeServices::bootstrap(config.clone(), config_path_for(&config), db.clone())
+            .expect("bootstrap");
+
+        let summary = services
+            .relink_local_covers(
+                LocalCoverRelinkRunOptions {
+                    systems: vec![String::from("NES")],
+                    missing_only: true,
+                },
+                |_| {},
+            )
+            .expect("relink");
+        assert_eq!(summary.kind, Some(ManageOperationKind::RelinkLocalCovers));
+        assert_eq!(summary.matched, 1);
+        assert_eq!(summary.updated, 1);
+        assert_eq!(summary.skipped, 1);
+        assert_eq!(summary.missing, 0);
+        assert_eq!(summary.failed, 0);
+
+        let missing = db
+            .get_rom_by_id("rom-missing")
+            .expect("get missing")
+            .expect("missing rom");
+        assert_eq!(missing.cover_path.as_deref(), Some("/covers/nes/contra-u.jpg"));
+
+        let existing = db
+            .get_rom_by_id("rom-existing")
+            .expect("get existing")
+            .expect("existing rom");
+        assert_eq!(existing.cover_path.as_deref(), Some("/covers/nes/existing.jpg"));
+    }
+
+    #[test]
+    fn smart_scan_auto_links_local_cover_paths() {
+        let tmp = TempDir::new().expect("tempdir");
+        let config = make_config(&tmp);
+        let db = Database::open(&config).expect("open db");
+        let rom_path = config.paths.rom_root.join("nes").join("Test Rom (U).nes");
+        std::fs::create_dir_all(rom_path.parent().expect("rom parent")).expect("create rom dir");
+        std::fs::write(&rom_path, b"rom").expect("write rom");
+        let covers_dir = tmp.path().join("public").join("covers").join("nes");
+        std::fs::create_dir_all(&covers_dir).expect("create cover dir");
+        std::fs::write(covers_dir.join("test-rom-u.jpg"), b"cover").expect("write cover");
+        let services = NativeServices::bootstrap(config.clone(), config_path_for(&config), db)
+            .expect("bootstrap");
+
+        let summary = services
+            .smart_scan_roms(&ManageScope::System(String::from("NES")), |_| {})
+            .expect("smart scan");
+        assert_eq!(summary.kind, Some(ManageOperationKind::SmartScan));
+
+        let cards = services
+            .list_roms(&RomQuery {
+                system: Some(String::from("NES")),
+                ..RomQuery::default()
+            })
+            .expect("list roms");
+        let scanned = cards
+            .iter()
+            .find(|card| card.rom.slug == "test-rom-u")
+            .expect("scanned rom");
+        assert_eq!(
+            scanned.rom.cover_path.as_deref(),
+            Some("/covers/nes/test-rom-u.jpg")
+        );
     }
 
     #[test]

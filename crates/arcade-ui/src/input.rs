@@ -1666,7 +1666,17 @@ impl NativeArcadeUiApp {
                         self.state.menu_nav.focus_region = MenuFocusRegion::ManageList;
                     }
                 }
-                MenuNavDirection::Left | MenuNavDirection::Right => {}
+                MenuNavDirection::Left => {
+                    self.state.menu_nav.manage_scrape_action_index = self
+                        .state
+                        .menu_nav
+                        .manage_scrape_action_index
+                        .saturating_sub(1);
+                }
+                MenuNavDirection::Right => {
+                    self.state.menu_nav.manage_scrape_action_index =
+                        (self.state.menu_nav.manage_scrape_action_index + 1).min(1);
+                }
             },
             MenuFocusRegion::ManageList => match direction {
                 MenuNavDirection::Up => {
@@ -1736,7 +1746,10 @@ impl NativeArcadeUiApp {
             }
             MenuFocusRegion::ManageScrapeActions => {
                 if !self.state.manage.job_running {
-                    self.start_scrape_job();
+                    match self.state.menu_nav.manage_scrape_action_index {
+                        0 => self.start_scrape_job(),
+                        _ => self.start_relink_local_covers_job(),
+                    }
                 }
             }
             MenuFocusRegion::ManageList => {

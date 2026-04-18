@@ -3,7 +3,8 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 
 use arcade_domain::{
-    CoverScrapeRunOptions, CoverScrapeSettingsInput, ManageOperationKind, ManageScope, PathsConfig,
+    CoverScrapeRunOptions, CoverScrapeSettingsInput, LocalCoverRelinkRunOptions,
+    ManageOperationKind, ManageScope, PathsConfig,
 };
 use eframe::egui;
 
@@ -632,6 +633,26 @@ impl NativeArcadeUiApp {
                     self.state.menu_nav.manage_scrape_action_index = 0;
                     self.start_scrape_job();
                 }
+                let relink_response = ui.add_enabled(
+                    !self.state.manage.job_running,
+                    manage_button(
+                        "Relink Local Covers",
+                        self.state.menu_nav.focus_region == MenuFocusRegion::ManageScrapeActions
+                            && self.state.menu_nav.manage_scrape_action_index == 1,
+                        false,
+                        palette,
+                    ),
+                );
+                if self.state.menu_nav.focus_region == MenuFocusRegion::ManageScrapeActions
+                    && self.state.menu_nav.manage_scrape_action_index == 1
+                {
+                    Self::paint_selection_glow(ui, relink_response.rect, 255, palette.accent, 0.78);
+                }
+                if relink_response.clicked() {
+                    self.state.menu_nav.focus_region = MenuFocusRegion::ManageScrapeActions;
+                    self.state.menu_nav.manage_scrape_action_index = 1;
+                    self.start_relink_local_covers_job();
+                }
             });
         });
     }
@@ -903,6 +924,17 @@ impl NativeArcadeUiApp {
         })
     }
 
+    fn build_local_relink_run(&self) -> Result<LocalCoverRelinkRunOptions, String> {
+        if self.state.manage.scrape_systems.is_empty() {
+            return Err(String::from("Select at least one system to relink."));
+        }
+
+        Ok(LocalCoverRelinkRunOptions {
+            systems: self.state.manage.scrape_systems.iter().cloned().collect(),
+            missing_only: true,
+        })
+    }
+
     pub(crate) fn start_smart_scan_job(&mut self) {
         let Some(tx) = self.begin_manage_job("Running smart scan...") else {
             return;
@@ -971,6 +1003,26 @@ impl NativeArcadeUiApp {
         });
     }
 
+    pub(crate) fn start_relink_local_covers_job(&mut self) {
+        let run = match self.build_local_relink_run() {
+            Ok(run) => run,
+            Err(err) => {
+                self.state.manage.status_message = err;
+                return;
+            }
+        };
+        let Some(tx) = self.begin_manage_job("Relinking local covers...") else {
+            return;
+        };
+        let services = self.services.clone();
+        std::thread::spawn(move || {
+            let result = services.relink_local_covers(run, |progress| {
+                let _ = tx.send(ManageUiMessage::Progress(progress));
+            });
+            let _ = tx.send(ManageUiMessage::Finished(result));
+        });
+    }
+
     pub(crate) fn sync_manage_nav_state(&mut self) {
         self.state.menu_nav.manage_scope_index = SYSTEM_FILTERS
             .iter()
@@ -985,7 +1037,7 @@ impl NativeArcadeUiApp {
             .manage_scrape_system_index
             .min(SYSTEM_FILTERS.len().saturating_sub(1));
         self.state.menu_nav.manage_scrape_action_index =
-            self.state.menu_nav.manage_scrape_action_index.min(0);
+            self.state.menu_nav.manage_scrape_action_index.min(1);
         let row_len = self.state.manage.rows.len();
         self.state.menu_nav.manage_list_index = if row_len == 0 {
             0
