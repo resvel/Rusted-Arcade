@@ -82,7 +82,6 @@ impl NativeArcadeUiApp {
                 );
             }
         }
-
     }
 
     fn draw_all_systems_background(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
@@ -314,11 +313,14 @@ impl NativeArcadeUiApp {
                 "/system-logos/N64-Console-Set.png",
                 "/system-logos/arcadesystem.png",
                 "/system-logos/221-2216289_image-gba-sp-and-light-blue-gameboy-sp.png",
+                "/system-logos/Dreamcast-Console-Set.png",
             ]),
             controllers: self.resolve_existing_assets(&[
                 "/system-logos/nescontroller.png",
                 "/system-logos/snescontroller.png",
                 "/system-logos/genesiscontroller.png",
+                "/system-logos/PSX-Original-Controller.png",
+                "/system-logos/PSX_2_controller.png",
             ]),
         }
     }
@@ -335,10 +337,7 @@ impl NativeArcadeUiApp {
         self.resolve_db_asset_path("headerTitle.png")
     }
 
-    pub(crate) fn header_title_texture(
-        &mut self,
-        ctx: &egui::Context,
-    ) -> Option<TextureHandle> {
+    pub(crate) fn header_title_texture(&mut self, ctx: &egui::Context) -> Option<TextureHandle> {
         let path = self.resolve_header_title_path()?;
         Self::load_texture_from_path(
             &mut self.assets.background_textures,
@@ -359,6 +358,10 @@ impl NativeArcadeUiApp {
             "GBA" => "system-logos-web/GBAsectionbackground.w960.webp",
             "N64" => "system-logos-web/n64sectionbackground.w960.webp",
             "ARCADE" => "system-logos-web/arcadebackground.w1200.webp",
+            "PSX" => "system-logos/psxBackground.jpg",
+            "PS2" => "system-logos/ps2Background.jpg",
+            "DREAMCAST" => "system-logos/backgroundDreamcast.jpg",
+            "DOS" => "system-logos/DOSbackGround.png",
             _ => "system-logos-web/arcadebackground.w1200.webp",
         };
         self.resolve_db_asset_path(candidate)
@@ -543,6 +546,10 @@ impl NativeArcadeUiApp {
             "GBA" => "/system-logos/Game_Boy_Advance_logo.png",
             "N64" => "/system-logos/n64logo.png",
             "ARCADE" => "/system-logos-web/SNK_logo.svg",
+            "PSX" => "/system-logos/Playstation_logo_colour.png",
+            "PS2" => "/system-logos/PlayStation_2_logo.png",
+            "DREAMCAST" => "/system-logos/Dreamcast_logo_Japan.png",
+            "DOS" => "/system-logos/Msdos.png",
             _ => "/system-logos/arcadesystem.png",
         };
         self.resolve_db_asset_path(candidate)
@@ -573,6 +580,10 @@ impl NativeArcadeUiApp {
             "GBA" => egui::vec2(73.0, 18.0),
             "N64" => egui::vec2(48.0, 18.0),
             "ARCADE" => egui::vec2(57.0, 15.0),
+            "PSX" => egui::vec2(62.0, 18.0),
+            "PS2" => egui::vec2(56.0, 18.0),
+            "DREAMCAST" => egui::vec2(64.0, 18.0),
+            "DOS" => egui::vec2(42.0, 18.0),
             _ => egui::vec2(42.0, 15.0),
         }
     }
@@ -586,6 +597,10 @@ impl NativeArcadeUiApp {
             "GBA" => "/system-logos/Game-Boy-Advance-SP-Mk1-Blue.png",
             "N64" => "/system-logos/N64-Console-Set.png",
             "ARCADE" => "/system-logos/arcadesystem.png",
+            "PSX" => "/system-logos/PSX-Original-Controller.png",
+            "PS2" => "/system-logos/PSX_2_controller.png",
+            "DREAMCAST" => "/system-logos/Dreamcast-Console-Set.png",
+            "DOS" => "/system-logos/dos_controller.png",
             _ => "/system-logos/arcadesystem.png",
         };
         self.resolve_db_asset_path(candidate)

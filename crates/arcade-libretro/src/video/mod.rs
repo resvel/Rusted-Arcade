@@ -40,23 +40,6 @@ impl FrontendCapabilities {
     }
 }
 
-pub(super) fn macos_parallel_n64_vulkan_enabled() -> bool {
-    #[cfg(target_os = "macos")]
-    {
-        match std::env::var("ARCADE_MACOS_EXPERIMENTAL_VULKAN") {
-            Ok(value) => {
-                let normalized = value.trim().to_ascii_lowercase();
-                !matches!(normalized.as_str(), "0" | "false" | "off" | "no")
-            }
-            Err(_) => true,
-        }
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        std::env::var_os("ARCADE_MACOS_EXPERIMENTAL_VULKAN").is_some()
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BackendSelection {
     pub chosen: VideoBackendKind,
@@ -156,14 +139,10 @@ impl VideoCoordinator {
 
     pub(super) fn plan_session(&mut self, session_info: VideoSessionInfo) -> BackendSelection {
         let selection = policy::select_backend(policy::BackendPolicyInput {
-            host_platform: policy::current_host_platform(),
             core_name: &session_info.core_name,
             requires_hw_render: session_info.requires_hw_render,
             requested_hw_context_type: session_info.requested_hw_context_type,
             frontend_capabilities: &self.frontend_capabilities,
-            explicit_parallel_n64_fallback: std::env::var_os("LIBRETRO_PARALLEL_N64_GL_FALLBACK")
-                .is_some(),
-            macos_experimental_vulkan: macos_parallel_n64_vulkan_enabled(),
         });
         self.session = Some(ResolvedVideoSession {
             info: session_info,

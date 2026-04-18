@@ -1,8 +1,10 @@
+use arcade_domain::MAX_GAMEPAD_PLAYERS;
 use eframe::egui;
 
 use crate::app::NativeArcadeUiApp;
 use crate::state::{
-    ControllerInputButtonDebug, ControllerInputDebugSnapshot, SettingsScrollTarget,
+    ControllerAssignmentSource, ControllerInputButtonDebug, ControllerInputDebugSnapshot,
+    SettingsScrollTarget,
 };
 use crate::theme::SYSTEM_FILTERS;
 
@@ -124,7 +126,7 @@ impl NativeArcadeUiApp {
                 ui.add_space(2.0);
                 ui.label(
                     egui::RichText::new(if self.state.controller_input_debug.open {
-                        "Live debug view for the connected controller. No env vars required."
+                        "Live debug view for connected controllers. No env vars required."
                     } else {
                         "Configure controller button mappings and shortcuts per system."
                     })
@@ -180,84 +182,179 @@ impl NativeArcadeUiApp {
 
     fn draw_controller_input_debug_view(&mut self, ui: &mut egui::Ui) {
         let palette = self.palette();
-        let Some(snapshot) = self.state.controller_input_debug.snapshots.first() else {
+        let mut snapshots = self.state.controller_input_debug.snapshots.clone();
+        if snapshots.is_empty() {
             ui.label(
                 egui::RichText::new(
-                    "No playable controller is connected. Connect one and press buttons to see live input.",
+                    "No controller is connected. Connect one and press buttons to see live input.",
                 )
                 .size(11.5)
                 .color(palette.text_muted),
             );
             return;
-        };
-
-        let snapshot = snapshot.clone();
-        if self.state.controller_input_debug.snapshots.len() > 1 {
-            ui.label(
-                egui::RichText::new(format!(
-                    "Multiple controllers connected ({}). Showing port {}.",
-                    self.state.controller_input_debug.snapshots.len(),
-                    snapshot.port + 1
-                ))
-                .size(11.0)
-                .color(palette.text_muted),
-            );
-            ui.add_space(4.0);
         }
 
+        snapshots.sort_by(|left, right| {
+            let left_rank = match left.assignment_source {
+                ControllerAssignmentSource::Assigned => 0,
+                ControllerAssignmentSource::UnassignedOverLimit => 1,
+                ControllerAssignmentSource::Unsupported => 2,
+            };
+            let right_rank = match right.assignment_source {
+                ControllerAssignmentSource::Assigned => 0,
+                ControllerAssignmentSource::UnassignedOverLimit => 1,
+                ControllerAssignmentSource::Unsupported => 2,
+            };
+            left_rank
+                .cmp(&right_rank)
+                .then(
+                    left.player_slot
+                        .unwrap_or(u8::MAX)
+                        .cmp(&right.player_slot.unwrap_or(u8::MAX)),
+                )
+                .then(left.connect_seq.cmp(&right.connect_seq))
+                .then(left.name.cmp(&right.name))
+        });
+
+        ui.label(
+            egui::RichText::new(format!(
+                "Connected {} | Players {}/{} | Unassigned {}",
+                self.state.controller_input_debug.connected_total,
+                self.state.controller_input_debug.assigned_playable_total,
+                MAX_GAMEPAD_PLAYERS,
+                self.state.controller_input_debug.unassigned_total
+            ))
+            .size(11.0)
+            .color(palette.text_muted),
+        );
+        ui.add_space(6.0);
+
+        let mut player_slots = vec![None; MAX_GAMEPAD_PLAYERS as usize];
+        let mut other_snapshots = Vec::new();
+        for snapshot in snapshots {
+            if let Some(slot) = snapshot.player_slot {
+                let slot_index = slot as usize;
+                if slot_index < player_slots.len() && player_slots[slot_index].is_none() {
+                    player_slots[slot_index] = Some(snapshot);
+                    continue;
+                }
+            }
+            other_snapshots.push(snapshot);
+        }
+
+        let column_spacing = 10.0;
+        let row_spacing = 10.0;
+        let quadrant_width = ((ui.available_width() - column_spacing).max(0.0)) * 0.5;
+        let rows = (MAX_GAMEPAD_PLAYERS as usize + 1) / 2;
+        for row in 0..rows {
+            ui.horizontal_top(|ui| {
+                for col in 0..2 {
+                    let slot = row * 2 + col;
+                    if slot >= MAX_GAMEPAD_PLAYERS as usize {
+                        continue;
+                    }
+                    ui.allocate_ui_with_layout(
+                        egui::vec2(quadrant_width, 0.0),
+                        egui::Layout::top_down(egui::Align::Min),
+                        |ui| {
+                            if let Some(snapshot) = player_slots[slot].as_ref() {
+                                self.draw_controller_debug_card(ui, snapshot, slot);
+                            } else {
+                                self.draw_controller_debug_placeholder(ui, slot as u8);
+                            }
+                        },
+                    );
+                    if col == 0 {
+                        ui.add_space(column_spacing);
+                    }
+                }
+            });
+            if row + 1 < rows {
+                ui.add_space(row_spacing);
+            }
+        }
+
+        if !other_snapshots.is_empty() {
+            ui.add_space(10.0);
+            ui.label(
+                egui::RichText::new("Other Connected Controllers")
+                    .size(11.5)
+                    .strong()
+                    .color(palette.text),
+            );
+            ui.add_space(6.0);
+            for (index, snapshot) in other_snapshots.iter().enumerate() {
+                self.draw_controller_debug_card(ui, snapshot, 100 + index);
+                if index + 1 < other_snapshots.len() {
+                    ui.add_space(8.0);
+                }
+            }
+        }
+    }
+
+    fn draw_controller_debug_card(
+        &self,
+        ui: &mut egui::Ui,
+        snapshot: &ControllerInputDebugSnapshot,
+        card_index: usize,
+    ) {
+        let palette = self.palette();
         egui::Frame::new()
             .fill(palette.panel_alt)
             .stroke(egui::Stroke::new(1.0, palette.border))
             .corner_radius(egui::CornerRadius::same(8))
             .inner_margin(egui::Margin::same(8))
             .show(ui, |ui| {
-                self.draw_controller_debug_header(ui, &snapshot);
+                self.draw_controller_debug_header(ui, snapshot);
                 ui.add_space(6.0);
 
-                egui::Grid::new("controller-input-debug-buttons")
-                    .num_columns(2)
-                    .spacing(egui::vec2(14.0, 6.0))
-                    .show(ui, |ui| {
-                        self.draw_input_flag(ui, "Square (West)", snapshot.west);
-                        self.draw_input_flag(ui, "Triangle (North)", snapshot.north);
-                        ui.end_row();
+                egui::Grid::new(format!(
+                    "controller-input-debug-buttons-{card_index}-{}",
+                    snapshot.connect_seq
+                ))
+                .num_columns(2)
+                .spacing(egui::vec2(14.0, 6.0))
+                .show(ui, |ui| {
+                    self.draw_input_flag(ui, "Square (West)", snapshot.west);
+                    self.draw_input_flag(ui, "Triangle (North)", snapshot.north);
+                    ui.end_row();
 
-                        self.draw_input_flag(ui, "Cross/X (South)", snapshot.south);
-                        self.draw_input_flag(ui, "Circle/O (East)", snapshot.east);
-                        ui.end_row();
+                    self.draw_input_flag(ui, "Cross/X (South)", snapshot.south);
+                    self.draw_input_flag(ui, "Circle/O (East)", snapshot.east);
+                    ui.end_row();
 
-                        self.draw_input_flag(ui, "D-Pad Up", snapshot.dpad_up);
-                        self.draw_input_flag(ui, "D-Pad Down", snapshot.dpad_down);
-                        ui.end_row();
+                    self.draw_input_flag(ui, "D-Pad Up", snapshot.dpad_up);
+                    self.draw_input_flag(ui, "D-Pad Down", snapshot.dpad_down);
+                    ui.end_row();
 
-                        self.draw_input_flag(ui, "D-Pad Left", snapshot.dpad_left);
-                        self.draw_input_flag(ui, "D-Pad Right", snapshot.dpad_right);
-                        ui.end_row();
+                    self.draw_input_flag(ui, "D-Pad Left", snapshot.dpad_left);
+                    self.draw_input_flag(ui, "D-Pad Right", snapshot.dpad_right);
+                    ui.end_row();
 
-                        self.draw_input_flag(ui, "L1 / Left Shoulder", snapshot.left_shoulder);
-                        self.draw_input_flag(ui, "R1 / Right Shoulder", snapshot.right_shoulder);
-                        ui.end_row();
+                    self.draw_input_flag(ui, "L1 / Left Shoulder", snapshot.left_shoulder);
+                    self.draw_input_flag(ui, "R1 / Right Shoulder", snapshot.right_shoulder);
+                    ui.end_row();
 
-                        self.draw_input_flag(ui, "L3 / Left Stick Click", snapshot.left_thumb);
-                        self.draw_input_flag(
-                            ui,
-                            "R3 / Right Stick Click",
-                            snapshot.right_thumb_debug.effective_is_pressed,
-                        );
-                        ui.end_row();
+                    self.draw_input_flag(ui, "L3 / Left Stick Click", snapshot.left_thumb);
+                    self.draw_input_flag(
+                        ui,
+                        "R3 / Right Stick Click",
+                        snapshot.right_thumb_debug.effective_is_pressed,
+                    );
+                    ui.end_row();
 
-                        self.draw_input_flag(
-                            ui,
-                            "PS / Guide",
-                            snapshot.guide_debug.effective_is_pressed,
-                        );
-                        self.draw_input_flag(ui, "Start", snapshot.start);
-                        ui.end_row();
+                    self.draw_input_flag(
+                        ui,
+                        "PS / Guide",
+                        snapshot.guide_debug.effective_is_pressed,
+                    );
+                    self.draw_input_flag(ui, "Start", snapshot.start);
+                    ui.end_row();
 
-                        self.draw_input_flag(ui, "Select / Share", snapshot.select);
-                        ui.label("");
-                        ui.end_row();
-                    });
+                    self.draw_input_flag(ui, "Select / Share", snapshot.select);
+                    ui.label("");
+                    ui.end_row();
+                });
 
                 ui.add_space(6.0);
                 ui.label(
@@ -333,6 +430,28 @@ impl NativeArcadeUiApp {
             });
     }
 
+    fn draw_controller_debug_placeholder(&self, ui: &mut egui::Ui, slot: u8) {
+        let palette = self.palette();
+        egui::Frame::new()
+            .fill(palette.panel_alt)
+            .stroke(egui::Stroke::new(1.0, palette.border))
+            .corner_radius(egui::CornerRadius::same(8))
+            .inner_margin(egui::Margin::same(8))
+            .show(ui, |ui| {
+                ui.label(
+                    egui::RichText::new(format!("Controller (Player {})", slot + 1))
+                        .size(12.5)
+                        .strong()
+                        .color(palette.text),
+                );
+                ui.label(
+                    egui::RichText::new("Waiting for controller...")
+                        .size(11.0)
+                        .color(palette.text_muted),
+                );
+            });
+    }
+
     fn draw_low_level_button_debug_line(
         &self,
         ui: &mut egui::Ui,
@@ -370,8 +489,13 @@ impl NativeArcadeUiApp {
         snapshot: &ControllerInputDebugSnapshot,
     ) {
         let palette = self.palette();
+        let assignment_label = if let Some(slot) = snapshot.player_slot {
+            format!("Player {}", slot + 1)
+        } else {
+            snapshot.assignment_source.label().to_string()
+        };
         ui.label(
-            egui::RichText::new(format!("Controller (Port {})", snapshot.port + 1))
+            egui::RichText::new(format!("Controller ({assignment_label})"))
                 .size(12.5)
                 .strong()
                 .color(palette.text),
@@ -391,6 +515,12 @@ impl NativeArcadeUiApp {
         }
         if let Some(mapping_name) = snapshot.mapping_name.as_deref() {
             meta.push(format!("map {mapping_name}"));
+        }
+        if !snapshot.is_playable {
+            meta.push(String::from("not playable"));
+        }
+        if snapshot.connect_seq != u64::MAX {
+            meta.push(format!("order {}", snapshot.connect_seq + 1));
         }
         if !meta.is_empty() {
             ui.label(

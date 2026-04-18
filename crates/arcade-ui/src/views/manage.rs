@@ -3,8 +3,7 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 
 use arcade_domain::{
-    CoverScrapeRunOptions, CoverScrapeSettingsInput, ManageOperationKind, ManageScope,
-    PathsConfig,
+    CoverScrapeRunOptions, CoverScrapeSettingsInput, ManageOperationKind, ManageScope, PathsConfig,
 };
 use eframe::egui;
 
@@ -19,6 +18,11 @@ const TGDB_PLATFORM_IDS_GB: &[u32] = &[4];
 const TGDB_PLATFORM_IDS_GBA: &[u32] = &[5];
 const TGDB_PLATFORM_IDS_N64: &[u32] = &[3];
 const TGDB_PLATFORM_IDS_ARCADE: &[u32] = &[23];
+// Additional platform IDs used for cover scraping
+const TGDB_PLATFORM_IDS_PSX: &[u32] = &[1];
+const TGDB_PLATFORM_IDS_PS2: &[u32] = &[2];
+const TGDB_PLATFORM_IDS_DREAMCAST: &[u32] = &[8];
+const TGDB_PLATFORM_IDS_DOS: &[u32] = &[9];
 
 impl NativeArcadeUiApp {
     pub(crate) fn sync_manage_settings_from_services(&mut self) {
@@ -794,8 +798,10 @@ impl NativeArcadeUiApp {
         };
 
         let core_settings = self.state.manage.settings_core_values.clone();
-
-        match self.services.update_app_config_settings(paths, core_settings) {
+        match self
+            .services
+            .update_app_config_settings(paths, core_settings)
+        {
             Ok(outcome) => {
                 if !outcome.restart_required {
                     self.sync_manage_settings_from_services();
@@ -877,6 +883,10 @@ impl NativeArcadeUiApp {
             gba_platform_ids: TGDB_PLATFORM_IDS_GBA.to_vec(),
             n64_platform_ids: TGDB_PLATFORM_IDS_N64.to_vec(),
             arcade_platform_ids: TGDB_PLATFORM_IDS_ARCADE.to_vec(),
+            psx_platform_ids: TGDB_PLATFORM_IDS_PSX.to_vec(),
+            ps2_platform_ids: TGDB_PLATFORM_IDS_PS2.to_vec(),
+            dreamcast_platform_ids: TGDB_PLATFORM_IDS_DREAMCAST.to_vec(),
+            dos_platform_ids: TGDB_PLATFORM_IDS_DOS.to_vec(),
         })
     }
 

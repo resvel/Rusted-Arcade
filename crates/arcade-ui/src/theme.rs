@@ -3,8 +3,19 @@ use egui::Color32;
 
 use crate::app::NativeArcadeUiApp;
 
-pub(crate) const SYSTEM_FILTERS: [&str; 8] = [
-    "ALL", "NES", "SNES", "GENESIS", "GB", "GBA", "N64", "ARCADE",
+pub(crate) const SYSTEM_FILTERS: [&str; 12] = [
+    "ALL",
+    "NES",
+    "SNES",
+    "GENESIS",
+    "GB",
+    "GBA",
+    "N64",
+    "ARCADE",
+    "PSX",
+    "PS2",
+    "DREAMCAST",
+    "DOS",
 ];
 
 #[derive(Debug, Clone, Copy)]
@@ -118,6 +129,50 @@ impl NativeArcadeUiApp {
                 border: Color32::from_rgba_premultiplied(255, 255, 255, 34),
                 text: Color32::from_rgb(248, 244, 238),
                 text_muted: Color32::from_rgb(196, 182, 170),
+            },
+            "PSX" => ThemePalette {
+                bg_top: Color32::from_rgb(28, 32, 48),
+                bg_bottom: Color32::from_rgb(10, 12, 24),
+                accent: Color32::from_rgb(150, 160, 190),
+                accent_soft: Color32::from_rgba_premultiplied(150, 160, 190, 60),
+                panel: Color32::from_rgba_premultiplied(16, 18, 32, 230),
+                panel_alt: Color32::from_rgba_premultiplied(26, 30, 48, 235),
+                border: Color32::from_rgba_premultiplied(255, 255, 255, 32),
+                text: Color32::from_rgb(240, 242, 248),
+                text_muted: Color32::from_rgb(170, 175, 192),
+            },
+            "PS2" => ThemePalette {
+                bg_top: Color32::from_rgb(10, 14, 42),
+                bg_bottom: Color32::from_rgb(4, 6, 18),
+                accent: Color32::from_rgb(60, 120, 220),
+                accent_soft: Color32::from_rgba_premultiplied(60, 120, 220, 62),
+                panel: Color32::from_rgba_premultiplied(10, 14, 30, 230),
+                panel_alt: Color32::from_rgba_premultiplied(16, 22, 48, 235),
+                border: Color32::from_rgba_premultiplied(255, 255, 255, 30),
+                text: Color32::from_rgb(230, 236, 250),
+                text_muted: Color32::from_rgb(140, 155, 190),
+            },
+            "DREAMCAST" => ThemePalette {
+                bg_top: Color32::from_rgb(44, 24, 12),
+                bg_bottom: Color32::from_rgb(14, 14, 22),
+                accent: Color32::from_rgb(240, 130, 40),
+                accent_soft: Color32::from_rgba_premultiplied(240, 130, 40, 65),
+                panel: Color32::from_rgba_premultiplied(20, 16, 24, 230),
+                panel_alt: Color32::from_rgba_premultiplied(38, 26, 18, 235),
+                border: Color32::from_rgba_premultiplied(255, 255, 255, 34),
+                text: Color32::from_rgb(250, 244, 236),
+                text_muted: Color32::from_rgb(194, 180, 166),
+            },
+            "DOS" => ThemePalette {
+                bg_top: Color32::from_rgb(8, 22, 8),
+                bg_bottom: Color32::from_rgb(4, 10, 6),
+                accent: Color32::from_rgb(80, 220, 100),
+                accent_soft: Color32::from_rgba_premultiplied(80, 220, 100, 58),
+                panel: Color32::from_rgba_premultiplied(10, 20, 14, 230),
+                panel_alt: Color32::from_rgba_premultiplied(16, 30, 18, 235),
+                border: Color32::from_rgba_premultiplied(255, 255, 255, 30),
+                text: Color32::from_rgb(220, 248, 224),
+                text_muted: Color32::from_rgb(130, 180, 140),
             },
             _ => ThemePalette {
                 bg_top: Color32::from_rgb(22, 27, 42),

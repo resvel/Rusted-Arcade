@@ -47,8 +47,7 @@ impl NativeArcadeUiApp {
                     ui.add_space(1.0);
 
                     // Estimate search row width to center it
-                    let search_width =
-                        (toolbar_width * 0.5).clamp(176.0, 308.0);
+                    let search_width = (toolbar_width * 0.5).clamp(176.0, 308.0);
                     let search_row_w = 40.0 + search_width + 4.0 + 80.0; // label + input + gap + button
                     let pad = ((toolbar_width - search_row_w) * 0.5).max(0.0);
                     ui.horizontal(|ui| {
@@ -86,7 +85,6 @@ impl NativeArcadeUiApp {
     }
 
     pub(crate) fn draw_library(&mut self, ctx: &egui::Context, ui: &mut egui::Ui) {
-
         if self.state.manage.open {
             self.draw_manage_library(ctx, ui);
             return;
@@ -121,7 +119,8 @@ impl NativeArcadeUiApp {
         if self.state.library.visible_rom_ids.is_empty() {
             self.panel_frame().show(ui, |ui| {
                 ui.label(
-                    egui::RichText::new("No ROMs match current filters.").color(self.palette().text_muted),
+                    egui::RichText::new("No ROMs match current filters.")
+                        .color(self.palette().text_muted),
                 );
             });
             return;

@@ -6,17 +6,17 @@ use std::collections::HashSet;
 use std::fs;
 use std::sync::mpsc::Receiver;
 
+#[cfg(feature = "gamepad")]
+use arcade_domain::DetectedPadIdentity;
 use arcade_domain::{ManageOperationSummary, ManageProgressEvent};
 use arcade_libretro::{FrontendCapabilities, LibretroHost};
 use arcade_services::NativeServices;
 use eframe::egui;
 #[cfg(feature = "gamepad")]
-use std::collections::HashMap;
-#[cfg(feature = "gamepad")]
-use arcade_domain::DetectedPadIdentity;
-#[cfg(feature = "gamepad")]
 use gilrs::Gilrs;
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle, RawDisplayHandle, RawWindowHandle};
+#[cfg(feature = "gamepad")]
+use std::collections::HashMap;
 
 use crate::actions::INITIAL_LIBRARY_PRELOAD_SIZE;
 use crate::assets::AssetCache;
@@ -47,6 +47,12 @@ pub struct NativeArcadeUiApp {
     pub(crate) gamepad_identity_cache: HashMap<usize, DetectedPadIdentity>,
     #[cfg(feature = "gamepad")]
     pub(crate) raw_dpad_state_cache: HashMap<usize, crate::input::RawDpadState>,
+    #[cfg(feature = "gamepad")]
+    pub(crate) gamepad_connect_order: HashMap<usize, u64>,
+    #[cfg(feature = "gamepad")]
+    pub(crate) gamepad_slot_assignments: HashMap<usize, u8>,
+    #[cfg(feature = "gamepad")]
+    pub(crate) next_gamepad_connect_seq: u64,
     /// RETROK keycodes that were down last frame (for keyboard callback event generation).
     pub(crate) prev_keyboard_keys_down: HashSet<u32>,
 }
@@ -221,6 +227,12 @@ impl NativeArcadeUiApp {
             gamepad_identity_cache: HashMap::new(),
             #[cfg(feature = "gamepad")]
             raw_dpad_state_cache: HashMap::new(),
+            #[cfg(feature = "gamepad")]
+            gamepad_connect_order: HashMap::new(),
+            #[cfg(feature = "gamepad")]
+            gamepad_slot_assignments: HashMap::new(),
+            #[cfg(feature = "gamepad")]
+            next_gamepad_connect_seq: 0,
             prev_keyboard_keys_down: HashSet::new(),
         };
 

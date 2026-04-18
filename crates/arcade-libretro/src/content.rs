@@ -232,7 +232,6 @@ fn core_requires_hw_render(core_path: &Path) -> bool {
 pub(super) fn prepare_game_content(
     rom_path: &Path,
     requirements: &CoreRequirements,
-    core_name: &str,
 ) -> Result<PreparedGameContent> {
     let rom_path_cstring = CString::new(rom_path.to_string_lossy().as_bytes())
         .map_err(|_| anyhow!("rom path contains null bytes"))?;
@@ -264,11 +263,7 @@ pub(super) fn prepare_game_content(
     Ok(PreparedGameContent {
         path: rom_path_cstring,
         data: None,
-        strategies: if core_name == "parallel_n64" {
-            vec![LoadGameStrategy::PathAndData, LoadGameStrategy::DataOnly]
-        } else {
-            load_strategies(requirements.need_fullpath).to_vec()
-        },
+        strategies: load_strategies(requirements.need_fullpath).to_vec(),
     })
 }
 

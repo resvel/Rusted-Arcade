@@ -85,14 +85,6 @@ pub(super) fn normalize_display_fps(fps: f64) -> f64 {
     fps
 }
 
-pub(super) fn duration_to_ns(duration: std::time::Duration) -> u64 {
-    duration
-        .as_nanos()
-        .min(u64::MAX as u128)
-        .try_into()
-        .unwrap_or(u64::MAX)
-}
-
 pub(super) fn reset_vulkan_present_metrics(runtime: &HostRuntime) {
     *runtime.vulkan_present_metrics.lock() = VulkanPresentMetricsState::default();
 }
@@ -228,82 +220,6 @@ pub(super) fn vulkan_present_fail_fast_error(runtime: &HostRuntime) -> Option<St
     // Fail-fast gating is intentionally disabled for now so unhealthy runs
     // continue and expose full diagnostic behavior instead of terminating early.
     None
-}
-
-pub(super) fn record_frame_performance(
-    runtime: &HostRuntime,
-    core_label: &str,
-    run_duration: std::time::Duration,
-    present_duration: std::time::Duration,
-    delivery: FrameDelivery,
-) {
-    let now = std::time::Instant::now();
-    let mut state = runtime.performance_log_state.lock();
-    let sample_started_at = state.sample_started_at.unwrap_or(now);
-    if state.sample_started_at.is_none() {
-        state.sample_started_at = Some(now);
-    }
-    state.sample_frames = state.sample_frames.saturating_add(1);
-    state.accumulated_run_ns = state
-        .accumulated_run_ns
-        .saturating_add(duration_to_ns(run_duration));
-    state.accumulated_present_ns = state
-        .accumulated_present_ns
-        .saturating_add(duration_to_ns(present_duration));
-
-    match delivery {
-        FrameDelivery::ExternalPresent => {
-            state.external_present_frames = state.external_present_frames.saturating_add(1);
-        }
-        FrameDelivery::CpuFrame(frame) => {
-            state.cpu_frame_count = state.cpu_frame_count.saturating_add(1);
-            state.last_frame_size = Some((frame.width, frame.height));
-        }
-        FrameDelivery::NoFrame => {
-            state.empty_frame_count = state.empty_frame_count.saturating_add(1);
-        }
-        FrameDelivery::Error(_) => {
-            state.error_count = state.error_count.saturating_add(1);
-        }
-    }
-
-    if state.sample_frames < PERF_LOG_SAMPLE_FRAMES {
-        return;
-    }
-
-    let elapsed = now
-        .duration_since(sample_started_at)
-        .as_secs_f64()
-        .max(f64::EPSILON);
-    let frames = state.sample_frames.max(1) as f64;
-    let avg_run_ms = state.accumulated_run_ns as f64 / frames / 1_000_000.0;
-    let avg_present_ms = state.accumulated_present_ns as f64 / frames / 1_000_000.0;
-    let avg_total_ms = avg_run_ms + avg_present_ms;
-    let fps = frames / elapsed;
-    let last_size = state
-        .last_frame_size
-        .map(|(width, height)| format!("{width}x{height}"))
-        .unwrap_or_else(|| String::from("n/a"));
-
-    info!(
-        target: "arcade_libretro::perf",
-        "perf core={core_label} frames={} fps={:.1} avg_run_ms={:.2} avg_present_ms={:.2} avg_total_ms={:.2} external_present={} cpu_frames={} empty_frames={} errors={} last_frame={}",
-        state.sample_frames,
-        fps,
-        avg_run_ms,
-        avg_present_ms,
-        avg_total_ms,
-        state.external_present_frames,
-        state.cpu_frame_count,
-        state.empty_frame_count,
-        state.error_count,
-        last_size,
-    );
-
-    *state = PerformanceLogState {
-        sample_started_at: Some(now),
-        ..PerformanceLogState::default()
-    };
 }
 
 pub(super) fn log_vulkan_present_metrics_summary(

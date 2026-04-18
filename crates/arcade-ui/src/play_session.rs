@@ -79,7 +79,11 @@ impl NativeArcadeUiApp {
             let max_frames = if smooth_pacing {
                 // Favor even pacing by default; only allow burst catch-up when we're
                 // substantially behind after a long stall.
-                if frame_budget >= 2.5 { 2.0 } else { 1.0 }
+                if frame_budget >= 2.5 {
+                    2.0
+                } else {
+                    1.0
+                }
             } else {
                 2.0
             };
@@ -174,7 +178,8 @@ impl NativeArcadeUiApp {
                 }
             } else {
                 if smooth_pacing {
-                    self.state.play.catch_up_frame_debt = self.state.play.catch_up_frame_debt.min(0.5);
+                    self.state.play.catch_up_frame_debt =
+                        self.state.play.catch_up_frame_debt.min(0.5);
                 } else {
                     self.state.play.catch_up_frame_debt = 0.0;
                 }

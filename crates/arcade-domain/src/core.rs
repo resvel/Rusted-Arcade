@@ -1,4 +1,16 @@
-pub const SUPPORTED_SYSTEMS: &[&str] = &["NES", "SNES", "GENESIS", "GB", "GBA", "N64", "ARCADE"];
+pub const SUPPORTED_SYSTEMS: &[&str] = &[
+    "NES",
+    "SNES",
+    "GENESIS",
+    "GB",
+    "GBA",
+    "N64",
+    "ARCADE",
+    "PSX",
+    "PS2",
+    "DREAMCAST",
+    "DOS",
+];
 
 pub const SUPPORTED_CORES: &[&str] = &[
     "fceumm",
@@ -6,31 +18,15 @@ pub const SUPPORTED_CORES: &[&str] = &[
     "genesis_plus_gx",
     "gambatte",
     "mgba",
-    "parallel_n64",
     "mupen64plus_next",
     "fbneo",
     "mame2003",
     "mame2003_plus",
+    "mednafen_psx_hw",
+    "pcsx2",
+    "flycast",
+    "dosbox_pure",
 ];
-
-#[cfg(not(target_os = "macos"))]
-const DEFAULT_N64_CORE: &str = "parallel_n64";
-#[cfg(not(target_os = "macos"))]
-const ALLOWLIST_N64: &[&str] = &["parallel_n64", "mupen64plus_next"];
-
-#[cfg(target_os = "macos")]
-fn default_n64_core() -> &'static str {
-    "mupen64plus_next"
-}
-
-#[cfg(target_os = "macos")]
-fn allowlist_n64() -> &'static [&'static str] {
-    if crate::platform::is_running_under_rosetta() {
-        &["parallel_n64", "mupen64plus_next"]
-    } else {
-        &["mupen64plus_next"]
-    }
-}
 
 fn default_core(system: &str) -> &'static str {
     match system {
@@ -39,11 +35,12 @@ fn default_core(system: &str) -> &'static str {
         "GENESIS" => "genesis_plus_gx",
         "GB" => "gambatte",
         "GBA" => "mgba",
-        #[cfg(not(target_os = "macos"))]
-        "N64" => DEFAULT_N64_CORE,
-        #[cfg(target_os = "macos")]
-        "N64" => default_n64_core(),
+        "N64" => "mupen64plus_next",
         "ARCADE" => "fbneo",
+        "PSX" => "mednafen_psx_hw",
+        "PS2" => "pcsx2",
+        "DREAMCAST" => "flycast",
+        "DOS" => "dosbox_pure",
         _ => "fceumm",
     }
 }
@@ -55,11 +52,12 @@ fn allowlist(system: &str) -> &'static [&'static str] {
         "GENESIS" => &["genesis_plus_gx"],
         "GB" => &["gambatte"],
         "GBA" => &["mgba"],
-        #[cfg(not(target_os = "macos"))]
-        "N64" => ALLOWLIST_N64,
-        #[cfg(target_os = "macos")]
-        "N64" => allowlist_n64(),
+        "N64" => &["mupen64plus_next"],
         "ARCADE" => &["fbneo", "mame2003", "mame2003_plus"],
+        "PSX" => &["mednafen_psx_hw"],
+        "PS2" => &["pcsx2"],
+        "DREAMCAST" => &["flycast"],
+        "DOS" => &["dosbox_pure"],
         _ => &["fceumm"],
     }
 }

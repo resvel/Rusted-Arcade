@@ -126,10 +126,7 @@ fn main() -> Result<()> {
     info!("Core root: {}", config.paths.core_root.display());
     info!("Effective core root: {}", effective_core_root.display());
     info!("BIOS root: {}", config.paths.bios_root.display());
-    info!(
-        "Rosetta: {}",
-        arcade_domain::is_running_under_rosetta()
-    );
+    info!("Rosetta: {}", arcade_domain::is_running_under_rosetta());
 
     let db = Database::open(&config)?;
     let services = NativeServices::bootstrap(config.clone(), config_path.clone(), db)?;

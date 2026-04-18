@@ -8,13 +8,12 @@ use std::time::Duration;
 use anyhow::{anyhow, Result};
 use arcade_data::{DataError, Database, ScanUpsertOutcome, ScannedRomInput};
 use arcade_domain::{
-    default_gamepad_mapping_for_system, get_arcade_compatibility,
-    resolve_core, resolve_effective_core_override, resolve_path_from_root, AppConfig,
-    CoverScrapePlatformIds, CoverScrapeRunOptions, CoverScrapeSettingsInput, CoverScrapingConfig,
-    DetectedPadIdentity, ManageOperationKind, ManageOperationSummary, ManageProgressEvent,
-    ManageRomStatus, ManageScope, ManagementConfig, N64PrimaryStick, PathsConfig, RomCard,
-    RomQuery, SaveLimits, SaveSlotData, SaveSlotSummary, SavedGamepadMappingSummary,
-    StoredGamepadMapping, SYSTEM_DEFAULT_MAPPING_KEY,
+    default_gamepad_mapping_for_system, get_arcade_compatibility, resolve_core,
+    resolve_effective_core_override, resolve_path_from_root, AppConfig, CoverScrapePlatformIds,
+    CoverScrapeRunOptions, CoverScrapeSettingsInput, CoverScrapingConfig, DetectedPadIdentity,
+    ManageOperationKind, ManageOperationSummary, ManageProgressEvent, ManageRomStatus, ManageScope,
+    ManagementConfig, N64PrimaryStick, PathsConfig, RomCard, RomQuery, SaveLimits, SaveSlotData,
+    SaveSlotSummary, SavedGamepadMappingSummary, StoredGamepadMapping, SYSTEM_DEFAULT_MAPPING_KEY,
 };
 use sha1::{Digest, Sha1};
 use tracing::warn;
@@ -1467,18 +1466,9 @@ mod tests {
             )
             .expect("resolve mapping");
 
-        assert_eq!(
-            resolved.actions.get(QUICK_SAVE_ACTION),
-            Some(&None)
-        );
-        assert_eq!(
-            resolved.actions.get(QUICK_LOAD_ACTION),
-            Some(&None)
-        );
-        assert_eq!(
-            resolved.actions.get(NEXT_SAVE_SLOT_ACTION),
-            Some(&None)
-        );
+        assert_eq!(resolved.actions.get(QUICK_SAVE_ACTION), Some(&None));
+        assert_eq!(resolved.actions.get(QUICK_LOAD_ACTION), Some(&None));
+        assert_eq!(resolved.actions.get(NEXT_SAVE_SLOT_ACTION), Some(&None));
     }
 
     #[test]

@@ -141,30 +141,28 @@ struct AudioState {
 }
 const MAX_AUDIO_SAMPLES: usize = 49_152;
 #[cfg(feature = "audio")]
-const AUDIO_TARGET_LATENCY_SECS: f64 = 0.060;
+// Increase target latency to reduce underruns on macOS. 0.1s gives a larger
+// buffer while still keeping latency low for interactive play.
+const AUDIO_TARGET_LATENCY_SECS: f64 = 0.100;
 #[cfg(feature = "audio")]
-const AUDIO_MAX_LATENCY_SECS: f64 = 0.180;
+const AUDIO_MAX_LATENCY_SECS: f64 = 0.300;
 #[cfg(feature = "audio")]
-const AUDIO_RESAMPLE_QUEUE_CORRECTION: f64 = 0.005;
+const AUDIO_RESAMPLE_QUEUE_CORRECTION: f64 = 0.05;
 #[cfg(feature = "audio")]
-const AUDIO_RESAMPLE_RATIO_DRIFT_LIMIT: f64 = 0.005;
+const AUDIO_RESAMPLE_RATIO_DRIFT_LIMIT: f64 = 0.05;
 const VULKAN_FALLBACK_SYNC_FRAMES: u32 = 3;
 const DISPLAY_FPS_TOLERANCE: f64 = 2.0;
 const COMMON_DISPLAY_FPS: &[f64] = &[60.0, 50.0, 30.0];
-const PERF_LOG_SAMPLE_FRAMES: u32 = 180;
-
-#[derive(Debug, Default)]
-struct PerformanceLogState {
-    sample_started_at: Option<std::time::Instant>,
-    sample_frames: u32,
-    accumulated_run_ns: u64,
-    accumulated_present_ns: u64,
-    external_present_frames: u32,
-    cpu_frame_count: u32,
-    empty_frame_count: u32,
-    error_count: u32,
-    last_frame_size: Option<(u32, u32)>,
-}
+/// Function pointer type for the libretro keyboard event callback.
+/// Signature: `void callback(bool down, unsigned keycode, uint32_t character, uint16_t key_modifiers)`
+type RetroKeyboardEventFn =
+    unsafe extern "C" fn(down: bool, keycode: u32, character: u32, key_modifiers: u16);
+/// Function pointer type for the libretro audio callback pull model.
+/// Signature: `void callback(void)`
+type RetroAudioCallbackFn = unsafe extern "C" fn();
+/// Function pointer type to enable/disable the audio callback.
+/// Signature: `void set_state(bool enabled)`
+type RetroAudioSetStateCallbackFn = unsafe extern "C" fn(enabled: bool);
 
 #[derive(Default)]
 struct EnvironmentContext {
@@ -180,6 +178,10 @@ struct EnvironmentContext {
     last_negotiation_interface: Option<(u32, u32)>,
     loaded_core_name: Option<String>,
     loaded_backend: Option<VideoBackendKind>,
+    keyboard_event_cb: Option<RetroKeyboardEventFn>,
+    audio_callback: Option<RetroAudioCallbackFn>,
+    audio_set_state_callback: Option<RetroAudioSetStateCallbackFn>,
+    audio_callback_enabled: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -400,7 +402,6 @@ struct HostRuntime {
     environment_context: Mutex<EnvironmentContext>,
     video_coordinator: Mutex<VideoCoordinator>,
     hw_render_state: Mutex<HardwareRenderState>,
-    performance_log_state: Mutex<PerformanceLogState>,
     vulkan_present_metrics: Mutex<VulkanPresentMetricsState>,
 }
 
@@ -470,6 +471,7 @@ static GL_PROC_LOADER: Lazy<Mutex<GlProcLoader>> = Lazy::new(|| Mutex::new(GlPro
 static ACTIVE_RUNTIME: Lazy<Mutex<Option<Weak<HostRuntime>>>> = Lazy::new(|| Mutex::new(None));
 static VULKAN_DEBUG_STEP_COUNTER: AtomicU64 = AtomicU64::new(0);
 static VULKAN_READBACK_DEBUG_COUNTER: AtomicU64 = AtomicU64::new(0);
+static VULKAN_FALLBACK_SIZE_DEBUG_COUNTER: AtomicU64 = AtomicU64::new(0);
 static VULKAN_PRESENT_DEBUG_COUNTER: AtomicU64 = AtomicU64::new(0);
 static VULKAN_SOURCE_IMAGE_DEBUG_COUNTER: AtomicU64 = AtomicU64::new(0);
 static VULKAN_RUN_FRAME_DEBUG_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -709,12 +711,14 @@ struct RetroGameGeometry {
     aspect_ratio: f32,
 }
 
+#[derive(Clone, Copy)]
 #[repr(C)]
 struct RetroSystemTiming {
     fps: f64,
     sample_rate: f64,
 }
 
+#[derive(Clone, Copy)]
 #[repr(C)]
 struct RetroSystemAvInfo {
     geometry: RetroGameGeometry,
@@ -1075,12 +1079,11 @@ impl LibretroHost {
         if vulkan_debug_enabled() {
             info!(
                 target: "arcade_libretro::vulkan_debug",
-                "backend selection core={} chosen={:?} fallbacks={:?} requires_hw_render={} macos_experimental_vulkan={}",
+                "backend selection core={} chosen={:?} fallbacks={:?} requires_hw_render={}",
                 core_name,
                 selection.chosen,
                 selection.fallbacks,
                 requirements.requires_hw_render,
-                video::macos_parallel_n64_vulkan_enabled()
             );
         }
         apply_core_runtime_env_defaults(core_name, selection.chosen);
@@ -1106,7 +1109,7 @@ impl LibretroHost {
             ));
         }
 
-        let mut prepared = prepare_game_content(launch_rom_path, &requirements, core_name)?;
+        let mut prepared = prepare_game_content(launch_rom_path, &requirements)?;
         let mut launch_session = launch_session;
         let mut failures = Vec::new();
 
@@ -1197,6 +1200,7 @@ impl LibretroHost {
                 set_audio_source_sample_rate(av_info.timing.sample_rate);
                 if let Err(err) = self.ensure_audio_output_started(preferred_sample_rate_hz) {
                     eprintln!("Audio output unavailable, continuing without sound: {err}");
+                    warn!("Audio output unavailable, continuing without sound: {err}");
                 }
                 let mut video_aspect_ratio = av_info.geometry.aspect_ratio;
                 if !video_aspect_ratio.is_finite() || video_aspect_ratio <= 0.0 {
@@ -1350,17 +1354,6 @@ impl LibretroHost {
             return Err(anyhow!(error));
         }
         let uses_hw_render = loaded.uses_hw_render;
-        let core_label = loaded
-            .core_path
-            .file_stem()
-            .and_then(|name| name.to_str())
-            .unwrap_or("unknown_core")
-            .to_owned();
-        let is_parallel_n64 = loaded
-            .core_path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .is_some_and(|name| name.contains("parallel_n64"));
         let target_size = hw_render_target_size(loaded.video_max_size, loaded.video_base_size);
         drop(loaded_guard);
 
@@ -1409,6 +1402,16 @@ impl LibretroHost {
                 "run_frame step={} calling retro_run",
                 debug_step
             );
+        }
+        let audio_callback = {
+            let context = self.runtime.environment_context.lock();
+            context
+                .audio_callback_enabled
+                .then_some(context.audio_callback)
+                .flatten()
+        };
+        if let Some(callback) = audio_callback {
+            unsafe { callback() };
         }
         let run_started_at = std::time::Instant::now();
         unsafe {
@@ -1460,12 +1463,36 @@ impl LibretroHost {
                         frame.height,
                         present_duration.as_secs_f64() * 1000.0
                     ),
-                    Ok(FrameDelivery::ExternalPresent) | Ok(FrameDelivery::NoFrame) => info!(
+                    Ok(FrameDelivery::ExternalPresent) => info!(
                         target: "arcade_libretro::vulkan_debug",
-                        "run_frame step={} hw frame result=none present_ms={:.3}",
+                        "run_frame step={} hw frame result=external_present present_ms={:.3}",
                         debug_step,
                         present_duration.as_secs_f64() * 1000.0
                     ),
+                    Ok(FrameDelivery::NoFrame) => {
+                        let (present_configured, pending_images, acquired_image_index) = {
+                            let state = self.runtime.hw_render_state.lock();
+                            let vulkan = state.vulkan.as_ref();
+                            (
+                                vulkan.and_then(|vulkan| vulkan.present.as_ref()).is_some(),
+                                vulkan
+                                    .map(|vulkan| vulkan.pending_images.len())
+                                    .unwrap_or(0),
+                                vulkan
+                                    .and_then(|vulkan| vulkan.present.as_ref())
+                                    .and_then(|present| present.acquired_image_index),
+                            )
+                        };
+                        info!(
+                            target: "arcade_libretro::vulkan_debug",
+                            "run_frame step={} hw frame result=no_frame present_ms={:.3} present_configured={} pending_images={} acquired_image_index={:?}",
+                            debug_step,
+                            present_duration.as_secs_f64() * 1000.0,
+                            present_configured,
+                            pending_images,
+                            acquired_image_index
+                        );
+                    }
                     Ok(FrameDelivery::Error(err)) => info!(
                         target: "arcade_libretro::vulkan_debug",
                         "run_frame step={} hw frame result=error err={} present_ms={:.3}",
@@ -1488,15 +1515,6 @@ impl LibretroHost {
             );
         }
 
-        if is_parallel_n64 {
-            record_frame_performance(
-                &self.runtime,
-                &core_label,
-                run_duration,
-                present_duration,
-                delivery,
-            );
-        }
         if let Some(error) = vulkan_present_fail_fast_error(&self.runtime) {
             return Err(anyhow!(error));
         }
@@ -1567,6 +1585,32 @@ impl LibretroHost {
         self.runtime.callback_state.lock().input_state.clear();
     }
 
+    /// Send a keyboard event to the core via the registered keyboard callback.
+    /// `down` = true for key press, false for release.
+    /// `keycode` = RETROK_* value, `character` = unicode codepoint (0 if n/a),
+    /// `key_modifiers` = bitmask of RETROKMOD_* flags.
+    pub fn send_keyboard_event(
+        &self,
+        down: bool,
+        keycode: u32,
+        character: u32,
+        key_modifiers: u16,
+    ) {
+        let cb = self.runtime.environment_context.lock().keyboard_event_cb;
+        if let Some(cb) = cb {
+            unsafe { cb(down, keycode, character, key_modifiers) };
+        }
+    }
+
+    /// Returns true if the core has registered a keyboard callback.
+    pub fn has_keyboard_callback(&self) -> bool {
+        self.runtime
+            .environment_context
+            .lock()
+            .keyboard_event_cb
+            .is_some()
+    }
+
     pub fn configure_default_controller_ports(&self, max_ports: u32) -> Result<()> {
         let loaded_guard = self.loaded.lock();
         let Some(loaded) = loaded_guard.as_ref() else {
@@ -1597,6 +1641,14 @@ impl LibretroHost {
                 .and_then(|name| name.to_str())
                 .unwrap_or("unknown_core")
                 .to_owned();
+            let audio_set_state_callback = {
+                let mut context = self.runtime.environment_context.lock();
+                context.audio_callback_enabled = false;
+                context.audio_set_state_callback
+            };
+            if let Some(set_state) = audio_set_state_callback {
+                unsafe { set_state(false) };
+            }
             unsafe {
                 (loaded.api.unload_game)();
             }
@@ -1613,6 +1665,11 @@ impl LibretroHost {
         } else {
             destroy_hw_render_session();
         }
+        // Drop the audio output *before* clearing the active runtime so the
+        // cpal stream stops its callbacks.  Without this the stream keeps
+        // firing into write_output_*, sees no runtime, and spams "audio
+        // runtime not available" warnings until the LibretroHost is dropped.
+        self.audio_output.borrow_mut().take();
         reset_callback_video_state(&self.runtime);
         self.runtime.callback_state.lock().input_state.clear();
         self.runtime
@@ -1645,11 +1702,23 @@ impl LibretroHost {
         if let Some(existing) = guard.as_ref() {
             let requested = preferred_sample_rate_hz.unwrap_or(existing.sample_rate_hz);
             if requested == existing.sample_rate_hz {
+                // The cpal stream is already running at the right rate, but
+                // reset_callback_video_state may have zeroed the AudioState
+                // rates.  Restore output_sample_rate so the resampler uses a
+                // valid ratio instead of source_rate / 0.0 = +Inf (which
+                // causes an infinite loop in the resample advance loop).
+                set_audio_output_sample_rate(existing.sample_rate_hz as f64);
                 return Ok(());
             }
         }
 
         let output = AudioOutput::new(preferred_sample_rate_hz)?;
+        info!(
+            target: "arcade_libretro::audio",
+            preferred_sample_rate_hz = preferred_sample_rate_hz.unwrap_or(0),
+            output_sample_rate_hz = output.sample_rate_hz,
+            "audio output stream started"
+        );
         *guard = Some(output);
         Ok(())
     }
@@ -1760,54 +1829,6 @@ mod tests {
         fs::write(&preferred_existing, b"core").expect("write core file");
 
         assert_eq!(host.resolve_core_path("snes9x"), preferred_existing);
-    }
-
-    #[test]
-    fn parallel_n64_preflight_accepts_frontend_windowing_probe() {
-        let runtime = HostRuntime::default();
-        runtime
-            .video_coordinator
-            .lock()
-            .apply_frontend_capabilities(
-                &runtime,
-                FrontendCapabilities {
-                    renderer_name: Some(String::from("eframe_glow")),
-                    gl_context: None,
-                    window_handle_kind: Some(String::from("AppKit")),
-                    display_handle_kind: Some(String::from("AppKit")),
-                },
-            );
-        runtime
-            .video_coordinator
-            .lock()
-            .plan_session(VideoSessionInfo {
-                core_name: String::from("parallel_n64"),
-                requires_hw_render: true,
-                requested_hw_context_type: None,
-            });
-
-        assert!(hardware_render_preflight_available_for_core(
-            &runtime,
-            "parallel_n64"
-        ));
-
-        let other_runtime = HostRuntime::default();
-        other_runtime
-            .video_coordinator
-            .lock()
-            .apply_frontend_capabilities(
-                &other_runtime,
-                FrontendCapabilities {
-                    renderer_name: Some(String::from("eframe_non_gl")),
-                    gl_context: None,
-                    window_handle_kind: Some(String::from("AppKit")),
-                    display_handle_kind: Some(String::from("AppKit")),
-                },
-            );
-        assert!(!hardware_render_preflight_available_for_core(
-            &other_runtime,
-            "beetle_psx_hw"
-        ));
     }
 
     #[test]

@@ -75,6 +75,10 @@ pub fn core_profiles() -> Vec<CoreProfile> {
         mgba_profile(),
         fbneo_profile(),
         mame2003_plus_profile(),
+        mednafen_psx_hw_profile(),
+        pcsx2_profile(),
+        flycast_profile(),
+        dosbox_pure_profile(),
     ]
 }
 
@@ -118,7 +122,11 @@ fn mupen64plus_next_profile() -> CoreProfile {
                 "mupen64plus-aspect",
                 "Aspect Ratio",
                 "Display",
-                vec![opt("4:3"), opt("16:9"), opt_d("16:9 adjusted", "16:9 Adjusted")],
+                vec![
+                    opt("4:3"),
+                    opt("16:9"),
+                    opt_d("16:9 adjusted", "16:9 Adjusted"),
+                ],
             ),
             var(
                 "mupen64plus-parallel-rdp-upscaling",
@@ -202,12 +210,7 @@ fn mupen64plus_next_profile() -> CoreProfile {
                 "mupen64plus-CountPerOp",
                 "Count Per Op",
                 "Performance",
-                vec![
-                    opt_d("0", "Auto"),
-                    opt("1"),
-                    opt("2"),
-                    opt("3"),
-                ],
+                vec![opt_d("0", "Auto"), opt("1"), opt("2"), opt("3")],
             ),
             var(
                 "mupen64plus-CountPerOpDenomPot",
@@ -395,12 +398,7 @@ fn snes9x_profile() -> CoreProfile {
                 "snes9x_overclock_cycles",
                 "Reduce Slowdown",
                 "Performance",
-                vec![
-                    opt("disabled"),
-                    opt("light"),
-                    opt("compatible"),
-                    opt("max"),
-                ],
+                vec![opt("disabled"), opt("light"), opt("compatible"), opt("max")],
             ),
             var(
                 "snes9x_reduce_sprite_flicker",
@@ -722,14 +720,7 @@ fn fbneo_profile() -> CoreProfile {
                 "fbneo-frameskip",
                 "Frameskip",
                 "Performance",
-                vec![
-                    opt("0"),
-                    opt("1"),
-                    opt("2"),
-                    opt("3"),
-                    opt("4"),
-                    opt("5"),
-                ],
+                vec![opt("0"), opt("1"), opt("2"), opt("3"), opt("4"), opt("5")],
             ),
             var(
                 "fbneo-frameskip-type",
@@ -825,14 +816,7 @@ fn mame2003_plus_profile() -> CoreProfile {
                 "mame2003-plus_frameskip",
                 "Frameskip",
                 "Performance",
-                vec![
-                    opt("0"),
-                    opt("1"),
-                    opt("2"),
-                    opt("3"),
-                    opt("4"),
-                    opt("5"),
-                ],
+                vec![opt("0"), opt("1"), opt("2"), opt("3"), opt("4"), opt("5")],
             ),
             var(
                 "mame2003-plus_sample_rate",
@@ -938,6 +922,328 @@ fn mame2003_plus_profile() -> CoreProfile {
     }
 }
 
+// ---------------------------------------------------------------------------
+// PlayStation: mednafen_psx_hw
+// ---------------------------------------------------------------------------
+
+fn mednafen_psx_hw_profile() -> CoreProfile {
+    CoreProfile {
+        core_name: "mednafen_psx_hw",
+        display_name: "PlayStation",
+        system: "PSX",
+        variables: vec![
+            var(
+                "beetle_psx_hw_internal_resolution",
+                "Internal Resolution",
+                "Display",
+                vec![
+                    opt_d("1x(native)", "1x Native"),
+                    opt_d("2x", "2x"),
+                    opt_d("4x", "4x"),
+                    opt_d("8x", "8x"),
+                    opt_d("16x", "16x"),
+                ],
+            ),
+            var(
+                "beetle_psx_hw_widescreen_hack",
+                "Widescreen Hack",
+                "Display",
+                vec![opt("disabled"), opt("enabled")],
+            ),
+            var(
+                "beetle_psx_hw_dithering_pattern",
+                "Dithering Pattern",
+                "Display",
+                vec![
+                    opt_d("1x(native)", "1x Native"),
+                    opt_d("2x resolution", "2x"),
+                    opt("disabled"),
+                ],
+            ),
+            var(
+                "beetle_psx_hw_texture_filtering",
+                "Texture Filtering",
+                "Display",
+                vec![
+                    opt("nearest"),
+                    opt_d("SABR", "SABR"),
+                    opt_d("bilinear", "Bilinear"),
+                    opt_d("3-point", "3-Point"),
+                    opt_d("JINC2", "JINC2"),
+                    opt_d("xBR", "xBR"),
+                ],
+            ),
+            var(
+                "beetle_psx_hw_skip_bios",
+                "Skip BIOS Intro",
+                "System",
+                vec![opt("disabled"), opt("enabled")],
+            ),
+            var(
+                "beetle_psx_hw_analog_self_calibration",
+                "Analog Self-Calibration",
+                "Input",
+                vec![opt("enabled"), opt("disabled")],
+            ),
+            var(
+                "beetle_psx_hw_cpu_freq_scale",
+                "CPU Frequency Scaling",
+                "Performance",
+                vec![
+                    opt_d("100%(native)", "100% (Native)"),
+                    opt("125%"),
+                    opt("150%"),
+                    opt("175%"),
+                    opt("200%"),
+                    opt("300%"),
+                    opt("400%"),
+                ],
+            ),
+            var(
+                "beetle_psx_hw_frame_duplication_hack",
+                "Frame Duplication Hack",
+                "Performance",
+                vec![opt("disabled"), opt("enabled")],
+            ),
+        ],
+    }
+}
+
+// ---------------------------------------------------------------------------
+// PlayStation 2: pcsx2
+// ---------------------------------------------------------------------------
+
+fn pcsx2_profile() -> CoreProfile {
+    CoreProfile {
+        core_name: "pcsx2",
+        display_name: "PlayStation 2",
+        system: "PS2",
+        variables: vec![
+            var(
+                "pcsx2_upscale_multiplier",
+                "Internal Resolution",
+                "Display",
+                vec![
+                    opt_d("1", "1x Native"),
+                    opt_d("2", "2x"),
+                    opt_d("3", "3x"),
+                    opt_d("4", "4x"),
+                    opt_d("6", "6x"),
+                    opt_d("8", "8x"),
+                ],
+            ),
+            var(
+                "pcsx2_renderer",
+                "Renderer",
+                "Display",
+                vec![opt("Auto"), opt("Vulkan"), opt("OpenGL"), opt("Software")],
+            ),
+            var(
+                "pcsx2_bilinear_filtering",
+                "Bilinear Filtering",
+                "Display",
+                vec![opt("disabled"), opt("basic"), opt("forced")],
+            ),
+            var(
+                "pcsx2_widescreen_patch",
+                "Widescreen Patch",
+                "Display",
+                vec![opt("disabled"), opt("enabled")],
+            ),
+            var(
+                "pcsx2_speedhacks_toggles",
+                "Speedhacks",
+                "Performance",
+                vec![opt("disabled"), opt("enabled")],
+            ),
+            var(
+                "pcsx2_audio_sync",
+                "Audio Sync",
+                "Audio",
+                vec![opt("enabled"), opt("disabled")],
+            ),
+            var(
+                "pcsx2_turbo_limiter",
+                "Turbo Limiter",
+                "Performance",
+                vec![opt("disabled"), opt("enabled")],
+            ),
+        ],
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Dreamcast: flycast
+// ---------------------------------------------------------------------------
+
+fn flycast_profile() -> CoreProfile {
+    CoreProfile {
+        core_name: "flycast",
+        display_name: "Dreamcast",
+        system: "DREAMCAST",
+        variables: vec![
+            var(
+                "flycast_internal_resolution",
+                "Internal Resolution",
+                "Display",
+                vec![
+                    opt_d("640x480", "640x480 (Native)"),
+                    opt("1280x960"),
+                    opt("1920x1440"),
+                    opt("2560x1920"),
+                    opt("3840x2880"),
+                ],
+            ),
+            var(
+                "flycast_anisotropic_filtering",
+                "Anisotropic Filtering",
+                "Display",
+                vec![opt("off"), opt("2"), opt("4"), opt("8"), opt("16")],
+            ),
+            var(
+                "flycast_cable_type",
+                "Cable Type",
+                "Display",
+                vec![
+                    opt_d("VGA", "VGA"),
+                    opt_d("TV Composite", "Composite/AV"),
+                    opt_d("TV RGB", "TV RGB (SCART)"),
+                ],
+            ),
+            var(
+                "flycast_broadcast",
+                "Broadcast Region",
+                "System",
+                vec![opt("NTSC"), opt("PAL"), opt("PAL-M"), opt("PAL-N")],
+            ),
+            var(
+                "flycast_force_wince",
+                "Force Windows CE Mode",
+                "System",
+                vec![opt("disabled"), opt("enabled")],
+            ),
+            var(
+                "flycast_synchronous_rendering",
+                "Synchronous Rendering",
+                "Performance",
+                vec![opt("enabled"), opt("disabled")],
+            ),
+            var(
+                "flycast_audio_buffer_size",
+                "Audio Buffer Size",
+                "Audio",
+                vec![opt("1024"), opt("2048"), opt("512")],
+            ),
+        ],
+    }
+}
+
+// ---------------------------------------------------------------------------
+// DOS: dosbox_pure
+// ---------------------------------------------------------------------------
+
+fn dosbox_pure_profile() -> CoreProfile {
+    CoreProfile {
+        core_name: "dosbox_pure",
+        display_name: "DOSBox",
+        system: "DOS",
+        variables: vec![
+            var(
+                "dosbox_pure_machine",
+                "Emulated Machine",
+                "System",
+                vec![
+                    opt_d("svga", "SVGA (Default)"),
+                    opt_d("svga_s3", "SVGA (S3 Trio)"),
+                    opt_d("svga_et3000", "SVGA (ET3000)"),
+                    opt_d("svga_et4000", "SVGA (ET4000)"),
+                    opt_d("svga_paradise", "SVGA (Paradise)"),
+                    opt_d("vgaonly", "VGA Only"),
+                    opt_d("ega", "EGA"),
+                    opt_d("cga", "CGA"),
+                    opt_d("tandy", "Tandy"),
+                    opt_d("hercules", "Hercules"),
+                    opt_d("pcjr", "PCjr"),
+                ],
+            ),
+            var(
+                "dosbox_pure_memory_size",
+                "Memory Size (MB)",
+                "System",
+                vec![
+                    opt("16"),
+                    opt("4"),
+                    opt("8"),
+                    opt("24"),
+                    opt("32"),
+                    opt("48"),
+                    opt("64"),
+                ],
+            ),
+            var(
+                "dosbox_pure_cpu_type",
+                "CPU Type",
+                "Performance",
+                vec![
+                    opt_d("auto", "Auto (Recommended)"),
+                    opt_d("386", "386"),
+                    opt_d("386_slow", "386 (Slow)"),
+                    opt_d("486_slow", "486 (Slow)"),
+                    opt_d("pentium_slow", "Pentium (Slow)"),
+                    opt_d("386_prefetch", "386 Prefetch"),
+                ],
+            ),
+            var(
+                "dosbox_pure_cpu_core",
+                "CPU Core",
+                "Performance",
+                vec![
+                    opt_d("auto", "Auto"),
+                    opt_d("dynamic", "Dynamic (Fast)"),
+                    opt_d("simple", "Simple"),
+                    opt_d("normal", "Normal (Accurate)"),
+                ],
+            ),
+            var(
+                "dosbox_pure_cycles",
+                "Emulated CPU Speed",
+                "Performance",
+                vec![
+                    opt_d("auto", "Auto (Game Default)"),
+                    opt_d("max", "Max (Uncapped)"),
+                    opt("3000"),
+                    opt("5000"),
+                    opt("10000"),
+                    opt("15000"),
+                    opt("20000"),
+                    opt("30000"),
+                    opt("50000"),
+                ],
+            ),
+            var(
+                "dosbox_pure_sblaster_type",
+                "Sound Blaster Type",
+                "Audio",
+                vec![
+                    opt_d("sb16", "Sound Blaster 16"),
+                    opt_d("sbpro2", "Sound Blaster Pro 2"),
+                    opt_d("sbpro1", "Sound Blaster Pro 1"),
+                    opt_d("sb2", "Sound Blaster 2"),
+                    opt_d("sb1", "Sound Blaster 1"),
+                    opt_d("gb", "GameBlaster"),
+                    opt("none"),
+                ],
+            ),
+            var(
+                "dosbox_pure_aspect_correction",
+                "Aspect Ratio Correction",
+                "Display",
+                vec![opt("false"), opt("true")],
+            ),
+        ],
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -988,8 +1294,15 @@ mod tests {
     fn resolve_falls_back_to_default() {
         let settings = HashMap::new();
         let profile = core_profile_for("mupen64plus_next").unwrap();
-        let aspect = profile.variables.iter().find(|v| v.key == "mupen64plus-aspect").unwrap();
-        assert_eq!(resolve_core_variable(&settings, "mupen64plus_next", aspect), "4:3");
+        let aspect = profile
+            .variables
+            .iter()
+            .find(|v| v.key == "mupen64plus-aspect")
+            .unwrap();
+        assert_eq!(
+            resolve_core_variable(&settings, "mupen64plus_next", aspect),
+            "4:3"
+        );
     }
 
     #[test]
@@ -999,7 +1312,14 @@ mod tests {
         let mut settings = HashMap::new();
         settings.insert("mupen64plus_next".to_string(), inner);
         let profile = core_profile_for("mupen64plus_next").unwrap();
-        let aspect = profile.variables.iter().find(|v| v.key == "mupen64plus-aspect").unwrap();
-        assert_eq!(resolve_core_variable(&settings, "mupen64plus_next", aspect), "16:9");
+        let aspect = profile
+            .variables
+            .iter()
+            .find(|v| v.key == "mupen64plus-aspect")
+            .unwrap();
+        assert_eq!(
+            resolve_core_variable(&settings, "mupen64plus_next", aspect),
+            "16:9"
+        );
     }
 }

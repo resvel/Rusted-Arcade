@@ -1,3 +1,5 @@
+#[cfg(feature = "gamepad")]
+use arcade_domain::MAX_GAMEPAD_PLAYERS;
 use eframe::egui;
 
 use super::NativeArcadeUiApp;
@@ -44,6 +46,35 @@ impl NativeArcadeUiApp {
                                         egui::RichText::new(self.state.play.status.clone())
                                             .color(self.palette().text),
                                     );
+                                }
+                                #[cfg(feature = "gamepad")]
+                                {
+                                    let connected = self.state.controller_input_debug.connected_total;
+                                    let assigned =
+                                        self.state.controller_input_debug.assigned_playable_total;
+                                    let unassigned =
+                                        self.state.controller_input_debug.unassigned_total;
+                                    let badge = egui::Frame::new()
+                                        .fill(self.palette().panel)
+                                        .stroke(egui::Stroke::new(
+                                            1.0,
+                                            self.palette().border,
+                                        ))
+                                        .corner_radius(egui::CornerRadius::same(255))
+                                        .inner_margin(egui::Margin::symmetric(8, 3))
+                                        .show(ui, |ui| {
+                                            ui.label(
+                                                egui::RichText::new(format!(
+                                                    "Controllers: {connected}"
+                                                ))
+                                                .color(self.palette().text_muted)
+                                                .size(10.8),
+                                            );
+                                        })
+                                        .response;
+                                    badge.on_hover_text(format!(
+                                        "Players {assigned}/{MAX_GAMEPAD_PLAYERS} assigned • Unassigned {unassigned}"
+                                    ));
                                 }
                             });
                         },

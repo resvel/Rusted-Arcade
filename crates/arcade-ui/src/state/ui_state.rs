@@ -25,9 +25,31 @@ pub(crate) struct ControllerInputButtonDebug {
     pub(crate) data_value: Option<f32>,
 }
 
+#[allow(dead_code)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum ControllerAssignmentSource {
+    Assigned,
+    UnassignedOverLimit,
+    #[default]
+    Unsupported,
+}
+
+impl ControllerAssignmentSource {
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            ControllerAssignmentSource::Assigned => "Assigned",
+            ControllerAssignmentSource::UnassignedOverLimit => "Unassigned (Over 4)",
+            ControllerAssignmentSource::Unsupported => "Unsupported",
+        }
+    }
+}
+
 #[derive(Default, Clone)]
 pub(crate) struct ControllerInputDebugSnapshot {
-    pub(crate) port: u32,
+    pub(crate) player_slot: Option<u8>,
+    pub(crate) is_playable: bool,
+    pub(crate) assignment_source: ControllerAssignmentSource,
+    pub(crate) connect_seq: u64,
     pub(crate) name: String,
     pub(crate) vendor_id: Option<String>,
     pub(crate) product_id: Option<String>,
@@ -70,6 +92,9 @@ pub(crate) struct ControllerInputDebugSnapshot {
 pub(crate) struct ControllerInputDebugState {
     pub(crate) open: bool,
     pub(crate) snapshots: Vec<ControllerInputDebugSnapshot>,
+    pub(crate) connected_total: usize,
+    pub(crate) assigned_playable_total: usize,
+    pub(crate) unassigned_total: usize,
 }
 
 pub(crate) struct ArcadeUiState {

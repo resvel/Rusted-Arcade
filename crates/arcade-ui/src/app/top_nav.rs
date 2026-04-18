@@ -85,10 +85,7 @@ impl NativeArcadeUiApp {
             let aspect = tex_size.x / tex_size.y;
             let draw_width = image_height * aspect;
             let draw_rect = egui::Rect::from_min_size(
-                egui::pos2(
-                    anchor_rect.left(),
-                    anchor_rect.top() - image_height * 0.38,
-                ),
+                egui::pos2(anchor_rect.left(), anchor_rect.top() - image_height * 0.38),
                 egui::vec2(draw_width, image_height),
             );
             let uv = egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0));
@@ -126,9 +123,9 @@ impl NativeArcadeUiApp {
                         let height_scale = panel_rect.height() / size.y;
                         let scale = width_scale.max(height_scale);
                         let draw_size = egui::vec2(size.x * scale, size.y * scale);
-                        let draw_rect = egui::Rect::from_center_size(panel_rect.center(), draw_size);
-                        let uv =
-                            egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0));
+                        let draw_rect =
+                            egui::Rect::from_center_size(panel_rect.center(), draw_size);
+                        let uv = egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0));
                         ui.painter().image(
                             texture.id(),
                             draw_rect,
@@ -158,9 +155,7 @@ impl NativeArcadeUiApp {
                             if compact_layout {
                                 ui.horizontal_wrapped(|ui| {
                                     ui.spacing_mut().item_spacing = egui::vec2(8.0, 4.0);
-                                    self.paint_header_title(
-                                        ui, panel_rect, 264.0, 160.0,
-                                    );
+                                    self.paint_header_title(ui, panel_rect, 264.0, 160.0);
                                     for (label, view, logical_index) in [
                                         ("Favorites", AppView::Home, 0usize),
                                         ("Library", AppView::Library, 1usize),
@@ -178,9 +173,7 @@ impl NativeArcadeUiApp {
                                 });
                             } else {
                                 ui.horizontal(|ui| {
-                                    self.paint_header_title(
-                                        ui, panel_rect, 312.0, 200.0,
-                                    );
+                                    self.paint_header_title(ui, panel_rect, 312.0, 200.0);
                                     ui.add_space(12.0);
                                     ui.with_layout(
                                         egui::Layout::right_to_left(egui::Align::Center),

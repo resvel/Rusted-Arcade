@@ -60,22 +60,72 @@ impl EmulationConfig {
         }
         let n = &self.n64;
         let mut vars = HashMap::new();
-        vars.insert("mupen64plus-aspect".into(), n.aspect_ratio.as_core_value().into());
-        vars.insert("mupen64plus-parallel-rdp-upscaling".into(), n.parallel_rdp_upscaling.as_core_value().into());
-        vars.insert("mupen64plus-parallel-rdp-synchronous".into(), n.parallel_rdp_synchronous.as_core_value().into());
-        vars.insert("mupen64plus-parallel-rdp-super-sampled-read-back".into(), n.parallel_rdp_super_sampled_read_back.as_core_value().into());
-        vars.insert("mupen64plus-parallel-rdp-vi-aa".into(), n.parallel_rdp_vi_aa.as_core_value().into());
-        vars.insert("mupen64plus-parallel-rdp-vi-bilinear".into(), n.parallel_rdp_vi_bilinear.as_core_value().into());
-        vars.insert("mupen64plus-parallel-rdp-dither-filter".into(), n.parallel_rdp_dither_filter.as_core_value().into());
-        vars.insert("mupen64plus-parallel-rdp-divot-filter".into(), n.parallel_rdp_divot_filter.as_core_value().into());
-        vars.insert("mupen64plus-parallel-rdp-gamma-dither".into(), n.parallel_rdp_gamma_dither.as_core_value().into());
-        vars.insert("mupen64plus-EnableFBEmulation".into(), n.fb_emulation.as_core_value().into());
-        vars.insert("mupen64plus-EnableCopyColorToRDRAM".into(), n.copy_color_to_rdram.as_core_value().into());
-        vars.insert("mupen64plus-FrameDuping".into(), n.frame_duplication.as_core_value().into());
-        vars.insert("mupen64plus-Framerate".into(), n.framerate.as_core_value().into());
-        vars.insert("mupen64plus-virefresh".into(), n.vi_refresh.as_core_value().into());
-        vars.insert("mupen64plus-CountPerOp".into(), n.count_per_op.as_core_value().into());
-        vars.insert("mupen64plus-CountPerOpDenomPot".into(), n.count_per_op_denom_pot.as_core_value().into());
+        vars.insert(
+            "mupen64plus-aspect".into(),
+            n.aspect_ratio.as_core_value().into(),
+        );
+        vars.insert(
+            "mupen64plus-parallel-rdp-upscaling".into(),
+            n.parallel_rdp_upscaling.as_core_value().into(),
+        );
+        vars.insert(
+            "mupen64plus-parallel-rdp-synchronous".into(),
+            n.parallel_rdp_synchronous.as_core_value().into(),
+        );
+        vars.insert(
+            "mupen64plus-parallel-rdp-super-sampled-read-back".into(),
+            n.parallel_rdp_super_sampled_read_back
+                .as_core_value()
+                .into(),
+        );
+        vars.insert(
+            "mupen64plus-parallel-rdp-vi-aa".into(),
+            n.parallel_rdp_vi_aa.as_core_value().into(),
+        );
+        vars.insert(
+            "mupen64plus-parallel-rdp-vi-bilinear".into(),
+            n.parallel_rdp_vi_bilinear.as_core_value().into(),
+        );
+        vars.insert(
+            "mupen64plus-parallel-rdp-dither-filter".into(),
+            n.parallel_rdp_dither_filter.as_core_value().into(),
+        );
+        vars.insert(
+            "mupen64plus-parallel-rdp-divot-filter".into(),
+            n.parallel_rdp_divot_filter.as_core_value().into(),
+        );
+        vars.insert(
+            "mupen64plus-parallel-rdp-gamma-dither".into(),
+            n.parallel_rdp_gamma_dither.as_core_value().into(),
+        );
+        vars.insert(
+            "mupen64plus-EnableFBEmulation".into(),
+            n.fb_emulation.as_core_value().into(),
+        );
+        vars.insert(
+            "mupen64plus-EnableCopyColorToRDRAM".into(),
+            n.copy_color_to_rdram.as_core_value().into(),
+        );
+        vars.insert(
+            "mupen64plus-FrameDuping".into(),
+            n.frame_duplication.as_core_value().into(),
+        );
+        vars.insert(
+            "mupen64plus-Framerate".into(),
+            n.framerate.as_core_value().into(),
+        );
+        vars.insert(
+            "mupen64plus-virefresh".into(),
+            n.vi_refresh.as_core_value().into(),
+        );
+        vars.insert(
+            "mupen64plus-CountPerOp".into(),
+            n.count_per_op.as_core_value().into(),
+        );
+        vars.insert(
+            "mupen64plus-CountPerOpDenomPot".into(),
+            n.count_per_op_denom_pot.as_core_value().into(),
+        );
         self.core_settings.insert("mupen64plus_next".into(), vars);
     }
 }
@@ -84,6 +134,8 @@ impl EmulationConfig {
 pub struct N64EmulationConfig {
     #[serde(default)]
     pub preferred_core: N64PreferredCore,
+    #[serde(default)]
+    pub primary_stick: N64PrimaryStick,
     #[serde(default)]
     pub parallel_rdp_upscaling: N64ParallelRdpUpscaling,
     #[serde(default)]
@@ -153,6 +205,14 @@ impl N64PreferredCore {
             }
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum N64PrimaryStick {
+    #[default]
+    Left,
+    Right,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq)]
@@ -473,6 +533,15 @@ pub struct CoverScrapePlatformIds {
     pub n64: Vec<u32>,
     #[serde(default = "default_cover_scrape_platform_arcade")]
     pub arcade: Vec<u32>,
+    // New platform IDs for additional consoles
+    #[serde(default)]
+    pub psx: Vec<u32>,
+    #[serde(default)]
+    pub ps2: Vec<u32>,
+    #[serde(default)]
+    pub dreamcast: Vec<u32>,
+    // The `dos` field was mistakenly added; it is not used by the services.
+    // It has been removed to keep the struct in sync with the rest of the code.
 }
 
 impl Default for CoverScrapePlatformIds {
@@ -485,6 +554,9 @@ impl Default for CoverScrapePlatformIds {
             gba: default_cover_scrape_platform_gba(),
             n64: default_cover_scrape_platform_n64(),
             arcade: default_cover_scrape_platform_arcade(),
+            psx: Vec::new(),
+            ps2: Vec::new(),
+            dreamcast: Vec::new(),
         }
     }
 }
@@ -737,6 +809,7 @@ fn strip_known_root_prefix<'a>(path: &'a Path, root: &Path) -> Option<&'a Path> 
 mod tests {
     use super::{
         default_app_root_with, default_config_path_with, resolve_path_from_root, AppConfig,
+        N64PrimaryStick,
     };
     use std::fs;
     use std::path::PathBuf;
@@ -773,6 +846,7 @@ mod tests {
             config.preferred_core_for_system("N64"),
             Some("mupen64plus_next")
         );
+        assert_eq!(config.emulation.n64.primary_stick, N64PrimaryStick::Left);
         assert_eq!(
             config.emulation.n64.parallel_rdp_upscaling.as_core_value(),
             "1x"
@@ -832,6 +906,7 @@ bios_root = "/tmp/bios"
             config.preferred_core_for_system("N64"),
             Some("mupen64plus_next")
         );
+        assert_eq!(config.emulation.n64.primary_stick, N64PrimaryStick::Left);
         assert_eq!(
             config.emulation.n64.parallel_rdp_upscaling.as_core_value(),
             "1x"
@@ -918,6 +993,26 @@ parallel_profile = "performance"
             config.emulation.n64.parallel_profile.as_config_value(),
             "performance"
         );
+    }
+
+    #[test]
+    fn app_config_deserializes_n64_primary_stick_override() {
+        let config: AppConfig = toml::from_str(
+            r#"
+[paths]
+rom_root = "/tmp/roms"
+db_path = "/tmp/arcade.db"
+save_state_root = "/tmp/save-states"
+core_root = "/tmp/cores"
+bios_root = "/tmp/bios"
+
+[emulation.n64]
+primary_stick = "right"
+"#,
+        )
+        .expect("config");
+
+        assert_eq!(config.emulation.n64.primary_stick, N64PrimaryStick::Right);
     }
 
     #[test]

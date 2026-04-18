@@ -255,11 +255,7 @@ impl MenuNavState {
         }
     }
 
-    pub(crate) fn step_back_focus(
-        &mut self,
-        current_view: AppView,
-        filters_expanded: bool,
-    ) {
+    pub(crate) fn step_back_focus(&mut self, current_view: AppView, filters_expanded: bool) {
         self.focus_region = match self.focus_region {
             MenuFocusRegion::TopNav => MenuFocusRegion::TopNav,
             MenuFocusRegion::LibraryManageButton => {

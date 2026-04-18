@@ -29,70 +29,62 @@ pub(super) fn configure_environment_context(
         context.last_negotiation_interface = None;
         context.loaded_core_name = Some(core_name.to_string());
         context.loaded_backend = Some(backend);
+        context.keyboard_event_cb = None;
+        context.audio_callback = None;
+        context.audio_set_state_callback = None;
+        context.audio_callback_enabled = false;
         let should_log_core_vars = vulkan_debug_enabled()
             || vulkan_handoff_trace_enabled()
             || env_flag_enabled("ARCADE_PARALLEL_RDP_SAFE_DIAG")
             || std::env::var_os("LIBRETRO_TRACE_VARIABLES").is_some();
-        if should_log_core_vars {
-            if core_name.eq_ignore_ascii_case("parallel_n64") {
-                let gfx = context
-                    .variables
-                    .get("parallel-n64-gfxplugin")
-                    .and_then(|value| value.to_str().ok())
-                    .unwrap_or("<unset>");
-                let rsp = context
-                    .variables
-                    .get("parallel-n64-rspplugin")
-                    .and_then(|value| value.to_str().ok())
-                    .unwrap_or("<unset>");
-                let cpucore = context
-                    .variables
-                    .get("parallel-n64-cpucore")
-                    .and_then(|value| value.to_str().ok())
-                    .unwrap_or("<unset>");
-                let virefresh = context
-                    .variables
-                    .get("parallel-n64-virefresh")
-                    .and_then(|value| value.to_str().ok())
-                    .unwrap_or("<unset>");
-                let upscaling = context
-                    .variables
-                    .get("parallel-n64-parallel-rdp-upscaling")
-                    .and_then(|value| value.to_str().ok())
-                    .unwrap_or("<unset>");
+        if core_name.eq_ignore_ascii_case("mupen64plus_next") {
+            let rdp = context
+                .variables
+                .get("mupen64plus-rdp-plugin")
+                .and_then(|value| value.to_str().ok())
+                .unwrap_or("<unset>");
+            let rsp = context
+                .variables
+                .get("mupen64plus-rsp-plugin")
+                .and_then(|value| value.to_str().ok())
+                .unwrap_or("<unset>");
+            let cpucore = context
+                .variables
+                .get("mupen64plus-cpucore")
+                .or_else(|| context.variables.get("mupen64plus-cpu-core"))
+                .and_then(|value| value.to_str().ok())
+                .unwrap_or("<unset>");
+            let count_per_op = context
+                .variables
+                .get("mupen64plus-CountPerOp")
+                .and_then(|value| value.to_str().ok())
+                .unwrap_or("<unset>");
+            let count_per_op_denom = context
+                .variables
+                .get("mupen64plus-CountPerOpDenomPot")
+                .and_then(|value| value.to_str().ok())
+                .unwrap_or("<unset>");
+
+            eprintln!(
+                "[CORE-VARS] backend={:?} mupen64plus-rdp-plugin={} mupen64plus-rsp-plugin={} mupen64plus-cpucore={} mupen64plus-CountPerOp={} mupen64plus-CountPerOpDenomPot={}",
+                backend,
+                rdp,
+                rsp,
+                cpucore,
+                count_per_op,
+                count_per_op_denom
+            );
+
+            if should_log_core_vars {
                 info!(
                     target: "arcade_libretro::core_loader",
-                    "configured parallel_n64 core vars backend={:?} parallel-n64-gfxplugin={} parallel-n64-rspplugin={} parallel-n64-cpucore={} parallel-n64-virefresh={} parallel-n64-parallel-rdp-upscaling={}",
-                    backend,
-                    gfx,
-                    rsp,
-                    cpucore,
-                    virefresh,
-                    upscaling
-                );
-            } else if core_name.eq_ignore_ascii_case("mupen64plus_next") {
-                let rdp = context
-                    .variables
-                    .get("mupen64plus-rdp-plugin")
-                    .and_then(|value| value.to_str().ok())
-                    .unwrap_or("<unset>");
-                let rsp = context
-                    .variables
-                    .get("mupen64plus-rsp-plugin")
-                    .and_then(|value| value.to_str().ok())
-                    .unwrap_or("<unset>");
-                let cpucore = context
-                    .variables
-                    .get("mupen64plus-cpucore")
-                    .and_then(|value| value.to_str().ok())
-                    .unwrap_or("<unset>");
-                info!(
-                    target: "arcade_libretro::core_loader",
-                    "configured mupen64plus_next core vars backend={:?} mupen64plus-rdp-plugin={} mupen64plus-rsp-plugin={} mupen64plus-cpucore={}",
+                    "configured mupen64plus_next core vars backend={:?} mupen64plus-rdp-plugin={} mupen64plus-rsp-plugin={} mupen64plus-cpucore={} mupen64plus-CountPerOp={} mupen64plus-CountPerOpDenomPot={}",
                     backend,
                     rdp,
                     rsp,
-                    cpucore
+                    cpucore,
+                    count_per_op,
+                    count_per_op_denom
                 );
             }
         }
@@ -101,7 +93,7 @@ pub(super) fn configure_environment_context(
 }
 
 pub(super) fn core_has_embedded_software_video_fallback(core_name: &str) -> bool {
-    matches!(core_name, "mupen64plus_next" | "parallel_n64")
+    matches!(core_name, "mupen64plus_next" | "mednafen_psx_hw")
 }
 
 pub(super) unsafe fn load_api(library: &Library) -> Result<CoreApi> {
@@ -174,8 +166,10 @@ pub(super) unsafe extern "C" fn retro_environment(cmd: u32, data: *mut c_void) -
     const RETRO_ENVIRONMENT_SET_VARIABLES: u32 = 16;
     const RETRO_ENVIRONMENT_GET_VARIABLE_UPDATE: u32 = 17;
     const RETRO_ENVIRONMENT_SET_SUPPORT_NO_GAME: u32 = 18;
+    const RETRO_ENVIRONMENT_SET_AUDIO_CALLBACK: u32 = 22;
     const RETRO_ENVIRONMENT_GET_LOG_INTERFACE: u32 = 27;
     const RETRO_ENVIRONMENT_GET_SAVE_DIRECTORY: u32 = 31;
+    const RETRO_ENVIRONMENT_SET_SYSTEM_AV_INFO: u32 = 32;
     const RETRO_ENVIRONMENT_SET_GEOMETRY: u32 = 37;
     const RETRO_ENVIRONMENT_SET_HW_RENDER_CONTEXT_NEGOTIATION_INTERFACE: u32 =
         43 | RETRO_ENVIRONMENT_EXPERIMENTAL;
@@ -187,6 +181,7 @@ pub(super) unsafe extern "C" fn retro_environment(cmd: u32, data: *mut c_void) -
     const RETRO_ENVIRONMENT_GET_MESSAGE_INTERFACE_VERSION: u32 = 59;
     const RETRO_ENVIRONMENT_SET_FASTFORWARDING_OVERRIDE: u32 = 64;
     const RETRO_ENVIRONMENT_SET_CORE_OPTIONS_UPDATE_DISPLAY_CALLBACK: u32 = 69;
+    const RETRO_ENVIRONMENT_SET_KEYBOARD_CALLBACK: u32 = 12;
     const RETRO_ENVIRONMENT_SET_VARIABLE: u32 = 70;
 
     const RETRO_PIXEL_FORMAT_0RGB1555: u32 = 0;
@@ -214,6 +209,48 @@ pub(super) unsafe extern "C" fn retro_environment(cmd: u32, data: *mut c_void) -
         | RETRO_ENVIRONMENT_SET_SUPPORT_ACHIEVEMENTS
         | RETRO_ENVIRONMENT_SET_FASTFORWARDING_OVERRIDE
         | RETRO_ENVIRONMENT_SET_CORE_OPTIONS_UPDATE_DISPLAY_CALLBACK => true,
+        RETRO_ENVIRONMENT_SET_KEYBOARD_CALLBACK => {
+            if data.is_null() {
+                return false;
+            }
+            // The struct is a single function-pointer field.
+            #[repr(C)]
+            struct RetroKeyboardCallback {
+                callback: RetroKeyboardEventFn,
+            }
+            let kb = unsafe { &*(data as *const RetroKeyboardCallback) };
+            if let Some(runtime) = active_runtime() {
+                runtime.environment_context.lock().keyboard_event_cb = Some(kb.callback);
+            }
+            true
+        }
+        RETRO_ENVIRONMENT_SET_AUDIO_CALLBACK => {
+            if data.is_null() {
+                return false;
+            }
+            #[repr(C)]
+            struct RetroAudioCallback {
+                callback: Option<RetroAudioCallbackFn>,
+                set_state: Option<RetroAudioSetStateCallbackFn>,
+            }
+            let audio = unsafe { &*(data as *const RetroAudioCallback) };
+            if let Some(runtime) = active_runtime() {
+                let mut context = runtime.environment_context.lock();
+                context.audio_callback = audio.callback;
+                context.audio_set_state_callback = audio.set_state;
+                context.audio_callback_enabled = audio.callback.is_some();
+                if let Some(set_state) = audio.set_state {
+                    unsafe { set_state(true) };
+                }
+            }
+            info!(
+                target: "arcade_libretro::audio",
+                callback_registered = audio.callback.is_some(),
+                set_state_registered = audio.set_state.is_some(),
+                "core requested RETRO_ENVIRONMENT_SET_AUDIO_CALLBACK"
+            );
+            true
+        }
         RETRO_ENVIRONMENT_GET_HW_RENDER_INTERFACE => {
             if data.is_null() {
                 record_runtime_load_error(
@@ -283,6 +320,18 @@ pub(super) unsafe extern "C" fn retro_environment(cmd: u32, data: *mut c_void) -
                 return false;
             };
             if callback.context_type == RETRO_HW_CONTEXT_VULKAN {
+                // If the policy already chose a non-Vulkan backend (e.g. OpenGL for
+                // mednafen_psx_hw when a GL context is available), reject this Vulkan
+                // request so the core can retry with an OpenGL context instead.
+                let chosen_backend = runtime.video_coordinator.lock().current_backend_kind();
+                if chosen_backend != VideoBackendKind::Vulkan {
+                    info!(
+                        target: "arcade_libretro::vulkan_debug",
+                        "SET_HW_RENDER: rejecting Vulkan because policy chose {:?}; core should retry with OpenGL",
+                        chosen_backend
+                    );
+                    return false;
+                }
                 let existing = {
                     let mut state = runtime.hw_render_state.lock();
                     state.vulkan.take()
@@ -290,12 +339,25 @@ pub(super) unsafe extern "C" fn retro_environment(cmd: u32, data: *mut c_void) -
                 if let Some(existing) = existing {
                     destroy_vulkan_interface_state(existing);
                 }
-            } else if !hardware_render_frontend_available() {
-                record_runtime_load_error(
-                    "core requested OpenGL hardware render, but no frontend GL context is available",
-                );
-                warn!("libretro hw-render: SET_HW_RENDER denied because no frontend GL context is available");
-                return false;
+            } else {
+                // OpenGL context request — reject when the policy chose Software so the
+                // core falls through to its own software renderer.
+                let chosen_backend = runtime.video_coordinator.lock().current_backend_kind();
+                if chosen_backend == VideoBackendKind::Software {
+                    info!(
+                        target: "arcade_libretro::vulkan_debug",
+                        "SET_HW_RENDER: rejecting GL context type {} because policy chose Software; core should use software renderer",
+                        callback.context_type
+                    );
+                    return false;
+                }
+                if !hardware_render_frontend_available() {
+                    record_runtime_load_error(
+                        "core requested OpenGL hardware render, but no frontend GL context is available",
+                    );
+                    warn!("libretro hw-render: SET_HW_RENDER denied because no frontend GL context is available");
+                    return false;
+                }
             }
             if callback.context_type != RETRO_HW_CONTEXT_VULKAN
                 && !hw_context_type_supported(callback.context_type)
@@ -362,14 +424,20 @@ pub(super) unsafe extern "C" fn retro_environment(cmd: u32, data: *mut c_void) -
                 }
                 let should_create = {
                     let mut state = runtime.hw_render_state.lock();
-                    if state.context_type != Some(RETRO_HW_CONTEXT_VULKAN) {
-                        return false;
-                    }
+                    // Store negotiation callbacks unconditionally. Cores often call
+                    // SET_HW_RENDER_CONTEXT_NEGOTIATION_INTERFACE before SET_HW_RENDER,
+                    // so context_type may not be VULKAN yet. The callbacks will be
+                    // consumed later when ensure_vulkan_interface_state_for() runs.
                     state.vulkan_negotiation = Some(VulkanNegotiationCallbacks {
                         get_application_info: negotiation.get_application_info,
                         create_device: negotiation.create_device,
                         destroy_device: negotiation.destroy_device,
                     });
+                    if state.context_type != Some(RETRO_HW_CONTEXT_VULKAN) {
+                        // Accept and store, but don't create yet — will be used when
+                        // SET_HW_RENDER arrives with a Vulkan context.
+                        return true;
+                    }
                     state.vulkan.is_some()
                 };
                 if should_create {
@@ -432,6 +500,30 @@ pub(super) unsafe extern "C" fn retro_environment(cmd: u32, data: *mut c_void) -
             runtime.callback_state.lock().pixel_format = pixel_format;
             true
         }
+        RETRO_ENVIRONMENT_SET_SYSTEM_AV_INFO => {
+            // The core is updating both geometry and timing mid-run (e.g. an
+            // N64 game changing video mode or the audio plugin reporting a
+            // different sample rate after dynarec kicks in).
+            if data.is_null() {
+                return false;
+            }
+            let av_info = unsafe { *(data as *const RetroSystemAvInfo) };
+            let Some(runtime) = active_runtime() else {
+                return false;
+            };
+            runtime
+                .video_coordinator
+                .lock()
+                .handle_geometry_update(&runtime, av_info.geometry);
+            if av_info.timing.sample_rate.is_finite() && av_info.timing.sample_rate > 0.0 {
+                set_audio_source_sample_rate(av_info.timing.sample_rate);
+                eprintln!(
+                    "[AUDIO-RS] SET_SYSTEM_AV_INFO updated source sample rate to {}",
+                    av_info.timing.sample_rate,
+                );
+            }
+            true
+        }
         RETRO_ENVIRONMENT_SET_GEOMETRY => {
             if data.is_null() {
                 return false;
@@ -463,17 +555,22 @@ pub(super) unsafe extern "C" fn retro_environment(cmd: u32, data: *mut c_void) -
                 return true;
             };
             let context = runtime.environment_context.lock();
+            let aliased_key = match key {
+                "mupen64plus-cpucore" => Some("mupen64plus-cpu-core"),
+                "mupen64plus-cpu-core" => Some("mupen64plus-cpucore"),
+                _ => None,
+            };
             let value = context
                 .variables
                 .get(key)
+                .or_else(|| aliased_key.and_then(|alias| context.variables.get(alias)))
                 .map(|value| value.as_ptr())
                 .unwrap_or(std::ptr::null());
-            if vulkan_debug_enabled()
-                && (key.starts_with("parallel-n64-") || key.starts_with("mupen64plus-"))
-            {
+            if vulkan_debug_enabled() && key.starts_with("mupen64plus-") {
                 let printable = context
                     .variables
                     .get(key)
+                    .or_else(|| aliased_key.and_then(|alias| context.variables.get(alias)))
                     .and_then(|value| value.to_str().ok())
                     .unwrap_or("<unset>");
                 info!(
@@ -484,11 +581,12 @@ pub(super) unsafe extern "C" fn retro_environment(cmd: u32, data: *mut c_void) -
                 );
             }
             if std::env::var_os("LIBRETRO_TRACE_VARIABLES").is_some()
-                && (key.starts_with("parallel-n64-") || key.starts_with("mupen64plus-"))
+                && key.starts_with("mupen64plus-")
             {
                 let printable = context
                     .variables
                     .get(key)
+                    .or_else(|| aliased_key.and_then(|alias| context.variables.get(alias)))
                     .and_then(|value| value.to_str().ok())
                     .unwrap_or("<unset>");
                 eprintln!("env GET_VARIABLE key={key} value={printable}");
@@ -651,9 +749,7 @@ pub(super) unsafe extern "C" fn retro_environment(cmd: u32, data: *mut c_void) -
                 return false;
             };
             let mut context = runtime.environment_context.lock();
-            if vulkan_debug_enabled()
-                && (key.starts_with("parallel-n64-") || key.starts_with("mupen64plus-"))
-            {
+            if vulkan_debug_enabled() && key.starts_with("mupen64plus-") {
                 info!(
                     target: "arcade_libretro::vulkan_debug",
                     "SET_VARIABLE key={} value={}",
@@ -662,7 +758,7 @@ pub(super) unsafe extern "C" fn retro_environment(cmd: u32, data: *mut c_void) -
                 );
             }
             if std::env::var_os("LIBRETRO_TRACE_VARIABLES").is_some()
-                && (key.starts_with("parallel-n64-") || key.starts_with("mupen64plus-"))
+                && key.starts_with("mupen64plus-")
             {
                 eprintln!(
                     "env SET_VARIABLE key={key} value={}",
@@ -878,13 +974,6 @@ pub(super) unsafe extern "C" fn retro_video_refresh(
 ) {
     const RETRO_HW_FRAME_BUFFER_VALID: usize = usize::MAX;
 
-    if std::env::var_os("LIBRETRO_TRACE_VIDEO").is_some() {
-        eprintln!(
-            "libretro video data={:p} width={} height={} pitch={}",
-            data, width, height, pitch
-        );
-    }
-
     if width == 0 || height == 0 {
         return;
     }
@@ -977,8 +1066,10 @@ pub(super) unsafe extern "C" fn retro_video_refresh(
                 let is_vulkan = state.context_type == Some(RETRO_HW_CONTEXT_VULKAN);
                 (blo, gl, is_vulkan)
             };
-            if let Some(gl) = gl {
-                unsafe { gl.finish() };
+            if !is_vulkan_hw_context {
+                if let Some(gl) = gl {
+                    unsafe { gl.finish() };
+                }
             }
             let (source_width, source_height) = if vulkan_force_1x1_source_frame_test_mode() {
                 (1, 1)
@@ -1047,7 +1138,12 @@ pub(super) unsafe extern "C" fn retro_video_refresh(
 
 pub(super) unsafe extern "C" fn retro_input_poll() {}
 
-pub(super) unsafe extern "C" fn retro_input_state(port: u32, device: u32, index: u32, id: u32) -> i16 {
+pub(super) unsafe extern "C" fn retro_input_state(
+    port: u32,
+    device: u32,
+    index: u32,
+    id: u32,
+) -> i16 {
     const RETRO_DEVICE_MASK: u32 = 0xff;
 
     let Some(runtime) = active_runtime() else {

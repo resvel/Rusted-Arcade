@@ -5,7 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [features]
-default = ["native-av"]
+default = ["native-av", "audio"]
 audio = ["arcade-libretro/audio"]
 gamepad = ["arcade-ui/gamepad"]
 native-av = ["audio", "gamepad"]
