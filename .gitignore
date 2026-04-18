@@ -2,3 +2,24 @@
 /dist/
 /config.toml
 /CONTEXT.md
+
+# macOS / editor noise
+.DS_Store
+.vscode/
+
+# Local runtime and debug artifacts
+run.log
+recentRun*.log
+--core
+--rom
+
+# Local content/runtime folders (not source-controlled)
+/bios/
+/cores/
+/data/
+/roms/
+/public/covers/
+
+# Local third-party scratch copies/backups
+/third_party/*-backup-*/
+/third_party/beetle-psx-libretro/
