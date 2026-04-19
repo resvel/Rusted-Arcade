@@ -73,6 +73,22 @@ Native desktop app for the Personal Arcade project, built as a Rust workspace ar
 - Starts native audio output via `cpal` when built with the audio feature
 - Includes packaging helper scripts for Linux/Windows ZIP artifact builds
 
+## Theme Asset Overrides
+
+You can override themed header/background images per system by dropping files in `public/system-logos/`.
+
+- Header override pattern: `<system>_header.(png|webp|jpg|jpeg)`
+- Background override pattern: `<system>_background.(png|webp|jpg|jpeg)`
+- `<system>` is the lowercase system key used by the UI (examples: `nes`, `snes`, `genesis`, `n64`, `arcade`, `psx`, `ps2`, `dreamcast`, `dos`, `all`)
+- Example file: `public/system-logos/nes_header.png`
+- Example file: `public/system-logos/nes_background.webp`
+
+Fallback behavior:
+
+- If a system-specific header file is missing, the app falls back to `public/system-logos/headerbackground.png`.
+- If a system-specific background file is missing, the app falls back to the built-in per-system background path already defined in code.
+- `ALL` view background art still uses `public/system-logos/All-background.png` (the `<system>_background.*` override applies to standard per-system views).
+
 ## Prerequisites
 
 - Stable Rust toolchain
