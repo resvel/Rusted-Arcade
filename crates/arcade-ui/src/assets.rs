@@ -315,6 +315,21 @@ impl NativeArcadeUiApp {
     }
 
     fn resolve_header_background_path(&self) -> Option<PathBuf> {
+        let system = self.active_system().trim().to_ascii_lowercase();
+        if !system.is_empty() {
+            let candidates = [
+                format!("/system-logos/{system}_header.png"),
+                format!("/system-logos/{system}_header.webp"),
+                format!("/system-logos/{system}_header.jpg"),
+                format!("/system-logos/{system}_header.jpeg"),
+            ];
+            for candidate in candidates {
+                if let Some(path) = self.resolve_db_asset_path(&candidate) {
+                    return Some(path);
+                }
+            }
+        }
+
         self.resolve_db_asset_path("/system-logos/headerbackground.png")
     }
 
@@ -335,8 +350,23 @@ impl NativeArcadeUiApp {
     }
 
     pub(crate) fn resolve_system_background_path(&self) -> Option<PathBuf> {
+        let system = self.active_system().trim().to_ascii_lowercase();
+        if !system.is_empty() {
+            let custom_candidates = [
+                format!("/system-logos/{system}_background.png"),
+                format!("/system-logos/{system}_background.webp"),
+                format!("/system-logos/{system}_background.jpg"),
+                format!("/system-logos/{system}_background.jpeg"),
+            ];
+            for candidate in custom_candidates {
+                if let Some(path) = self.resolve_db_asset_path(&candidate) {
+                    return Some(path);
+                }
+            }
+        }
+
         let candidate = match self.active_system() {
-            "NES" => "system-logos-web/nesbackground.w960.webp",
+            "NES" => "system-logos/nesbackground.webp",
             "SNES" => "system-logos-web/snesbackground.w960.webp",
             "GENESIS" => "system-logos-web/genesisbackground.w960.webp",
             "GB" => "system-logos-web/gameboybackground.w960.webp",
