@@ -24,9 +24,18 @@ pub const SUPPORTED_CORES: &[&str] = &[
     "mame2003_plus",
     "mednafen_psx_hw",
     "pcsx2",
+    "play",
     "flycast",
     "dosbox_pure",
 ];
+
+fn default_ps2_core() -> &'static str {
+    if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
+        "play"
+    } else {
+        "pcsx2"
+    }
+}
 
 fn default_core(system: &str) -> &'static str {
     match system {
@@ -38,7 +47,7 @@ fn default_core(system: &str) -> &'static str {
         "N64" => "mupen64plus_next",
         "ARCADE" => "fbneo",
         "PSX" => "mednafen_psx_hw",
-        "PS2" => "pcsx2",
+        "PS2" => default_ps2_core(),
         "DREAMCAST" => "flycast",
         "DOS" => "dosbox_pure",
         _ => "fceumm",
@@ -55,7 +64,7 @@ fn allowlist(system: &str) -> &'static [&'static str] {
         "N64" => &["mupen64plus_next"],
         "ARCADE" => &["fbneo", "mame2003", "mame2003_plus"],
         "PSX" => &["mednafen_psx_hw"],
-        "PS2" => &["pcsx2"],
+        "PS2" => &["pcsx2", "play"],
         "DREAMCAST" => &["flycast"],
         "DOS" => &["dosbox_pure"],
         _ => &["fceumm"],
@@ -159,6 +168,16 @@ mod tests {
         assert_eq!(resolve_core("NES", None), "fceumm");
         assert_eq!(resolve_core("SNES", None), "snes9x");
         assert_eq!(resolve_core("ARCADE", None), "fbneo");
+    }
+
+    #[test]
+    fn ps2_default_core_respects_platform() {
+        let expected = if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
+            "play"
+        } else {
+            "pcsx2"
+        };
+        assert_eq!(resolve_core("PS2", None), expected);
     }
 
     #[test]

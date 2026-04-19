@@ -45,6 +45,9 @@ const RETRO_DEVICE_ID_JOYPAD_X: u32 = 9;
 const RETRO_DEVICE_ID_JOYPAD_L: u32 = 10;
 const RETRO_DEVICE_ID_JOYPAD_R: u32 = 11;
 const RETRO_DEVICE_ID_JOYPAD_L2: u32 = 12;
+const RETRO_DEVICE_ID_JOYPAD_R2: u32 = 13;
+const RETRO_DEVICE_ID_JOYPAD_L3: u32 = 14;
+const RETRO_DEVICE_ID_JOYPAD_R3: u32 = 15;
 
 const RETRO_DEVICE_INDEX_ANALOG_LEFT: u32 = 0;
 const RETRO_DEVICE_INDEX_ANALOG_RIGHT: u32 = 1;
@@ -2446,12 +2449,56 @@ fn action_to_retro_binding(
         "Down" => Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_DOWN)),
         "Left" => Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_LEFT)),
         "Right" => Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_RIGHT)),
-        "A" => Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_A)),
-        "B" => Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_B)),
-        "X" => Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_X)),
-        "Y" => Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_Y)),
-        "L" => Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_L)),
-        "R" => Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_R)),
+        "A" | "Circle" => Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_A)),
+        "B" | "Cross" => Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_B)),
+        "X" | "Triangle" => Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_X)),
+        "Y" | "Square" => Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_Y)),
+        "L" | "L1" => Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_L)),
+        "R" | "R1" => Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_R)),
+        "L2" => Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_L2)),
+        "R2" => Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_R2)),
+        "L3" => Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_L3)),
+        "R3" => Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_R3)),
+        "Left Stick Up" => Some(RetroActionBinding::Analog {
+            index: RETRO_DEVICE_INDEX_ANALOG_LEFT,
+            axis_id: RETRO_DEVICE_ID_ANALOG_Y,
+            value: -1.0,
+        }),
+        "Left Stick Down" => Some(RetroActionBinding::Analog {
+            index: RETRO_DEVICE_INDEX_ANALOG_LEFT,
+            axis_id: RETRO_DEVICE_ID_ANALOG_Y,
+            value: 1.0,
+        }),
+        "Left Stick Left" => Some(RetroActionBinding::Analog {
+            index: RETRO_DEVICE_INDEX_ANALOG_LEFT,
+            axis_id: RETRO_DEVICE_ID_ANALOG_X,
+            value: -1.0,
+        }),
+        "Left Stick Right" => Some(RetroActionBinding::Analog {
+            index: RETRO_DEVICE_INDEX_ANALOG_LEFT,
+            axis_id: RETRO_DEVICE_ID_ANALOG_X,
+            value: 1.0,
+        }),
+        "Right Stick Up" => Some(RetroActionBinding::Analog {
+            index: RETRO_DEVICE_INDEX_ANALOG_RIGHT,
+            axis_id: RETRO_DEVICE_ID_ANALOG_Y,
+            value: -1.0,
+        }),
+        "Right Stick Down" => Some(RetroActionBinding::Analog {
+            index: RETRO_DEVICE_INDEX_ANALOG_RIGHT,
+            axis_id: RETRO_DEVICE_ID_ANALOG_Y,
+            value: 1.0,
+        }),
+        "Right Stick Left" => Some(RetroActionBinding::Analog {
+            index: RETRO_DEVICE_INDEX_ANALOG_RIGHT,
+            axis_id: RETRO_DEVICE_ID_ANALOG_X,
+            value: -1.0,
+        }),
+        "Right Stick Right" => Some(RetroActionBinding::Analog {
+            index: RETRO_DEVICE_INDEX_ANALOG_RIGHT,
+            axis_id: RETRO_DEVICE_ID_ANALOG_X,
+            value: 1.0,
+        }),
         "Start" => Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_START)),
         "Select" | "Coin" => Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_SELECT)),
         "C" | "C-Up" => Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_X)),
@@ -3663,6 +3710,82 @@ mod tests {
                 index: RETRO_DEVICE_INDEX_ANALOG_LEFT,
                 axis_id: RETRO_DEVICE_ID_ANALOG_Y,
                 value: 1.0,
+            })
+        );
+    }
+
+    #[test]
+    fn ps2_action_bindings_map_playstation_labels_to_retropad() {
+        assert_eq!(
+            action_to_retro_binding("PS2", "Cross", None),
+            Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_B))
+        );
+        assert_eq!(
+            action_to_retro_binding("PS2", "Circle", None),
+            Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_A))
+        );
+        assert_eq!(
+            action_to_retro_binding("PS2", "Square", None),
+            Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_Y))
+        );
+        assert_eq!(
+            action_to_retro_binding("PS2", "Triangle", None),
+            Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_X))
+        );
+        assert_eq!(
+            action_to_retro_binding("PS2", "L1", None),
+            Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_L))
+        );
+        assert_eq!(
+            action_to_retro_binding("PS2", "R1", None),
+            Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_R))
+        );
+        assert_eq!(
+            action_to_retro_binding("PS2", "L2", None),
+            Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_L2))
+        );
+        assert_eq!(
+            action_to_retro_binding("PS2", "R2", None),
+            Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_R2))
+        );
+        assert_eq!(
+            action_to_retro_binding("PS2", "L3", None),
+            Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_L3))
+        );
+        assert_eq!(
+            action_to_retro_binding("PS2", "R3", None),
+            Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_R3))
+        );
+        assert_eq!(
+            action_to_retro_binding("PS2", "Left Stick Up", None),
+            Some(RetroActionBinding::Analog {
+                index: RETRO_DEVICE_INDEX_ANALOG_LEFT,
+                axis_id: RETRO_DEVICE_ID_ANALOG_Y,
+                value: -1.0,
+            })
+        );
+        assert_eq!(
+            action_to_retro_binding("PS2", "Left Stick Right", None),
+            Some(RetroActionBinding::Analog {
+                index: RETRO_DEVICE_INDEX_ANALOG_LEFT,
+                axis_id: RETRO_DEVICE_ID_ANALOG_X,
+                value: 1.0,
+            })
+        );
+        assert_eq!(
+            action_to_retro_binding("PS2", "Right Stick Up", None),
+            Some(RetroActionBinding::Analog {
+                index: RETRO_DEVICE_INDEX_ANALOG_RIGHT,
+                axis_id: RETRO_DEVICE_ID_ANALOG_Y,
+                value: -1.0,
+            })
+        );
+        assert_eq!(
+            action_to_retro_binding("PS2", "Right Stick Left", None),
+            Some(RetroActionBinding::Analog {
+                index: RETRO_DEVICE_INDEX_ANALOG_RIGHT,
+                axis_id: RETRO_DEVICE_ID_ANALOG_X,
+                value: -1.0,
             })
         );
     }

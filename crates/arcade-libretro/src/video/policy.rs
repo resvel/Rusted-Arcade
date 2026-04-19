@@ -23,6 +23,10 @@ pub(super) fn select_backend(input: BackendPolicyInput<'_>) -> BackendSelection 
         return select_vulkan_hw_core_backend(input);
     }
 
+    if input.core_name == "play" {
+        return select_play_backend(input);
+    }
+
     if input.requires_hw_render
         && input.frontend_capabilities.supports_gl_backend()
         && requested_context_is_gl_or_unspecified(input.requested_hw_context_type)
@@ -36,6 +40,17 @@ pub(super) fn select_backend(input: BackendPolicyInput<'_>) -> BackendSelection 
 
     BackendSelection {
         chosen: VideoBackendKind::Software,
+        fallbacks: vec![],
+        allows_external_present: false,
+    }
+}
+
+fn select_play_backend(_input: BackendPolicyInput<'_>) -> BackendSelection {
+    // Play! relies on a GL hardware-render path in libretro.
+    // Do not fall back to software here: forcing software can lead to unstable
+    // startup behavior (including hard crashes) instead of a clean launch error.
+    BackendSelection {
+        chosen: VideoBackendKind::OpenGl,
         fallbacks: vec![],
         allows_external_present: false,
     }
@@ -191,5 +206,19 @@ mod tests {
         assert_eq!(selection.chosen, VideoBackendKind::Vulkan);
         assert_eq!(selection.fallbacks, vec![VideoBackendKind::Software]);
         assert!(selection.allows_external_present);
+    }
+
+    #[test]
+    fn play_core_forces_opengl_without_software_fallback() {
+        let selection = select_backend(BackendPolicyInput {
+            core_name: "play",
+            requires_hw_render: false,
+            requested_hw_context_type: None,
+            frontend_capabilities: &frontend(false, false),
+        });
+
+        assert_eq!(selection.chosen, VideoBackendKind::OpenGl);
+        assert!(selection.fallbacks.is_empty());
+        assert!(!selection.allows_external_present);
     }
 }

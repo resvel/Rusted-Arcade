@@ -791,7 +791,7 @@ const SCAN_TARGETS: [ScanTarget; 12] = [
         folder: "ps2",
         system: "PS2",
         emulator_core: "ps2",
-        extensions: &[".iso", ".chd", ".gz", ".cso"],
+        extensions: &[".iso", ".chd", ".gz", ".cso", ".bin"],
         max_bytes: None,
     },
     ScanTarget {
@@ -988,15 +988,15 @@ fn hash_file(path: &Path) -> Result<String> {
 fn resolve_public_root(rom_root: &Path) -> Result<PathBuf> {
     let cwd = std::env::current_dir()?;
     let candidates = [
-        cwd.join("public"),
-        cwd.parent()
-            .map(|parent| parent.join("public"))
-            .unwrap_or_else(|| cwd.join("public")),
         rom_root.join("public"),
         rom_root
             .parent()
             .map(|parent| parent.join("public"))
             .unwrap_or_else(|| rom_root.join("public")),
+        cwd.join("public"),
+        cwd.parent()
+            .map(|parent| parent.join("public"))
+            .unwrap_or_else(|| cwd.join("public")),
     ];
 
     if let Some(existing) = candidates.iter().find(|candidate| candidate.exists()) {
@@ -2037,6 +2037,37 @@ mod tests {
             scanned.rom.cover_path.as_deref(),
             Some("/covers/nes/test-rom-u.jpg")
         );
+    }
+
+    #[test]
+    fn smart_scan_accepts_ps2_bin_images() {
+        let tmp = TempDir::new().expect("tempdir");
+        let config = make_config(&tmp);
+        let db = Database::open(&config).expect("open db");
+        let rom_path = config.paths.rom_root.join("ps2").join("Test PS2 Game.bin");
+        std::fs::create_dir_all(rom_path.parent().expect("rom parent")).expect("create rom dir");
+        std::fs::write(&rom_path, b"ps2-rom").expect("write rom");
+        let services = NativeServices::bootstrap(config.clone(), config_path_for(&config), db)
+            .expect("bootstrap");
+
+        let summary = services
+            .smart_scan_roms(&ManageScope::System(String::from("PS2")), |_| {})
+            .expect("smart scan");
+        assert_eq!(summary.kind, Some(ManageOperationKind::SmartScan));
+        assert_eq!(summary.created, 1);
+
+        let cards = services
+            .list_roms(&RomQuery {
+                system: Some(String::from("PS2")),
+                ..RomQuery::default()
+            })
+            .expect("list roms");
+        let scanned = cards
+            .iter()
+            .find(|card| card.rom.slug == "test-ps2-game")
+            .expect("scanned rom");
+        assert_eq!(scanned.rom.system, "PS2");
+        assert_eq!(scanned.rom.file_path, "ps2/Test PS2 Game.bin");
     }
 
     #[test]

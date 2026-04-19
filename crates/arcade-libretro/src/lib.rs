@@ -209,6 +209,9 @@ struct HardwareRenderTarget {
     /// first black frame, find the one with game content, cache it here, and read from it via
     /// a temporary FBO on every subsequent frame.
     emu_game_texture: Option<glow::NativeTexture>,
+    /// Consecutive readback frames with no sampled non-black signal. Used by play-core
+    /// warmup gating so we wait briefly for core-linked FBO output before scan fallback.
+    play_blank_frame_streak: u32,
 }
 
 #[derive(Clone)]

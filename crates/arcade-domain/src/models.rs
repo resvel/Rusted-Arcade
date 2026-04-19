@@ -382,7 +382,7 @@ const PSX_GAMEPAD_ACTIONS: [&str; 21] = [
     RESET_ACTION,
 ];
 
-const PS2_GAMEPAD_ACTIONS: [&str; 21] = [
+const PS2_GAMEPAD_ACTIONS: [&str; 29] = [
     "Up",
     "Down",
     "Left",
@@ -397,6 +397,14 @@ const PS2_GAMEPAD_ACTIONS: [&str; 21] = [
     "R2",
     "L3",
     "R3",
+    "Left Stick Up",
+    "Left Stick Down",
+    "Left Stick Left",
+    "Left Stick Right",
+    "Right Stick Up",
+    "Right Stick Down",
+    "Right Stick Left",
+    "Right Stick Right",
     "Start",
     "Select",
     EXIT_ACTION,
@@ -519,7 +527,7 @@ pub fn default_gamepad_mapping_for_system(system: &str) -> StoredGamepadMapping 
             insert_button(&mut actions, "Start", CanonicalButton::Start);
             insert_button(&mut actions, "Coin", CanonicalButton::Select);
         }
-        "PSX" | "PS2" => {
+        "PSX" => {
             insert_button(&mut actions, "Cross", CanonicalButton::South);
             insert_button(&mut actions, "Circle", CanonicalButton::East);
             insert_button(&mut actions, "Square", CanonicalButton::West);
@@ -530,6 +538,28 @@ pub fn default_gamepad_mapping_for_system(system: &str) -> StoredGamepadMapping 
             insert_axis(&mut actions, "R2", CanonicalAxis::RightTrigger, 1);
             insert_button(&mut actions, "L3", CanonicalButton::LeftThumb);
             insert_button(&mut actions, "R3", CanonicalButton::RightThumb);
+            insert_button(&mut actions, "Start", CanonicalButton::Start);
+            insert_button(&mut actions, "Select", CanonicalButton::Select);
+        }
+        "PS2" => {
+            insert_button(&mut actions, "Cross", CanonicalButton::South);
+            insert_button(&mut actions, "Circle", CanonicalButton::East);
+            insert_button(&mut actions, "Square", CanonicalButton::West);
+            insert_button(&mut actions, "Triangle", CanonicalButton::North);
+            insert_button(&mut actions, "L1", CanonicalButton::LeftShoulder);
+            insert_button(&mut actions, "R1", CanonicalButton::RightShoulder);
+            insert_axis(&mut actions, "L2", CanonicalAxis::LeftTrigger, 1);
+            insert_axis(&mut actions, "R2", CanonicalAxis::RightTrigger, 1);
+            insert_button(&mut actions, "L3", CanonicalButton::LeftThumb);
+            insert_button(&mut actions, "R3", CanonicalButton::RightThumb);
+            insert_axis(&mut actions, "Left Stick Up", CanonicalAxis::LeftStickY, -1);
+            insert_axis(&mut actions, "Left Stick Down", CanonicalAxis::LeftStickY, 1);
+            insert_axis(&mut actions, "Left Stick Left", CanonicalAxis::LeftStickX, -1);
+            insert_axis(&mut actions, "Left Stick Right", CanonicalAxis::LeftStickX, 1);
+            insert_axis(&mut actions, "Right Stick Up", CanonicalAxis::RightStickY, -1);
+            insert_axis(&mut actions, "Right Stick Down", CanonicalAxis::RightStickY, 1);
+            insert_axis(&mut actions, "Right Stick Left", CanonicalAxis::RightStickX, -1);
+            insert_axis(&mut actions, "Right Stick Right", CanonicalAxis::RightStickX, 1);
             insert_button(&mut actions, "Start", CanonicalButton::Start);
             insert_button(&mut actions, "Select", CanonicalButton::Select);
         }

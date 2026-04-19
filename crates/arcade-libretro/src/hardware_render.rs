@@ -456,6 +456,7 @@ pub(super) fn ensure_hw_render_target(target_size: (u32, u32)) -> Result<()> {
     if let Some(target) = state.target.as_mut() {
         target.width = width;
         target.height = height;
+        target.play_blank_frame_streak = 0;
         // Invalidate the emu-side FBO: it has a depth-stencil renderbuffer at the old size
         // and must be recreated in the emu thread's context at the new size.
         target.emu_ctx_framebuffer = None;
@@ -468,6 +469,7 @@ pub(super) fn ensure_hw_render_target(target_size: (u32, u32)) -> Result<()> {
             height,
             emu_ctx_framebuffer: None,
             emu_game_texture: None,
+            play_blank_frame_streak: 0,
         });
     }
     Ok(())
@@ -1011,20 +1013,80 @@ pub(super) fn force_default_gl_framebuffer(runtime: &HostRuntime) -> bool {
     std::env::var_os("ARCADE_GL_FORCE_DEFAULT_FRAMEBUFFER").is_some()
 }
 
+fn should_use_strict_gl_texture_match(runtime: &HostRuntime) -> bool {
+    !runtime
+        .environment_context
+        .lock()
+        .loaded_core_name
+        .as_deref()
+        .is_some_and(|core| core.eq_ignore_ascii_case("play"))
+}
+
+fn should_allow_default_gl_fallback(runtime: &HostRuntime) -> bool {
+    !runtime
+        .environment_context
+        .lock()
+        .loaded_core_name
+        .as_deref()
+        .is_some_and(|core| core.eq_ignore_ascii_case("play"))
+}
+
+fn is_play_core(runtime: &HostRuntime) -> bool {
+    runtime
+        .environment_context
+        .lock()
+        .loaded_core_name
+        .as_deref()
+        .is_some_and(|core| core.eq_ignore_ascii_case("play"))
+}
+
+fn sampled_non_black_pixels(pixels: &[u8], width: u32, height: u32) -> usize {
+    let (_, non_black_samples, _, _) = summarize_rgba_debug_pixels_grid(pixels, width, height);
+    non_black_samples
+}
+
 pub(super) fn read_opengl_render_frame(
     runtime: &HostRuntime,
     pending: PendingHardwareFrame,
 ) -> Result<FrameBuffer> {
-    let (gl, framebuffer, emu_ctx_framebuffer, color_texture, emu_game_texture) = {
+    const PLAY_TEXTURE_SCAN_WARMUP_FRAMES: u32 = 90;
+
+    let is_play = is_play_core(runtime);
+    let strict_texture_match = should_use_strict_gl_texture_match(runtime);
+    let allow_default_fallback = should_allow_default_gl_fallback(runtime);
+    let (
+        gl,
+        framebuffer,
+        emu_ctx_framebuffer,
+        color_texture,
+        emu_game_texture,
+        mut play_blank_frame_streak,
+    ) = {
         let state = runtime.hw_render_state.lock();
         let Some(gl) = state.frontend_gl_context.clone() else {
             return Err(anyhow!(
                 "hardware-render frame requested without an active GL context"
             ));
         };
-        let (framebuffer, emu_ctx_framebuffer, color_texture, emu_game_texture) =
+        let (
+            framebuffer,
+            emu_ctx_framebuffer,
+            color_texture,
+            emu_game_texture,
+            play_blank_frame_streak,
+        ) =
             if force_default_gl_framebuffer(runtime) {
-                (None, None, None, None)
+                (
+                    None,
+                    None,
+                    None,
+                    None,
+                    state
+                        .target
+                        .as_ref()
+                        .map(|target| target.play_blank_frame_streak)
+                        .unwrap_or(0),
+                )
             } else {
                 let Some(target) = state.target.as_ref() else {
                     return Err(anyhow!(
@@ -1036,6 +1098,7 @@ pub(super) fn read_opengl_render_frame(
                     target.emu_ctx_framebuffer,
                     Some(target.color_texture),
                     target.emu_game_texture,
+                    target.play_blank_frame_streak,
                 )
             };
         (
@@ -1044,6 +1107,7 @@ pub(super) fn read_opengl_render_frame(
             emu_ctx_framebuffer,
             color_texture,
             emu_game_texture,
+            play_blank_frame_streak,
         )
     };
 
@@ -1184,7 +1248,7 @@ pub(super) fn read_opengl_render_frame(
     // Restore whatever the core had bound (read_framebuffer changes the binding).
     unsafe { gl.bind_framebuffer(glow::FRAMEBUFFER, core_bound_framebuffer) };
 
-    let (_, non_black_pixels, _) = summarize_rgba_debug_pixels(&pixels);
+    let mut non_black_pixels = sampled_non_black_pixels(&pixels, pending.width, pending.height);
 
     // If our dedicated FBO is empty, try the core's last-bound FBO (its internal render target).
     if non_black_pixels == 0 {
@@ -1192,7 +1256,8 @@ pub(super) fn read_opengl_render_frame(
             if Some(core_fbo) != framebuffer {
                 let candidate = read_framebuffer(Some(core_fbo));
                 unsafe { gl.bind_framebuffer(glow::FRAMEBUFFER, core_bound_framebuffer) };
-                let (_, candidate_non_black, _) = summarize_rgba_debug_pixels(&candidate);
+                let candidate_non_black =
+                    sampled_non_black_pixels(&candidate, pending.width, pending.height);
                 if candidate_non_black > 0 {
                     if std::env::var_os("LIBRETRO_TRACE_GL_READBACK").is_some() {
                         eprintln!(
@@ -1206,7 +1271,15 @@ pub(super) fn read_opengl_render_frame(
         }
     }
 
-    let (_, non_black_pixels, _) = summarize_rgba_debug_pixels(&pixels);
+    non_black_pixels = sampled_non_black_pixels(&pixels, pending.width, pending.height);
+    if is_play {
+        play_blank_frame_streak = if non_black_pixels > 0 {
+            0
+        } else {
+            play_blank_frame_streak.saturating_add(1)
+        };
+    }
+    let allow_texture_scan = !is_play || play_blank_frame_streak >= PLAY_TEXTURE_SCAN_WARMUP_FRAMES;
 
     // Texture scan: when the dedicated FBO (texture 33) is empty and the core hasn't left a
     // useful FBO bound, scan visible texture handles for game content.  When mupen64plus-next
@@ -1214,7 +1287,7 @@ pub(super) fn read_opengl_render_frame(
     // render textures are visible from eframe's context.  We find the one with game content,
     // cache it in target.emu_game_texture, and return it.  On subsequent frames the fast path
     // at the top of this function uses the cached handle directly, skipping the scan.
-    if non_black_pixels == 0 && emu_game_texture.is_none() {
+    if non_black_pixels == 0 && emu_game_texture.is_none() && allow_texture_scan {
         static TEXTURE_SCAN_DONE: std::sync::atomic::AtomicBool =
             std::sync::atomic::AtomicBool::new(false);
         let scan_first_time = !TEXTURE_SCAN_DONE.swap(true, std::sync::atomic::Ordering::Relaxed);
@@ -1226,10 +1299,12 @@ pub(super) fn read_opengl_render_frame(
             eprintln!("gl readback texture scan (shared-context, first frame only):");
         }
 
-        let mut found_tex: Option<glow::NativeTexture> = None;
-        let mut found_pixels: Option<Vec<u8>> = None;
+        let mut best_tex: Option<glow::NativeTexture> = None;
+        let mut best_pixels: Option<Vec<u8>> = None;
+        let mut best_score = f32::INFINITY;
+        let pending_aspect = pending.width as f32 / pending.height.max(1) as f32;
 
-        'scan: for tex_id in 1u32..=256 {
+        for tex_id in 1u32..=256 {
             if known_tex_ids.contains(&tex_id) {
                 continue;
             }
@@ -1270,11 +1345,24 @@ pub(super) fn read_opengl_render_frame(
             if trace && scan_first_time && (tex_w > 0 || tex_h > 0) {
                 eprintln!("  tex={tex_id} size={tex_w}x{tex_h}");
             }
-            // Accept textures whose width matches exactly and height is at least the output
-            // height.  GLideN64 often uses a slightly oversized render texture (e.g. 640×580
-            // for a 640×480 output); the extra rows are padding/unused.
-            if tex_w != pending.width || tex_h < pending.height {
-                continue;
+            // Default behavior keeps a strict width match. For play, allow larger backing
+            // render targets so we can pick the real scene texture on macOS GL.
+            if strict_texture_match {
+                // Accept textures whose width matches exactly and height is at least the output
+                // height. GLideN64 often uses a slightly oversized render texture
+                // (e.g. 640×580 for a 640×480 output); the extra rows are padding/unused.
+                if tex_w != pending.width || tex_h < pending.height {
+                    continue;
+                }
+            } else {
+                if tex_w < pending.width || tex_h < pending.height {
+                    continue;
+                }
+                let width_ratio = tex_w as f32 / pending.width.max(1) as f32;
+                let height_ratio = tex_h as f32 / pending.height.max(1) as f32;
+                if width_ratio > 3.0 || height_ratio > 3.0 {
+                    continue;
+                }
             }
             // Attach to an FBO and read the full frame directly.  Skipping the 8×8 corner
             // probe avoids false-rejects when the game uses a letterbox or dark edge at GL(0,0).
@@ -1314,7 +1402,8 @@ pub(super) fn read_opengl_render_frame(
                 ok
             };
             if fbo_ok {
-                let (_, full_non_black, _) = summarize_rgba_debug_pixels(&full_pixels);
+                let full_non_black =
+                    sampled_non_black_pixels(&full_pixels, pending.width, pending.height);
                 // Reject uniform-color textures (all pixels same RGB) — these are solid
                 // clear targets (e.g. eframe's background color) rather than game renders.
                 let is_uniform = full_pixels.chunks_exact(4).all(|p| {
@@ -1327,20 +1416,38 @@ pub(super) fn read_opengl_render_frame(
                     );
                 }
                 if full_non_black > 0 && !is_uniform {
+                    let tex_aspect = tex_w as f32 / tex_h.max(1) as f32;
+                    let aspect_penalty = (tex_aspect - pending_aspect).abs() * 4.0;
+                    let width_ratio = tex_w.max(1) as f32 / pending.width.max(1) as f32;
+                    let height_ratio = tex_h.max(1) as f32 / pending.height.max(1) as f32;
+                    let size_penalty = width_ratio.ln().abs() + height_ratio.ln().abs();
+                    let score = aspect_penalty + size_penalty;
                     if trace {
                         eprintln!(
-                            "gl readback texture scan found game texture tex={tex_id} non_black={full_non_black}"
+                            "gl readback texture scan candidate tex={tex_id} non_black={full_non_black} score={score:.3} tex={}x{} pending={}x{}",
+                            tex_w,
+                            tex_h,
+                            pending.width,
+                            pending.height,
                         );
                     }
-                    found_tex = Some(tex);
-                    found_pixels = Some(full_pixels);
-                    break 'scan;
+                    if score < best_score {
+                        best_score = score;
+                        best_tex = Some(tex);
+                        best_pixels = Some(full_pixels);
+                    }
                 }
             }
         }
         unsafe { gl.bind_framebuffer(glow::FRAMEBUFFER, core_bound_framebuffer) };
 
-        if let (Some(game_tex), Some(game_pixels)) = (found_tex, found_pixels) {
+        if let (Some(game_tex), Some(game_pixels)) = (best_tex, best_pixels) {
+            if trace {
+                eprintln!(
+                    "gl readback texture scan selected tex={} score={best_score:.3}",
+                    game_tex.0.get()
+                );
+            }
             // Cache for subsequent frames so we skip the scan entirely.
             if let Some(runtime_ref) = active_runtime() {
                 let mut state = runtime_ref.hw_render_state.lock();
@@ -1350,13 +1457,22 @@ pub(super) fn read_opengl_render_frame(
             }
             pixels = game_pixels;
         }
+    } else if non_black_pixels == 0
+        && emu_game_texture.is_none()
+        && is_play
+        && std::env::var_os("LIBRETRO_TRACE_GL_READBACK").is_some()
+    {
+        eprintln!(
+            "gl readback: play warmup waiting for core-linked output (blank_streak={play_blank_frame_streak}/{PLAY_TEXTURE_SCAN_WARMUP_FRAMES}), skipping texture scan fallback"
+        );
     }
 
-    let (_, non_black_pixels, _) = summarize_rgba_debug_pixels(&pixels);
-    if non_black_pixels == 0 {
+    non_black_pixels = sampled_non_black_pixels(&pixels, pending.width, pending.height);
+    if non_black_pixels == 0 && allow_default_fallback {
         let fallback_pixels = read_framebuffer(None);
         unsafe { gl.bind_framebuffer(glow::FRAMEBUFFER, core_bound_framebuffer) };
-        let (_, fallback_non_black_pixels, _) = summarize_rgba_debug_pixels(&fallback_pixels);
+        let fallback_non_black_pixels =
+            sampled_non_black_pixels(&fallback_pixels, pending.width, pending.height);
         if fallback_non_black_pixels > 0 {
             if std::env::var_os("LIBRETRO_TRACE_GL_READBACK").is_some() {
                 eprintln!(
@@ -1364,6 +1480,23 @@ pub(super) fn read_opengl_render_frame(
                 );
             }
             pixels = fallback_pixels;
+        }
+    } else if non_black_pixels == 0
+        && !allow_default_fallback
+        && std::env::var_os("LIBRETRO_TRACE_GL_READBACK").is_some()
+    {
+        eprintln!("gl readback: skipping default framebuffer fallback for play core");
+    }
+
+    if is_play {
+        let final_non_black = sampled_non_black_pixels(&pixels, pending.width, pending.height);
+        let next_streak = if final_non_black > 0 {
+            0
+        } else {
+            play_blank_frame_streak
+        };
+        if let Some(target) = runtime.hw_render_state.lock().target.as_mut() {
+            target.play_blank_frame_streak = next_streak;
         }
     }
 
