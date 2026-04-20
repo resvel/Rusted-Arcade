@@ -71,7 +71,14 @@ fn load_app_icon() -> Result<egui::IconData> {
     })
 }
 
-fn select_native_renderer() -> eframe::Renderer {
+#[cfg(target_os = "macos")]
+fn should_auto_select_glow_renderer(effective_core_root: Option<&Path>) -> bool {
+    effective_core_root
+        .map(|root| root.join("play_libretro.dylib").is_file())
+        .unwrap_or(false)
+}
+
+fn select_native_renderer(effective_core_root: Option<&Path>) -> eframe::Renderer {
     #[cfg(target_os = "macos")]
     {
         let requested = std::env::var("ARCADE_MACOS_RENDERER")
@@ -83,6 +90,12 @@ fn select_native_renderer() -> eframe::Renderer {
                 eframe::Renderer::Glow
             }
             None | Some("") | Some("wgpu") | Some("metal") => {
+                if requested.is_none() && should_auto_select_glow_renderer(effective_core_root) {
+                    info!(
+                        "Using macOS auto renderer: glow (OpenGL) because play_libretro.dylib was detected. Set ARCADE_MACOS_RENDERER=wgpu to force Metal."
+                    );
+                    return eframe::Renderer::Glow;
+                }
                 if std::env::var_os("WGPU_BACKEND").is_none() {
                     std::env::set_var("WGPU_BACKEND", "metal");
                 }
@@ -109,8 +122,6 @@ fn select_native_renderer() -> eframe::Renderer {
 fn main() -> Result<()> {
     init_tracing();
 
-    let renderer = select_native_renderer();
-
     // ARCADE_MACOS_GL_PROFILE defaults to the system Core 4.1 profile on macOS,
     // which is required by GLideN64 (needs Core 3.3+). Set ARCADE_MACOS_GL_PROFILE=legacy
     // to force the OpenGL 2.1 legacy profile if a specific core requires it.
@@ -119,6 +130,7 @@ fn main() -> Result<()> {
     let (config, config_path) = AppConfig::load_or_create(config_path.as_deref())?;
 
     let effective_core_root = resolve_arch_core_root(&config.paths.core_root);
+    let renderer = select_native_renderer(Some(&effective_core_root));
 
     info!("Using config: {}", config_path.display());
     info!("ROM root: {}", config.paths.rom_root.display());
