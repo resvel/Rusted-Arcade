@@ -29,12 +29,28 @@ fn summarize_rgba_debug_pixels(pixels: &[u8]) -> (u64, usize, [u8; 4]) {
 }
 
 impl NativeArcadeUiApp {
-    pub(crate) fn update_frame_texture(&mut self, ctx: &egui::Context, frame: FrameBuffer) {
+    pub(crate) fn update_frame_texture(&mut self, ctx: &egui::Context, mut frame: FrameBuffer) {
         let size = [frame.width as usize, frame.height as usize];
         let required_len = size[0].saturating_mul(size[1]).saturating_mul(4);
         let direct_rgba = matches!(frame.pixel_format, PixelFormat::Rgba8888)
             && frame.pitch == size[0].saturating_mul(4)
             && frame.data.len() >= required_len;
+        let force_opaque_alpha = matches!(frame.pixel_format, PixelFormat::Rgba8888)
+            && self
+                .state
+                .play
+                .active_core
+                .as_deref()
+                .is_some_and(|core| core.eq_ignore_ascii_case("play"));
+
+        if direct_rgba && force_opaque_alpha {
+            // Play's GL path can occasionally deliver non-opaque alpha in otherwise valid
+            // scene frames; force opaque alpha before uploading to avoid translucent
+            // multi-frame ghosting in UI compositing.
+            for pixel in frame.data[..required_len].chunks_exact_mut(4) {
+                pixel[3] = 255;
+            }
+        }
 
         if !direct_rgba {
             frame_to_rgba_into(
@@ -45,6 +61,11 @@ impl NativeArcadeUiApp {
                 frame.pixel_format,
                 &mut self.assets.play_frame_rgba,
             );
+            if force_opaque_alpha {
+                for pixel in self.assets.play_frame_rgba.chunks_exact_mut(4) {
+                    pixel[3] = 255;
+                }
+            }
         }
 
         let reuse_texture = self.state.play.last_frame_size == Some((frame.width, frame.height))
@@ -79,10 +100,8 @@ impl NativeArcadeUiApp {
             }
         }
 
-        // For direct RGBA frames (Vulkan path, alpha forced to 255) we reinterpret the
-        // Vec<u8> as Vec<Color32> without copying.  Color32 is [u8;4] with identical
-        // RGBA layout, and premul with alpha=255 is a no-op — so this is both correct
-        // and faster than from_rgba_unmultiplied (avoids allocation + premul loop).
+        // For direct RGBA frames we reinterpret the Vec<u8> as Vec<Color32> without copying.
+        // Color32 is [u8;4] with identical RGBA layout, so this avoids allocation + conversion.
         let image = if direct_rgba {
             let rgba_bytes = frame.data;
             let pixel_count = size[0] * size[1];
