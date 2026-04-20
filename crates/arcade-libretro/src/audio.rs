@@ -18,6 +18,13 @@ fn audio_debug_enabled() -> bool {
     }
 }
 
+fn audio_profile_f64_env(name: &str, default: f64) -> f64 {
+    std::env::var(name)
+        .ok()
+        .and_then(|value| value.parse::<f64>().ok())
+        .unwrap_or(default)
+}
+
 #[cfg(feature = "audio")]
 pub(super) struct AudioOutput {
     pub(super) _stream: cpal::Stream,
@@ -70,9 +77,9 @@ fn pick_buffer_size(
 ) -> Option<cpal::BufferSize> {
     match supported_config.buffer_size() {
         cpal::SupportedBufferSize::Range { min, max } => {
-            // Prefer a buffer size based on the new AUDIO_TARGET_LATENCY_SECS.
-            let target =
-                (sample_rate_hz as f64 * AUDIO_TARGET_LATENCY_SECS).clamp(256.0, 2048.0) as u32;
+            // Prefer a buffer size based on the default low-latency target.
+            let target = (sample_rate_hz as f64 * DEFAULT_AUDIO_TARGET_LATENCY_SECS)
+                .clamp(256.0, 2048.0) as u32;
             Some(cpal::BufferSize::Fixed(target.clamp(*min, *max)))
         }
         _ => None,
@@ -189,6 +196,54 @@ pub(super) fn set_audio_source_sample_rate(sample_rate: f64) {
 pub(super) fn set_audio_source_sample_rate(_sample_rate: f64) {}
 
 #[cfg(feature = "audio")]
+pub(super) fn configure_audio_profile_for_core(core_name: &str) {
+    let _ = with_active_runtime(|runtime| {
+        let mut state = runtime.audio_state.lock();
+        if core_name.eq_ignore_ascii_case("play") {
+            // Keep Play audio pitch-stable by default. The core can run below full speed
+            // on heavier scenes, and aggressive queue correction causes audible
+            // speed-up/slow-down artifacts.
+            state.target_latency_secs =
+                audio_profile_f64_env("ARCADE_PLAY_AUDIO_TARGET_LATENCY_SECS", 0.200);
+            state.max_latency_secs =
+                audio_profile_f64_env("ARCADE_PLAY_AUDIO_MAX_LATENCY_SECS", 0.600);
+            state.resample_queue_correction =
+                audio_profile_f64_env("ARCADE_PLAY_AUDIO_QUEUE_CORRECTION", 0.0);
+            state.resample_ratio_drift_limit =
+                audio_profile_f64_env("ARCADE_PLAY_AUDIO_DRIFT_LIMIT", 0.02);
+            // For FMV-heavy scenes, prefer continuity over aggressive latency recovery.
+            state.trim_to_target_on_overflow = false;
+            // Prevent long runs of silent samples from filling the queue and forcing
+            // later non-silent data to be dropped.
+            state.drop_excess_silence_when_buffered = true;
+        } else {
+            state.target_latency_secs = DEFAULT_AUDIO_TARGET_LATENCY_SECS;
+            state.max_latency_secs = DEFAULT_AUDIO_MAX_LATENCY_SECS;
+            state.resample_queue_correction = DEFAULT_AUDIO_RESAMPLE_QUEUE_CORRECTION;
+            state.resample_ratio_drift_limit = DEFAULT_AUDIO_RESAMPLE_RATIO_DRIFT_LIMIT;
+            state.trim_to_target_on_overflow = true;
+            state.drop_excess_silence_when_buffered = false;
+        }
+        if audio_debug_enabled() {
+            info!(
+                target: "arcade_libretro::audio",
+                core = core_name,
+                target_latency_secs = state.target_latency_secs,
+                max_latency_secs = state.max_latency_secs,
+                resample_queue_correction = state.resample_queue_correction,
+                resample_ratio_drift_limit = state.resample_ratio_drift_limit,
+                trim_to_target_on_overflow = state.trim_to_target_on_overflow,
+                drop_excess_silence_when_buffered = state.drop_excess_silence_when_buffered,
+                "applied audio profile"
+            );
+        }
+    });
+}
+
+#[cfg(not(feature = "audio"))]
+pub(super) fn configure_audio_profile_for_core(_core_name: &str) {}
+
+#[cfg(feature = "audio")]
 pub(super) fn set_audio_output_sample_rate(sample_rate: f64) {
     let _ = with_active_runtime(|runtime| {
         let mut state = runtime.audio_state.lock();
@@ -260,7 +315,27 @@ fn push_audio_samples(samples: &[i16]) {
         );
     }
 
+    let previous_silent = LAST_PUSH_SILENT.swap(is_silent, Ordering::Relaxed);
+    let debug_enabled = audio_debug_enabled();
     let mut state = runtime.audio_state.lock();
+    if state.drop_excess_silence_when_buffered && is_silent {
+        let target_frames =
+            audio_frames_for_latency(state.output_sample_rate, state.target_latency_secs);
+        let queued_frames = state.samples.len() / 2;
+        if target_frames > 0 && queued_frames >= target_frames {
+            if debug_enabled && (previous_silent != is_silent || n % 500 == 0) {
+                info!(
+                    target: "arcade_libretro::audio",
+                    call_index = n,
+                    sample_len = samples.len(),
+                    queue_before = state.samples.len(),
+                    target_frames,
+                    "skipping silent audio batch while queue is above target"
+                );
+            }
+            return;
+        }
+    }
     let queue_before = state.samples.len();
     let queue = &mut state.samples;
     let overflow = queue
@@ -273,8 +348,6 @@ fn push_audio_samples(samples: &[i16]) {
     queue.extend(samples.iter().copied());
     let queue_after = queue.len();
 
-    let previous_silent = LAST_PUSH_SILENT.swap(is_silent, Ordering::Relaxed);
-    let debug_enabled = audio_debug_enabled();
     if overflow > 0 || (debug_enabled && (previous_silent != is_silent || n % 500 == 0)) {
         info!(
             target: "arcade_libretro::audio",
@@ -311,15 +384,20 @@ fn trim_audio_queue_for_latency(state: &mut AudioState) {
         return;
     }
 
-    let target_frames = audio_frames_for_latency(output_rate, AUDIO_TARGET_LATENCY_SECS);
+    let target_frames = audio_frames_for_latency(output_rate, state.target_latency_secs);
     let max_frames =
-        audio_frames_for_latency(output_rate, AUDIO_MAX_LATENCY_SECS).max(target_frames + 1);
+        audio_frames_for_latency(output_rate, state.max_latency_secs).max(target_frames + 1);
     let queued_frames = state.samples.len() / 2;
     if queued_frames <= max_frames {
         return;
     }
 
-    let frames_to_drop = queued_frames.saturating_sub(target_frames);
+    let trim_target_frames = if state.trim_to_target_on_overflow {
+        target_frames
+    } else {
+        max_frames
+    };
+    let frames_to_drop = queued_frames.saturating_sub(trim_target_frames);
     let samples_to_drop = frames_to_drop.saturating_mul(2).min(state.samples.len());
     let queue_before = state.samples.len();
     state.samples.drain(..samples_to_drop);
@@ -335,6 +413,8 @@ fn trim_audio_queue_for_latency(state: &mut AudioState) {
             dropped_frames = frames_to_drop,
             target_frames,
             max_frames,
+            trim_target_frames,
+            trim_to_target_on_overflow = state.trim_to_target_on_overflow,
             "trimmed audio queue for latency"
         );
     }
@@ -386,7 +466,7 @@ fn pop_stereo_i16_with_state(state: &mut AudioState) -> (i16, i16) {
     }
 
     let target_queue_frames =
-        audio_frames_for_latency(output_rate, AUDIO_TARGET_LATENCY_SECS) as f64;
+        audio_frames_for_latency(output_rate, state.target_latency_secs) as f64;
     let queued_frames = (state.samples.len() / 2) as f64;
     let queue_error = if target_queue_frames > 0.0 {
         ((queued_frames - target_queue_frames) / target_queue_frames).clamp(-1.0, 1.0)
@@ -395,9 +475,9 @@ fn pop_stereo_i16_with_state(state: &mut AudioState) -> (i16, i16) {
     };
 
     let base_ratio = source_rate / output_rate;
-    let mut ratio = base_ratio * (1.0 + queue_error * AUDIO_RESAMPLE_QUEUE_CORRECTION);
-    let ratio_min = base_ratio * (1.0 - AUDIO_RESAMPLE_RATIO_DRIFT_LIMIT);
-    let ratio_max = base_ratio * (1.0 + AUDIO_RESAMPLE_RATIO_DRIFT_LIMIT);
+    let mut ratio = base_ratio * (1.0 + queue_error * state.resample_queue_correction);
+    let ratio_min = base_ratio * (1.0 - state.resample_ratio_drift_limit);
+    let ratio_max = base_ratio * (1.0 + state.resample_ratio_drift_limit);
     ratio = ratio.clamp(ratio_min, ratio_max);
 
     let near_unity_ratio = (ratio - 1.0).abs() < 0.0005;

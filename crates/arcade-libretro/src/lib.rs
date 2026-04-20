@@ -130,7 +130,7 @@ struct CallbackState {
     pixel_format: PixelFormat,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 struct AudioState {
     samples: VecDeque<i16>,
     source_sample_rate: f64,
@@ -138,18 +138,46 @@ struct AudioState {
     resample_phase: f64,
     current_frame: Option<(i16, i16)>,
     next_frame: Option<(i16, i16)>,
+    target_latency_secs: f64,
+    max_latency_secs: f64,
+    resample_queue_correction: f64,
+    resample_ratio_drift_limit: f64,
+    trim_to_target_on_overflow: bool,
+    drop_excess_silence_when_buffered: bool,
 }
-const MAX_AUDIO_SAMPLES: usize = 49_152;
+
+impl Default for AudioState {
+    fn default() -> Self {
+        Self {
+            samples: VecDeque::new(),
+            source_sample_rate: 0.0,
+            output_sample_rate: 0.0,
+            resample_phase: 0.0,
+            current_frame: None,
+            next_frame: None,
+            target_latency_secs: DEFAULT_AUDIO_TARGET_LATENCY_SECS,
+            max_latency_secs: DEFAULT_AUDIO_MAX_LATENCY_SECS,
+            resample_queue_correction: DEFAULT_AUDIO_RESAMPLE_QUEUE_CORRECTION,
+            resample_ratio_drift_limit: DEFAULT_AUDIO_RESAMPLE_RATIO_DRIFT_LIMIT,
+            trim_to_target_on_overflow: true,
+            drop_excess_silence_when_buffered: false,
+        }
+    }
+}
+// Absolute safety cap for the inter-thread audio queue (stereo samples, not frames).
+// Keep this comfortably above the largest per-core max-latency profile so push-side
+// overflow does not become the first drop mechanism.
+const MAX_AUDIO_SAMPLES: usize = 98_304;
 #[cfg(feature = "audio")]
-// Increase target latency to reduce underruns on macOS. 0.1s gives a larger
-// buffer while still keeping latency low for interactive play.
-const AUDIO_TARGET_LATENCY_SECS: f64 = 0.100;
+// Default target latency for most cores. Individual cores can override this
+// profile at runtime when they need more tolerant pacing behavior.
+const DEFAULT_AUDIO_TARGET_LATENCY_SECS: f64 = 0.100;
 #[cfg(feature = "audio")]
-const AUDIO_MAX_LATENCY_SECS: f64 = 0.300;
+const DEFAULT_AUDIO_MAX_LATENCY_SECS: f64 = 0.300;
 #[cfg(feature = "audio")]
-const AUDIO_RESAMPLE_QUEUE_CORRECTION: f64 = 0.05;
+const DEFAULT_AUDIO_RESAMPLE_QUEUE_CORRECTION: f64 = 0.05;
 #[cfg(feature = "audio")]
-const AUDIO_RESAMPLE_RATIO_DRIFT_LIMIT: f64 = 0.05;
+const DEFAULT_AUDIO_RESAMPLE_RATIO_DRIFT_LIMIT: f64 = 0.05;
 const VULKAN_FALLBACK_SYNC_FRAMES: u32 = 3;
 const DISPLAY_FPS_TOLERANCE: f64 = 2.0;
 const COMMON_DISPLAY_FPS: &[f64] = &[60.0, 50.0, 30.0];
@@ -163,6 +191,9 @@ type RetroAudioCallbackFn = unsafe extern "C" fn();
 /// Function pointer type to enable/disable the audio callback.
 /// Signature: `void set_state(bool enabled)`
 type RetroAudioSetStateCallbackFn = unsafe extern "C" fn(enabled: bool);
+/// Function pointer type for the libretro frame-time callback.
+/// Signature: `void callback(int64_t usec)`
+type RetroFrameTimeCallbackFn = unsafe extern "C" fn(usec: i64);
 
 #[derive(Default)]
 struct EnvironmentContext {
@@ -182,6 +213,12 @@ struct EnvironmentContext {
     audio_callback: Option<RetroAudioCallbackFn>,
     audio_set_state_callback: Option<RetroAudioSetStateCallbackFn>,
     audio_callback_enabled: bool,
+    frame_time_callback: Option<RetroFrameTimeCallbackFn>,
+    frame_time_reference_usecs: i64,
+    frame_time_last_instant: Option<std::time::Instant>,
+    run_fps_probe_start: Option<std::time::Instant>,
+    run_fps_probe_frames: u32,
+    run_fps_probe_logged: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -189,6 +226,16 @@ struct HardwareRenderCallbacks {
     context_reset: Option<RetroHwContextResetFn>,
     context_destroy: Option<RetroHwContextResetFn>,
     bottom_left_origin: bool,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct PlayTextureSignature {
+    checksum: u64,
+    non_black_samples: u16,
+    luminance_range: u16,
+    uniform: bool,
+    first_rgb: [u8; 3],
+    center_rgb: [u8; 3],
 }
 
 struct HardwareRenderTarget {
@@ -209,9 +256,21 @@ struct HardwareRenderTarget {
     /// first black frame, find the one with game content, cache it here, and read from it via
     /// a temporary FBO on every subsequent frame.
     emu_game_texture: Option<glow::NativeTexture>,
+    /// Heuristic score for the currently cached game texture. Lower is better.
+    play_texture_cache_score: f32,
     /// Consecutive readback frames with no sampled non-black signal. Used by play-core
     /// warmup gating so we wait briefly for core-linked FBO output before scan fallback.
     play_blank_frame_streak: u32,
+    /// Incrementing frame counter for Play GL texture-cache health checks.
+    play_texture_frame_counter: u64,
+    /// Last frame signature seen in the Play texture cache path.
+    play_texture_last_signature: Option<PlayTextureSignature>,
+    /// Repeated near-static signature streak used to detect stale/intermediate textures.
+    play_texture_stale_signature_streak: u32,
+    /// Frame counter value when texture scan/revalidation was last attempted.
+    play_texture_last_scan_frame: u64,
+    /// Frame counter value when the cached texture last switched.
+    play_texture_last_switch_frame: u64,
 }
 
 #[derive(Clone)]
@@ -1194,12 +1253,35 @@ impl LibretroHost {
                     (api.get_system_av_info)(&mut av_info as *mut RetroSystemAvInfo);
                 }
                 let _version = unsafe { (api.api_version)() };
+                let normalized_video_fps = normalize_display_fps(av_info.timing.fps);
+                let pacing_interval_ms =
+                    if normalized_video_fps.is_finite() && normalized_video_fps > 0.0 {
+                        1000.0 / normalized_video_fps
+                    } else {
+                        0.0
+                    };
+                if core_name.eq_ignore_ascii_case("play") {
+                    info!(
+                        target: "arcade_libretro::core_loader",
+                        core = core_name,
+                        reported_video_fps = av_info.timing.fps,
+                        normalized_video_fps,
+                        pacing_interval_ms,
+                        sample_rate_hz = av_info.timing.sample_rate,
+                        base_width = av_info.geometry.base_width,
+                        base_height = av_info.geometry.base_height,
+                        max_width = av_info.geometry.max_width,
+                        max_height = av_info.geometry.max_height,
+                        "play startup AV timing"
+                    );
+                }
                 let preferred_sample_rate_hz =
                     if av_info.timing.sample_rate.is_finite() && av_info.timing.sample_rate > 0.0 {
                         Some(av_info.timing.sample_rate.round() as u32)
                     } else {
                         None
                     };
+                configure_audio_profile_for_core(core_name);
                 set_audio_source_sample_rate(av_info.timing.sample_rate);
                 if let Err(err) = self.ensure_audio_output_started(preferred_sample_rate_hz) {
                     eprintln!("Audio output unavailable, continuing without sound: {err}");
@@ -1358,6 +1440,11 @@ impl LibretroHost {
         }
         let uses_hw_render = loaded.uses_hw_render;
         let target_size = hw_render_target_size(loaded.video_max_size, loaded.video_base_size);
+        let default_frame_time_usecs = if loaded.video_fps.is_finite() && loaded.video_fps > 0.0 {
+            (1_000_000.0 / loaded.video_fps).round() as i64
+        } else {
+            16_667
+        };
         drop(loaded_guard);
 
         if uses_hw_render && hardware_render_requested() && !hardware_render_context_ready() {
@@ -1406,6 +1493,29 @@ impl LibretroHost {
                 debug_step
             );
         }
+        let frame_time_callback = {
+            let mut context = self.runtime.environment_context.lock();
+            let callback = context.frame_time_callback;
+            callback.map(|callback| {
+                let now = std::time::Instant::now();
+                let reference_usecs = if context.frame_time_reference_usecs > 0 {
+                    context.frame_time_reference_usecs
+                } else {
+                    default_frame_time_usecs
+                };
+                let usec = if let Some(previous) = context.frame_time_last_instant {
+                    let delta = now.saturating_duration_since(previous).as_micros();
+                    delta.min(i64::MAX as u128) as i64
+                } else {
+                    reference_usecs
+                };
+                context.frame_time_last_instant = Some(now);
+                (callback, usec.max(0))
+            })
+        };
+        if let Some((callback, usec)) = frame_time_callback {
+            unsafe { callback(usec) };
+        }
         let audio_callback = {
             let context = self.runtime.environment_context.lock();
             context
@@ -1431,6 +1541,40 @@ impl LibretroHost {
                 debug_step,
                 run_duration.as_secs_f64() * 1000.0
             );
+        }
+        {
+            let mut context = self.runtime.environment_context.lock();
+            if !context.run_fps_probe_logged
+                && context
+                    .loaded_core_name
+                    .as_deref()
+                    .is_some_and(|name| name.eq_ignore_ascii_case("play"))
+            {
+                let now = std::time::Instant::now();
+                let start = context.run_fps_probe_start.unwrap_or(now);
+                if context.run_fps_probe_start.is_none() {
+                    context.run_fps_probe_start = Some(now);
+                }
+                context.run_fps_probe_frames = context.run_fps_probe_frames.saturating_add(1);
+                let elapsed = now.saturating_duration_since(start);
+                if context.run_fps_probe_frames >= 180
+                    && elapsed >= std::time::Duration::from_millis(500)
+                {
+                    let measured_run_fps =
+                        context.run_fps_probe_frames as f64 / elapsed.as_secs_f64();
+                    info!(
+                        target: "arcade_libretro::core_loader",
+                        core = "play",
+                        reported_video_fps = loaded.video_fps,
+                        normalized_video_fps = normalize_display_fps(loaded.video_fps),
+                        measured_run_fps,
+                        sample_frames = context.run_fps_probe_frames,
+                        sample_secs = elapsed.as_secs_f64(),
+                        "play startup measured run cadence"
+                    );
+                    context.run_fps_probe_logged = true;
+                }
+            }
         }
 
         let present_started_at = std::time::Instant::now();

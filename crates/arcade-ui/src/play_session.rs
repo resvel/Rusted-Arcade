@@ -53,11 +53,23 @@ impl NativeArcadeUiApp {
             .active_system
             .as_deref()
             .is_some_and(|system| system.eq_ignore_ascii_case("ARCADE"));
+        let play_tight_pacing = self
+            .state
+            .play
+            .active_core
+            .as_deref()
+            .is_some_and(|core| core.eq_ignore_ascii_case("play"));
         if n64_target_pacing {
             let frame_budget = self.state.play.catch_up_frame_debt
                 + (elapsed.as_secs_f64() / frame_interval.as_secs_f64());
             if frame_budget < 1.0 {
                 ctx.request_repaint();
+                return;
+            }
+        } else if play_tight_pacing {
+            if elapsed < frame_interval {
+                let remaining = frame_interval - elapsed;
+                ctx.request_repaint_after(remaining);
                 return;
             }
         } else if elapsed < frame_interval {
@@ -92,6 +104,17 @@ impl NativeArcadeUiApp {
             let debt_cap = if smooth_pacing { 0.75 } else { 1.0 };
             self.state.play.catch_up_frame_debt =
                 (frame_budget - frames_to_run as f64).clamp(0.0, debt_cap);
+            frames_to_run
+        } else if play_tight_pacing {
+            let elapsed_frames = elapsed.as_secs_f64() / frame_interval.as_secs_f64();
+            let frame_budget =
+                (self.state.play.catch_up_frame_debt + elapsed_frames).clamp(1.0, 1.35);
+            // Keep Play pacing strict (single-step) to avoid burst catch-up that can make
+            // FMV sequences appear speed-shifted during timing jitter.
+            let frames_to_run = 1;
+            self.state.play.set_last_frame_run_at(now);
+            self.state.play.catch_up_frame_debt =
+                (frame_budget - frames_to_run as f64).clamp(0.0, 0.35);
             frames_to_run
         } else if arcade_low_latency_pacing {
             let elapsed_frames = elapsed.as_secs_f64() / frame_interval.as_secs_f64();
@@ -146,9 +169,20 @@ impl NativeArcadeUiApp {
             .play
             .record_perf_tick(elapsed, tick_work, frames_executed)
         {
+            let target_fps = if frame_interval.as_nanos() > 0 {
+                1.0 / frame_interval.as_secs_f64()
+            } else {
+                0.0
+            };
+            let effective_run_fps = sample.tick_hz * sample.avg_frames_per_tick;
+            let speed_ratio = if target_fps > 0.0 {
+                effective_run_fps / target_fps
+            } else {
+                0.0
+            };
             info!(
                 target: "arcade_ui::perf",
-                "play_tick system={} core={} ticks={} tick_hz={:.1} avg_gap_ms={:.2} avg_work_ms={:.2} avg_frames_per_tick={:.2}",
+                "play_tick system={} core={} ticks={} tick_hz={:.1} avg_gap_ms={:.2} avg_work_ms={:.2} avg_frames_per_tick={:.2} effective_run_fps={:.2} target_fps={:.2} speed_ratio={:.3}",
                 self.state.play.active_system.as_deref().unwrap_or("unknown"),
                 self.state.play.active_core.as_deref().unwrap_or("unknown"),
                 sample.ticks,
@@ -156,6 +190,9 @@ impl NativeArcadeUiApp {
                 sample.avg_gap_ms,
                 sample.avg_work_ms,
                 sample.avg_frames_per_tick,
+                effective_run_fps,
+                target_fps,
+                speed_ratio,
             );
         }
 
@@ -183,6 +220,17 @@ impl NativeArcadeUiApp {
                 } else {
                     self.state.play.catch_up_frame_debt = 0.0;
                 }
+                ctx.request_repaint();
+            }
+        } else if play_tight_pacing {
+            let target_interval = frame_interval;
+            let post_tick_elapsed =
+                std::time::Instant::now().duration_since(self.state.play.last_frame_run_at);
+            if post_tick_elapsed < target_interval {
+                let remaining = target_interval - post_tick_elapsed;
+                ctx.request_repaint_after(remaining);
+            } else {
+                self.state.play.catch_up_frame_debt = self.state.play.catch_up_frame_debt.min(0.25);
                 ctx.request_repaint();
             }
         } else if arcade_low_latency_pacing {

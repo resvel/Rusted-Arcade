@@ -33,6 +33,12 @@ pub(super) fn configure_environment_context(
         context.audio_callback = None;
         context.audio_set_state_callback = None;
         context.audio_callback_enabled = false;
+        context.frame_time_callback = None;
+        context.frame_time_reference_usecs = 0;
+        context.frame_time_last_instant = None;
+        context.run_fps_probe_start = None;
+        context.run_fps_probe_frames = 0;
+        context.run_fps_probe_logged = false;
         let should_log_core_vars = vulkan_debug_enabled()
             || vulkan_handoff_trace_enabled()
             || env_flag_enabled("ARCADE_PARALLEL_RDP_SAFE_DIAG")
@@ -85,6 +91,40 @@ pub(super) fn configure_environment_context(
                     cpucore,
                     count_per_op,
                     count_per_op_denom
+                );
+            }
+        }
+
+        if core_name.eq_ignore_ascii_case("play") {
+            let res_multi = context
+                .variables
+                .get("play_res_multi")
+                .and_then(|value| value.to_str().ok())
+                .unwrap_or("<unset>");
+            let presentation_mode = context
+                .variables
+                .get("play_presentation_mode")
+                .and_then(|value| value.to_str().ok())
+                .unwrap_or("<unset>");
+            let bilinear = context
+                .variables
+                .get("play_bilinear_filtering")
+                .and_then(|value| value.to_str().ok())
+                .unwrap_or("<unset>");
+
+            eprintln!(
+                "[CORE-VARS] backend={:?} play_res_multi={} play_presentation_mode={} play_bilinear_filtering={}",
+                backend, res_multi, presentation_mode, bilinear
+            );
+
+            if should_log_core_vars {
+                info!(
+                    target: "arcade_libretro::core_loader",
+                    "configured play core vars backend={:?} play_res_multi={} play_presentation_mode={} play_bilinear_filtering={}",
+                    backend,
+                    res_multi,
+                    presentation_mode,
+                    bilinear
                 );
             }
         }
@@ -166,6 +206,7 @@ pub(super) unsafe extern "C" fn retro_environment(cmd: u32, data: *mut c_void) -
     const RETRO_ENVIRONMENT_SET_VARIABLES: u32 = 16;
     const RETRO_ENVIRONMENT_GET_VARIABLE_UPDATE: u32 = 17;
     const RETRO_ENVIRONMENT_SET_SUPPORT_NO_GAME: u32 = 18;
+    const RETRO_ENVIRONMENT_SET_FRAME_TIME_CALLBACK: u32 = 21;
     const RETRO_ENVIRONMENT_SET_AUDIO_CALLBACK: u32 = 22;
     const RETRO_ENVIRONMENT_GET_LOG_INTERFACE: u32 = 27;
     const RETRO_ENVIRONMENT_GET_SAVE_DIRECTORY: u32 = 31;
@@ -183,6 +224,7 @@ pub(super) unsafe extern "C" fn retro_environment(cmd: u32, data: *mut c_void) -
     const RETRO_ENVIRONMENT_SET_CORE_OPTIONS_UPDATE_DISPLAY_CALLBACK: u32 = 69;
     const RETRO_ENVIRONMENT_SET_KEYBOARD_CALLBACK: u32 = 12;
     const RETRO_ENVIRONMENT_SET_VARIABLE: u32 = 70;
+    const RETRO_ENVIRONMENT_GET_TARGET_REFRESH_RATE: u32 = 50 | RETRO_ENVIRONMENT_EXPERIMENTAL;
 
     const RETRO_PIXEL_FORMAT_0RGB1555: u32 = 0;
     const RETRO_PIXEL_FORMAT_XRGB8888: u32 = 1;
@@ -222,6 +264,30 @@ pub(super) unsafe extern "C" fn retro_environment(cmd: u32, data: *mut c_void) -
             if let Some(runtime) = active_runtime() {
                 runtime.environment_context.lock().keyboard_event_cb = Some(kb.callback);
             }
+            true
+        }
+        RETRO_ENVIRONMENT_SET_FRAME_TIME_CALLBACK => {
+            if data.is_null() {
+                return false;
+            }
+            #[repr(C)]
+            struct RetroFrameTimeCallback {
+                callback: Option<RetroFrameTimeCallbackFn>,
+                reference: i64,
+            }
+            let frame_time = unsafe { &*(data as *const RetroFrameTimeCallback) };
+            if let Some(runtime) = active_runtime() {
+                let mut context = runtime.environment_context.lock();
+                context.frame_time_callback = frame_time.callback;
+                context.frame_time_reference_usecs = frame_time.reference.max(0);
+                context.frame_time_last_instant = None;
+            }
+            info!(
+                target: "arcade_libretro::audio",
+                callback_registered = frame_time.callback.is_some(),
+                reference_usecs = frame_time.reference,
+                "core requested RETRO_ENVIRONMENT_SET_FRAME_TIME_CALLBACK"
+            );
             true
         }
         RETRO_ENVIRONMENT_SET_AUDIO_CALLBACK => {
@@ -725,6 +791,15 @@ pub(super) unsafe extern "C" fn retro_environment(cmd: u32, data: *mut c_void) -
             }
             unsafe {
                 *(data as *mut u32) = 0;
+            }
+            true
+        }
+        RETRO_ENVIRONMENT_GET_TARGET_REFRESH_RATE => {
+            if data.is_null() {
+                return false;
+            }
+            unsafe {
+                *(data as *mut f32) = 60.0;
             }
             true
         }
