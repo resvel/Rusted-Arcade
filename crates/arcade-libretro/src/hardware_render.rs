@@ -456,10 +456,17 @@ pub(super) fn ensure_hw_render_target(target_size: (u32, u32)) -> Result<()> {
     if let Some(target) = state.target.as_mut() {
         target.width = width;
         target.height = height;
+        target.play_texture_cache_score = f32::INFINITY;
         target.play_blank_frame_streak = 0;
+        target.play_texture_frame_counter = 0;
+        target.play_texture_last_signature = None;
+        target.play_texture_stale_signature_streak = 0;
+        target.play_texture_last_scan_frame = 0;
+        target.play_texture_last_switch_frame = 0;
         // Invalidate the emu-side FBO: it has a depth-stencil renderbuffer at the old size
         // and must be recreated in the emu thread's context at the new size.
         target.emu_ctx_framebuffer = None;
+        target.emu_game_texture = None;
     } else {
         state.target = Some(HardwareRenderTarget {
             framebuffer,
@@ -469,7 +476,13 @@ pub(super) fn ensure_hw_render_target(target_size: (u32, u32)) -> Result<()> {
             height,
             emu_ctx_framebuffer: None,
             emu_game_texture: None,
+            play_texture_cache_score: f32::INFINITY,
             play_blank_frame_streak: 0,
+            play_texture_frame_counter: 0,
+            play_texture_last_signature: None,
+            play_texture_stale_signature_streak: 0,
+            play_texture_last_scan_frame: 0,
+            play_texture_last_switch_frame: 0,
         });
     }
     Ok(())
@@ -1045,6 +1058,185 @@ fn sampled_non_black_pixels(pixels: &[u8], width: u32, height: u32) -> usize {
     non_black_samples
 }
 
+const PLAY_TEXTURE_REVALIDATE_INTERVAL_FRAMES: u64 = 120;
+const PLAY_TEXTURE_SWITCH_COOLDOWN_FRAMES: u64 = 90;
+const PLAY_TEXTURE_STALE_RESCAN_STREAK: u32 = 24;
+const PLAY_TEXTURE_STALE_INVALIDATE_STREAK: u32 = 64;
+const PLAY_TEXTURE_SWITCH_SCORE_MARGIN: f32 = 0.22;
+
+fn play_texture_u64_env(name: &str, default: u64) -> u64 {
+    std::env::var(name)
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(default)
+}
+
+fn play_texture_f32_env(name: &str, default: f32) -> f32 {
+    std::env::var(name)
+        .ok()
+        .and_then(|value| value.parse::<f32>().ok())
+        .unwrap_or(default)
+}
+
+fn play_texture_debug_enabled() -> bool {
+    std::env::var_os("ARCADE_PLAY_GL_TEXTURE_DEBUG").is_some()
+        || std::env::var_os("LIBRETRO_TRACE_GL_READBACK").is_some()
+}
+
+fn play_texture_revalidate_interval_frames() -> u64 {
+    play_texture_u64_env(
+        "ARCADE_PLAY_GL_REVALIDATE_INTERVAL_FRAMES",
+        PLAY_TEXTURE_REVALIDATE_INTERVAL_FRAMES,
+    )
+}
+
+fn play_texture_switch_cooldown_frames() -> u64 {
+    play_texture_u64_env(
+        "ARCADE_PLAY_GL_SWITCH_COOLDOWN_FRAMES",
+        PLAY_TEXTURE_SWITCH_COOLDOWN_FRAMES,
+    )
+}
+
+fn play_texture_switch_score_margin() -> f32 {
+    play_texture_f32_env(
+        "ARCADE_PLAY_GL_SWITCH_SCORE_MARGIN",
+        PLAY_TEXTURE_SWITCH_SCORE_MARGIN,
+    )
+}
+
+fn play_texture_signature_from_rgba(
+    pixels: &[u8],
+    width: u32,
+    height: u32,
+) -> PlayTextureSignature {
+    let (checksum, non_black_samples, first_rgba, center_rgba) =
+        summarize_rgba_debug_pixels_grid(pixels, width, height);
+
+    let mut min_luma = u8::MAX;
+    let mut max_luma = u8::MIN;
+    let mut min_r = u8::MAX;
+    let mut max_r = u8::MIN;
+    let mut min_g = u8::MAX;
+    let mut max_g = u8::MIN;
+    let mut min_b = u8::MAX;
+    let mut max_b = u8::MIN;
+
+    let sample_width = width.min(8);
+    let sample_height = height.min(8);
+    if sample_width == 0 || sample_height == 0 {
+        return PlayTextureSignature::default();
+    }
+
+    for sample_y in 0..sample_height {
+        let y = ((sample_y as usize * height as usize) / sample_height as usize)
+            .min(height.saturating_sub(1) as usize);
+        for sample_x in 0..sample_width {
+            let x = ((sample_x as usize * width as usize) / sample_width as usize)
+                .min(width.saturating_sub(1) as usize);
+            let offset = (y * width as usize + x) * 4;
+            if offset + 4 > pixels.len() {
+                continue;
+            }
+            let r = pixels[offset];
+            let g = pixels[offset + 1];
+            let b = pixels[offset + 2];
+            let luma = ((u16::from(r) + u16::from(g) + u16::from(b)) / 3) as u8;
+            min_luma = min_luma.min(luma);
+            max_luma = max_luma.max(luma);
+            min_r = min_r.min(r);
+            max_r = max_r.max(r);
+            min_g = min_g.min(g);
+            max_g = max_g.max(g);
+            min_b = min_b.min(b);
+            max_b = max_b.max(b);
+        }
+    }
+
+    let uniform = max_r.saturating_sub(min_r) <= 3
+        && max_g.saturating_sub(min_g) <= 3
+        && max_b.saturating_sub(min_b) <= 3;
+
+    PlayTextureSignature {
+        checksum,
+        non_black_samples: non_black_samples.min(u16::MAX as usize) as u16,
+        luminance_range: u16::from(max_luma.saturating_sub(min_luma)),
+        uniform,
+        first_rgb: [first_rgba[0], first_rgba[1], first_rgba[2]],
+        center_rgb: [center_rgba[0], center_rgba[1], center_rgba[2]],
+    }
+}
+
+fn color_triplet_close(lhs: [u8; 3], rhs: [u8; 3], tolerance: u8) -> bool {
+    lhs.into_iter()
+        .zip(rhs)
+        .all(|(left, right)| left.abs_diff(right) <= tolerance)
+}
+
+fn next_play_stale_signature_streak(
+    previous: Option<PlayTextureSignature>,
+    current: PlayTextureSignature,
+    previous_streak: u32,
+) -> u32 {
+    if current.non_black_samples == 0 {
+        return previous_streak.saturating_add(1);
+    }
+
+    let mut near_static = current.uniform;
+    if let Some(previous) = previous {
+        let non_black_close = previous
+            .non_black_samples
+            .abs_diff(current.non_black_samples)
+            <= 2;
+        let luminance_close = previous.luminance_range.abs_diff(current.luminance_range) <= 3;
+        let first_close = color_triplet_close(previous.first_rgb, current.first_rgb, 4);
+        let center_close = color_triplet_close(previous.center_rgb, current.center_rgb, 4);
+        near_static = near_static
+            || previous.checksum == current.checksum
+            || (non_black_close && luminance_close && first_close && center_close);
+    }
+
+    if near_static {
+        previous_streak.saturating_add(1)
+    } else {
+        0
+    }
+}
+
+fn should_run_play_periodic_rescan(
+    frame_counter: u64,
+    last_scan_frame: u64,
+    last_switch_frame: u64,
+) -> bool {
+    let revalidate_interval = play_texture_revalidate_interval_frames();
+    let switch_cooldown = play_texture_switch_cooldown_frames();
+    frame_counter.saturating_sub(last_scan_frame) >= revalidate_interval
+        && frame_counter.saturating_sub(last_switch_frame) >= switch_cooldown
+}
+
+fn should_switch_play_texture_candidate(
+    force_due_to_stale: bool,
+    current_score: f32,
+    candidate_score: f32,
+    frame_counter: u64,
+    last_switch_frame: u64,
+) -> bool {
+    let switch_cooldown = play_texture_switch_cooldown_frames();
+    let score_margin = play_texture_switch_score_margin();
+    if force_due_to_stale {
+        return true;
+    }
+    if frame_counter.saturating_sub(last_switch_frame) < switch_cooldown {
+        return false;
+    }
+    if !candidate_score.is_finite() {
+        return false;
+    }
+    if !current_score.is_finite() {
+        return true;
+    }
+    candidate_score + score_margin < current_score
+}
+
 pub(super) fn read_opengl_render_frame(
     runtime: &HostRuntime,
     pending: PendingHardwareFrame,
@@ -1059,8 +1251,14 @@ pub(super) fn read_opengl_render_frame(
         framebuffer,
         emu_ctx_framebuffer,
         color_texture,
-        emu_game_texture,
+        mut emu_game_texture,
         mut play_blank_frame_streak,
+        mut play_texture_cache_score,
+        mut play_texture_frame_counter,
+        mut play_texture_last_signature,
+        mut play_texture_stale_signature_streak,
+        mut play_texture_last_scan_frame,
+        mut play_texture_last_switch_frame,
     ) = {
         let state = runtime.hw_render_state.lock();
         let Some(gl) = state.frontend_gl_context.clone() else {
@@ -1074,33 +1272,59 @@ pub(super) fn read_opengl_render_frame(
             color_texture,
             emu_game_texture,
             play_blank_frame_streak,
-        ) =
-            if force_default_gl_framebuffer(runtime) {
-                (
-                    None,
-                    None,
-                    None,
-                    None,
-                    state
-                        .target
-                        .as_ref()
-                        .map(|target| target.play_blank_frame_streak)
-                        .unwrap_or(0),
-                )
-            } else {
-                let Some(target) = state.target.as_ref() else {
-                    return Err(anyhow!(
-                        "hardware-render frame requested before framebuffer setup"
-                    ));
-                };
-                (
-                    Some(target.framebuffer),
-                    target.emu_ctx_framebuffer,
-                    Some(target.color_texture),
-                    target.emu_game_texture,
-                    target.play_blank_frame_streak,
-                )
+            play_texture_cache_score,
+            play_texture_frame_counter,
+            play_texture_last_signature,
+            play_texture_stale_signature_streak,
+            play_texture_last_scan_frame,
+            play_texture_last_switch_frame,
+        ) = if force_default_gl_framebuffer(runtime) {
+            let target = state.target.as_ref();
+            (
+                None,
+                None,
+                None,
+                target.and_then(|target| target.emu_game_texture),
+                target
+                    .map(|target| target.play_blank_frame_streak)
+                    .unwrap_or(0),
+                target
+                    .map(|target| target.play_texture_cache_score)
+                    .unwrap_or(f32::INFINITY),
+                target
+                    .map(|target| target.play_texture_frame_counter)
+                    .unwrap_or(0),
+                target.and_then(|target| target.play_texture_last_signature),
+                target
+                    .map(|target| target.play_texture_stale_signature_streak)
+                    .unwrap_or(0),
+                target
+                    .map(|target| target.play_texture_last_scan_frame)
+                    .unwrap_or(0),
+                target
+                    .map(|target| target.play_texture_last_switch_frame)
+                    .unwrap_or(0),
+            )
+        } else {
+            let Some(target) = state.target.as_ref() else {
+                return Err(anyhow!(
+                    "hardware-render frame requested before framebuffer setup"
+                ));
             };
+            (
+                Some(target.framebuffer),
+                target.emu_ctx_framebuffer,
+                Some(target.color_texture),
+                target.emu_game_texture,
+                target.play_blank_frame_streak,
+                target.play_texture_cache_score,
+                target.play_texture_frame_counter,
+                target.play_texture_last_signature,
+                target.play_texture_stale_signature_streak,
+                target.play_texture_last_scan_frame,
+                target.play_texture_last_switch_frame,
+            )
+        };
         (
             gl,
             framebuffer,
@@ -1108,8 +1332,22 @@ pub(super) fn read_opengl_render_frame(
             color_texture,
             emu_game_texture,
             play_blank_frame_streak,
+            play_texture_cache_score,
+            play_texture_frame_counter,
+            play_texture_last_signature,
+            play_texture_stale_signature_streak,
+            play_texture_last_scan_frame,
+            play_texture_last_switch_frame,
         )
     };
+    if is_play {
+        play_texture_frame_counter = play_texture_frame_counter.saturating_add(1);
+    }
+    let play_debug = is_play && play_texture_debug_enabled();
+    let mut play_force_texture_scan = false;
+    let mut play_force_invalidate_cached_texture = false;
+    let mut play_scan_reason: Option<&'static str> = None;
+    let mut play_cached_fast_path_pixels: Option<Vec<u8>> = None;
 
     // Fast path: if a previous scan found the core's game-frame texture (visible here because
     // the core uses a shared GL context), read from it directly via a temporary FBO.
@@ -1193,13 +1431,105 @@ pub(super) fn read_opengl_render_frame(
                 for pixel in pixels.chunks_exact_mut(4) {
                     pixel[3] = 255;
                 }
-                return Ok(FrameBuffer {
-                    width: pending.width,
-                    height: pending.height,
-                    pitch: pending.width as usize * 4,
-                    data: pixels,
-                    pixel_format: PixelFormat::Rgba8888,
-                });
+                if !is_play {
+                    return Ok(FrameBuffer {
+                        width: pending.width,
+                        height: pending.height,
+                        pitch: pending.width as usize * 4,
+                        data: pixels,
+                        pixel_format: PixelFormat::Rgba8888,
+                    });
+                }
+
+                let signature =
+                    play_texture_signature_from_rgba(&pixels, pending.width, pending.height);
+                let stale_signature_streak = next_play_stale_signature_streak(
+                    play_texture_last_signature,
+                    signature,
+                    play_texture_stale_signature_streak,
+                );
+                let periodic_rescan = should_run_play_periodic_rescan(
+                    play_texture_frame_counter,
+                    play_texture_last_scan_frame,
+                    play_texture_last_switch_frame,
+                );
+                let stale_rescan = stale_signature_streak >= PLAY_TEXTURE_STALE_RESCAN_STREAK;
+                let stale_invalidate =
+                    stale_signature_streak >= PLAY_TEXTURE_STALE_INVALIDATE_STREAK;
+                play_blank_frame_streak = if signature.non_black_samples > 0 {
+                    0
+                } else {
+                    play_blank_frame_streak.saturating_add(1)
+                };
+
+                if stale_invalidate {
+                    play_force_invalidate_cached_texture = true;
+                    play_scan_reason = Some("stale-signature");
+                } else if stale_rescan {
+                    play_scan_reason = Some("stale-signature");
+                } else if periodic_rescan {
+                    play_scan_reason = Some("periodic");
+                }
+                play_force_texture_scan = stale_rescan || stale_invalidate || periodic_rescan;
+
+                if !play_force_texture_scan {
+                    play_texture_last_signature = Some(signature);
+                    play_texture_stale_signature_streak = stale_signature_streak;
+                    if let Some(target) = runtime.hw_render_state.lock().target.as_mut() {
+                        target.emu_game_texture = emu_game_texture;
+                        target.play_blank_frame_streak = play_blank_frame_streak;
+                        target.play_texture_cache_score = play_texture_cache_score;
+                        target.play_texture_frame_counter = play_texture_frame_counter;
+                        target.play_texture_last_signature = play_texture_last_signature;
+                        target.play_texture_stale_signature_streak =
+                            play_texture_stale_signature_streak;
+                        target.play_texture_last_scan_frame = play_texture_last_scan_frame;
+                        target.play_texture_last_switch_frame = play_texture_last_switch_frame;
+                    }
+                    if play_debug {
+                        eprintln!(
+                            "play gl texture: kept cached tex={} streak={} frame={}",
+                            game_tex.0.get(),
+                            stale_signature_streak,
+                            play_texture_frame_counter
+                        );
+                    }
+                    return Ok(FrameBuffer {
+                        width: pending.width,
+                        height: pending.height,
+                        pitch: pending.width as usize * 4,
+                        data: pixels,
+                        pixel_format: PixelFormat::Rgba8888,
+                    });
+                }
+
+                if play_force_invalidate_cached_texture {
+                    emu_game_texture = None;
+                    play_texture_cache_score = f32::INFINITY;
+                }
+                if play_debug {
+                    eprintln!(
+                        "play gl texture: revalidate cached tex={} reason={} stale_streak={} frame={}",
+                        game_tex.0.get(),
+                        play_scan_reason.unwrap_or("unknown"),
+                        stale_signature_streak,
+                        play_texture_frame_counter
+                    );
+                }
+                play_cached_fast_path_pixels = Some(pixels);
+            }
+        } else if is_play {
+            play_force_texture_scan = true;
+            play_force_invalidate_cached_texture = true;
+            play_scan_reason = Some("cached-fbo-incomplete");
+            emu_game_texture = None;
+            play_texture_cache_score = f32::INFINITY;
+            if play_debug {
+                eprintln!(
+                    "play gl texture: invalidated cached tex={} reason=cached-fbo-incomplete frame={}",
+                    game_tex.0.get(),
+                    play_texture_frame_counter
+                );
             }
         }
         // FBO was incomplete (texture deleted/invalidated) — fall through to normal path.
@@ -1243,7 +1573,9 @@ pub(super) fn read_opengl_render_frame(
         );
     }
 
-    let mut pixels = read_framebuffer(framebuffer);
+    let mut pixels = play_cached_fast_path_pixels
+        .take()
+        .unwrap_or_else(|| read_framebuffer(framebuffer));
 
     // Restore whatever the core had bound (read_framebuffer changes the binding).
     unsafe { gl.bind_framebuffer(glow::FRAMEBUFFER, core_bound_framebuffer) };
@@ -1280,6 +1612,12 @@ pub(super) fn read_opengl_render_frame(
         };
     }
     let allow_texture_scan = !is_play || play_blank_frame_streak >= PLAY_TEXTURE_SCAN_WARMUP_FRAMES;
+    let force_play_texture_scan = is_play && play_force_texture_scan;
+    if force_play_texture_scan {
+        play_texture_last_scan_frame = play_texture_frame_counter;
+    }
+    let should_texture_scan = force_play_texture_scan
+        || (allow_texture_scan && non_black_pixels == 0 && emu_game_texture.is_none());
 
     // Texture scan: when the dedicated FBO (texture 33) is empty and the core hasn't left a
     // useful FBO bound, scan visible texture handles for game content.  When mupen64plus-next
@@ -1287,7 +1625,7 @@ pub(super) fn read_opengl_render_frame(
     // render textures are visible from eframe's context.  We find the one with game content,
     // cache it in target.emu_game_texture, and return it.  On subsequent frames the fast path
     // at the top of this function uses the cached handle directly, skipping the scan.
-    if non_black_pixels == 0 && emu_game_texture.is_none() && allow_texture_scan {
+    if should_texture_scan {
         static TEXTURE_SCAN_DONE: std::sync::atomic::AtomicBool =
             std::sync::atomic::AtomicBool::new(false);
         let scan_first_time = !TEXTURE_SCAN_DONE.swap(true, std::sync::atomic::Ordering::Relaxed);
@@ -1297,6 +1635,14 @@ pub(super) fn read_opengl_render_frame(
         let trace = std::env::var_os("LIBRETRO_TRACE_GL_READBACK").is_some();
         if trace && scan_first_time {
             eprintln!("gl readback texture scan (shared-context, first frame only):");
+        } else if play_debug && force_play_texture_scan {
+            eprintln!(
+                "play gl texture: scanning candidates reason={} frame={} current_cached={} current_score={:.3}",
+                play_scan_reason.unwrap_or("unknown"),
+                play_texture_frame_counter,
+                emu_game_texture.map(|texture| texture.0.get()).unwrap_or(0),
+                play_texture_cache_score
+            );
         }
 
         let mut best_tex: Option<glow::NativeTexture> = None;
@@ -1448,14 +1794,66 @@ pub(super) fn read_opengl_render_frame(
                     game_tex.0.get()
                 );
             }
-            // Cache for subsequent frames so we skip the scan entirely.
-            if let Some(runtime_ref) = active_runtime() {
-                let mut state = runtime_ref.hw_render_state.lock();
-                if let Some(target) = state.target.as_mut() {
-                    target.emu_game_texture = Some(game_tex);
+            if !is_play {
+                emu_game_texture = Some(game_tex);
+                pixels = game_pixels;
+            } else {
+                let current_cached_texture = emu_game_texture;
+                let force_due_to_stale = play_force_invalidate_cached_texture;
+                let should_accept = if current_cached_texture.is_none()
+                    || current_cached_texture == Some(game_tex)
+                {
+                    true
+                } else {
+                    should_switch_play_texture_candidate(
+                        force_due_to_stale,
+                        play_texture_cache_score,
+                        best_score,
+                        play_texture_frame_counter,
+                        play_texture_last_switch_frame,
+                    )
+                };
+                if should_accept {
+                    let switched_texture = current_cached_texture != Some(game_tex);
+                    emu_game_texture = Some(game_tex);
+                    play_texture_cache_score = best_score;
+                    pixels = game_pixels;
+                    if switched_texture {
+                        play_texture_last_switch_frame = play_texture_frame_counter;
+                        play_texture_last_signature = None;
+                        play_texture_stale_signature_streak = 0;
+                    }
+                    if play_debug {
+                        let action = if switched_texture {
+                            "switched texture"
+                        } else {
+                            "kept cached"
+                        };
+                        eprintln!(
+                            "play gl texture: {} tex={} score={:.3} frame={}",
+                            action,
+                            game_tex.0.get(),
+                            best_score,
+                            play_texture_frame_counter
+                        );
+                    }
+                } else if play_debug {
+                    eprintln!(
+                        "play gl texture: rescanned, kept cached tex={} cached_score={:.3} candidate_tex={} candidate_score={:.3} frame={}",
+                        current_cached_texture.map(|texture| texture.0.get()).unwrap_or(0),
+                        play_texture_cache_score,
+                        game_tex.0.get(),
+                        best_score,
+                        play_texture_frame_counter
+                    );
                 }
             }
-            pixels = game_pixels;
+        } else if play_debug && force_play_texture_scan {
+            eprintln!(
+                "play gl texture: rescanned, no candidate reason={} frame={}",
+                play_scan_reason.unwrap_or("unknown"),
+                play_texture_frame_counter
+            );
         }
     } else if non_black_pixels == 0
         && emu_game_texture.is_none()
@@ -1488,15 +1886,30 @@ pub(super) fn read_opengl_render_frame(
         eprintln!("gl readback: skipping default framebuffer fallback for play core");
     }
 
+    let final_non_black = sampled_non_black_pixels(&pixels, pending.width, pending.height);
     if is_play {
-        let final_non_black = sampled_non_black_pixels(&pixels, pending.width, pending.height);
-        let next_streak = if final_non_black > 0 {
-            0
-        } else {
-            play_blank_frame_streak
-        };
-        if let Some(target) = runtime.hw_render_state.lock().target.as_mut() {
-            target.play_blank_frame_streak = next_streak;
+        let final_signature =
+            play_texture_signature_from_rgba(&pixels, pending.width, pending.height);
+        play_texture_stale_signature_streak = next_play_stale_signature_streak(
+            play_texture_last_signature,
+            final_signature,
+            play_texture_stale_signature_streak,
+        );
+        play_texture_last_signature = Some(final_signature);
+        if final_non_black > 0 {
+            play_blank_frame_streak = 0;
+        }
+    }
+    if let Some(target) = runtime.hw_render_state.lock().target.as_mut() {
+        target.emu_game_texture = emu_game_texture;
+        if is_play {
+            target.play_blank_frame_streak = play_blank_frame_streak;
+            target.play_texture_cache_score = play_texture_cache_score;
+            target.play_texture_frame_counter = play_texture_frame_counter;
+            target.play_texture_last_signature = play_texture_last_signature;
+            target.play_texture_stale_signature_streak = play_texture_stale_signature_streak;
+            target.play_texture_last_scan_frame = play_texture_last_scan_frame;
+            target.play_texture_last_switch_frame = play_texture_last_switch_frame;
         }
     }
 
@@ -1632,4 +2045,72 @@ pub(super) fn read_opengl_render_frame(
         data: pixels,
         pixel_format: PixelFormat::Rgba8888,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        next_play_stale_signature_streak, should_run_play_periodic_rescan,
+        should_switch_play_texture_candidate, PlayTextureSignature,
+    };
+
+    fn signature(seed: u64) -> PlayTextureSignature {
+        PlayTextureSignature {
+            checksum: seed,
+            non_black_samples: 48,
+            luminance_range: 24,
+            uniform: false,
+            first_rgb: [10, 20, 30],
+            center_rgb: [100, 110, 120],
+        }
+    }
+
+    #[test]
+    fn stale_streak_increments_for_near_static_signatures() {
+        let current = signature(7);
+        let streak_1 = next_play_stale_signature_streak(Some(current), current, 0);
+        let streak_2 = next_play_stale_signature_streak(Some(current), current, streak_1);
+        assert_eq!(streak_1, 1);
+        assert_eq!(streak_2, 2);
+    }
+
+    #[test]
+    fn stale_streak_resets_for_changing_signatures() {
+        let previous = signature(1);
+        let current = PlayTextureSignature {
+            checksum: 2,
+            non_black_samples: 12,
+            luminance_range: 72,
+            uniform: false,
+            first_rgb: [220, 10, 40],
+            center_rgb: [15, 200, 25],
+        };
+        let streak = next_play_stale_signature_streak(Some(previous), current, 5);
+        assert_eq!(streak, 0);
+    }
+
+    #[test]
+    fn periodic_rescan_requires_interval_and_cooldown() {
+        assert!(!should_run_play_periodic_rescan(80, 0, 0));
+        assert!(!should_run_play_periodic_rescan(140, 0, 120));
+        assert!(should_run_play_periodic_rescan(240, 0, 0));
+    }
+
+    #[test]
+    fn switch_decision_obeys_cooldown_and_margin() {
+        assert!(!should_switch_play_texture_candidate(
+            false, 1.0, 0.6, 40, 0
+        ));
+        assert!(!should_switch_play_texture_candidate(
+            false, 1.0, 0.85, 200, 0
+        ));
+        assert!(should_switch_play_texture_candidate(
+            false, 1.0, 0.5, 200, 0
+        ));
+    }
+
+    #[test]
+    fn switch_decision_allows_force_due_to_stale() {
+        assert!(should_switch_play_texture_candidate(true, 1.0, 10.0, 5, 4));
+    }
 }
