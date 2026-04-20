@@ -40,10 +40,7 @@ fn apply_mupen64plus_next_forced(
     emulation: &EmulationConfig,
 ) {
     // Non-configurable baseline variables
-    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
-    let default_cpucore = "cached_interpreter";
-    #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
-    let default_cpucore = "dynamic_recompiler";
+    let default_cpucore = emulation.n64.cpu_core_mode.as_mupen64plus_core_value();
     insert_mupen64plus_next_cpucore_variable(variables, default_cpucore);
     insert_core_variable(variables, "mupen64plus-rsp-plugin", "hle");
     insert_core_variable(variables, "mupen64plus-BilinearMode", "3point");
@@ -425,21 +422,14 @@ mod tests {
         let expected_rsp = if arcade_domain::is_running_under_rosetta() {
             "parallel"
         } else {
-            "cxd4"
+            "parallel"
         };
         #[cfg(not(target_os = "macos"))]
         let expected_rsp = "parallel";
-        #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
-        let expected_cpucore = "cached_interpreter";
-        #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
-        let expected_cpucore = "dynamic_recompiler";
-        #[cfg(target_os = "macos")]
-        let expected_count_per_op = if arcade_domain::is_running_under_rosetta() {
-            "0"
-        } else {
-            "1"
-        };
-        #[cfg(not(target_os = "macos"))]
+        let expected_cpucore = EmulationConfig::default()
+            .n64
+            .cpu_core_mode
+            .as_mupen64plus_core_value();
         let expected_count_per_op = "0";
         assert_eq!(rsp.to_str().expect("utf8"), expected_rsp);
         assert_eq!(cpucore.to_str().expect("utf8"), expected_cpucore);
@@ -588,6 +578,32 @@ mod tests {
 
         assert_eq!(cpucore.to_str().expect("utf8"), "cached_interpreter");
         assert_eq!(cpu_core.to_str().expect("utf8"), "cached_interpreter");
+    }
+
+    #[test]
+    fn mupen64plus_next_uses_configured_n64_cpu_core_mode() {
+        let env_key = "ARCADE_MUPEN64PLUS_NEXT_CPUCORE";
+        let previous_override = std::env::var(env_key).ok();
+        std::env::remove_var(env_key);
+
+        let mut emulation = EmulationConfig::default();
+        emulation.n64.cpu_core_mode = arcade_domain::N64CpuCoreMode::DynamicRecompiler;
+
+        let variables =
+            default_core_variables_for("mupen64plus_next", VideoBackendKind::Vulkan, &emulation);
+        let cpucore = variables
+            .get("mupen64plus-cpucore")
+            .expect("mupen64plus cpucore");
+        let cpu_core = variables
+            .get("mupen64plus-cpu-core")
+            .expect("mupen64plus cpu-core");
+
+        if let Some(previous) = previous_override {
+            std::env::set_var(env_key, previous);
+        }
+
+        assert_eq!(cpucore.to_str().expect("utf8"), "dynamic_recompiler");
+        assert_eq!(cpu_core.to_str().expect("utf8"), "dynamic_recompiler");
     }
 
     #[test]

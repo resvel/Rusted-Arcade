@@ -12,8 +12,8 @@ use arcade_domain::{
     resolve_effective_core_override, resolve_path_from_root, AppConfig, CoverScrapePlatformIds,
     CoverScrapeRunOptions, CoverScrapeSettingsInput, CoverScrapingConfig, DetectedPadIdentity,
     LocalCoverRelinkRunOptions, ManageOperationKind, ManageOperationSummary, ManageProgressEvent,
-    ManageRomStatus, ManageScope, ManagementConfig, N64PrimaryStick, PathsConfig, RomCard,
-    RomQuery, SaveLimits, SaveSlotData, SaveSlotSummary, SavedGamepadMappingSummary,
+    ManageRomStatus, ManageScope, ManagementConfig, N64CpuCoreMode, N64PrimaryStick, PathsConfig,
+    RomCard, RomQuery, SaveLimits, SaveSlotData, SaveSlotSummary, SavedGamepadMappingSummary,
     StoredGamepadMapping, SYSTEM_DEFAULT_MAPPING_KEY,
 };
 use sha1::{Digest, Sha1};
@@ -77,6 +77,13 @@ impl NativeServices {
         match self.config.lock() {
             Ok(config) => config.emulation.n64.primary_stick,
             Err(poison) => poison.into_inner().emulation.n64.primary_stick,
+        }
+    }
+
+    pub fn n64_cpu_core_mode(&self) -> N64CpuCoreMode {
+        match self.config.lock() {
+            Ok(config) => config.emulation.n64.cpu_core_mode,
+            Err(poison) => poison.into_inner().emulation.n64.cpu_core_mode,
         }
     }
 
@@ -344,6 +351,17 @@ impl NativeServices {
             .map_err(|_| anyhow!("config lock poisoned"))?;
 
         config.emulation.n64.primary_stick = primary_stick;
+        config.save_to_path(self.config_path.as_ref())?;
+        Ok(())
+    }
+
+    pub fn update_n64_cpu_core_mode(&self, cpu_core_mode: N64CpuCoreMode) -> Result<()> {
+        let mut config = self
+            .config
+            .lock()
+            .map_err(|_| anyhow!("config lock poisoned"))?;
+
+        config.emulation.n64.cpu_core_mode = cpu_core_mode;
         config.save_to_path(self.config_path.as_ref())?;
         Ok(())
     }
@@ -1487,9 +1505,9 @@ mod tests {
     use super::*;
     use arcade_data::Database;
     use arcade_domain::{
-        CanonicalButton, LocalCoverRelinkRunOptions, MappingEntry, N64PreferredCore,
-        N64PrimaryStick, PathsConfig, RomQuery, NEXT_SAVE_SLOT_ACTION, QUICK_LOAD_ACTION,
-        QUICK_SAVE_ACTION, SYSTEM_DEFAULT_MAPPING_KEY,
+        CanonicalButton, LocalCoverRelinkRunOptions, MappingEntry, N64CpuCoreMode,
+        N64PreferredCore, N64PrimaryStick, PathsConfig, RomQuery, NEXT_SAVE_SLOT_ACTION,
+        QUICK_LOAD_ACTION, QUICK_SAVE_ACTION, SYSTEM_DEFAULT_MAPPING_KEY,
     };
     use chrono::Utc;
     use rusqlite::params;
@@ -1872,6 +1890,32 @@ mod tests {
 
         let (saved, _) = AppConfig::load_or_create(Some(&config_path)).expect("reload config");
         assert_eq!(saved.emulation.n64.primary_stick, N64PrimaryStick::Right);
+    }
+
+    #[test]
+    fn update_n64_cpu_core_mode_persists_to_config() {
+        let tmp = TempDir::new().expect("tempdir");
+        let config = make_config(&tmp);
+        let config_path = config_path_for(&config);
+        let db = Database::open(&config).expect("open db");
+        let services =
+            NativeServices::bootstrap(config.clone(), config_path.clone(), db).expect("bootstrap");
+
+        services
+            .update_n64_cpu_core_mode(N64CpuCoreMode::DynamicRecompiler)
+            .expect("save n64 cpu core mode");
+
+        let active = services.config();
+        assert_eq!(
+            active.emulation.n64.cpu_core_mode,
+            N64CpuCoreMode::DynamicRecompiler
+        );
+
+        let (saved, _) = AppConfig::load_or_create(Some(&config_path)).expect("reload config");
+        assert_eq!(
+            saved.emulation.n64.cpu_core_mode,
+            N64CpuCoreMode::DynamicRecompiler
+        );
     }
 
     #[test]

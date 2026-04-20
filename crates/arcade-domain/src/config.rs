@@ -137,6 +137,8 @@ pub struct N64EmulationConfig {
     #[serde(default)]
     pub primary_stick: N64PrimaryStick,
     #[serde(default)]
+    pub cpu_core_mode: N64CpuCoreMode,
+    #[serde(default)]
     pub parallel_rdp_upscaling: N64ParallelRdpUpscaling,
     #[serde(default)]
     pub parallel_profile: N64ParallelProfile,
@@ -213,6 +215,35 @@ pub enum N64PrimaryStick {
     #[default]
     Left,
     Right,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum N64CpuCoreMode {
+    CachedInterpreter,
+    DynamicRecompiler,
+}
+
+impl Default for N64CpuCoreMode {
+    fn default() -> Self {
+        #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+        {
+            Self::CachedInterpreter
+        }
+        #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+        {
+            Self::DynamicRecompiler
+        }
+    }
+}
+
+impl N64CpuCoreMode {
+    pub fn as_mupen64plus_core_value(self) -> &'static str {
+        match self {
+            Self::CachedInterpreter => "cached_interpreter",
+            Self::DynamicRecompiler => "dynamic_recompiler",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq)]
@@ -809,7 +840,7 @@ fn strip_known_root_prefix<'a>(path: &'a Path, root: &Path) -> Option<&'a Path> 
 mod tests {
     use super::{
         default_app_root_with, default_config_path_with, resolve_path_from_root, AppConfig,
-        N64PrimaryStick,
+        N64CpuCoreMode, N64PrimaryStick,
     };
     use std::fs;
     use std::path::PathBuf;
@@ -847,6 +878,16 @@ mod tests {
             Some("mupen64plus_next")
         );
         assert_eq!(config.emulation.n64.primary_stick, N64PrimaryStick::Left);
+        #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+        assert_eq!(
+            config.emulation.n64.cpu_core_mode,
+            N64CpuCoreMode::CachedInterpreter
+        );
+        #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+        assert_eq!(
+            config.emulation.n64.cpu_core_mode,
+            N64CpuCoreMode::DynamicRecompiler
+        );
         assert_eq!(
             config.emulation.n64.parallel_rdp_upscaling.as_core_value(),
             "1x"
@@ -907,6 +948,16 @@ bios_root = "/tmp/bios"
             Some("mupen64plus_next")
         );
         assert_eq!(config.emulation.n64.primary_stick, N64PrimaryStick::Left);
+        #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+        assert_eq!(
+            config.emulation.n64.cpu_core_mode,
+            N64CpuCoreMode::CachedInterpreter
+        );
+        #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+        assert_eq!(
+            config.emulation.n64.cpu_core_mode,
+            N64CpuCoreMode::DynamicRecompiler
+        );
         assert_eq!(
             config.emulation.n64.parallel_rdp_upscaling.as_core_value(),
             "1x"
@@ -1013,6 +1064,29 @@ primary_stick = "right"
         .expect("config");
 
         assert_eq!(config.emulation.n64.primary_stick, N64PrimaryStick::Right);
+    }
+
+    #[test]
+    fn app_config_deserializes_n64_cpu_core_mode_override() {
+        let config: AppConfig = toml::from_str(
+            r#"
+[paths]
+rom_root = "/tmp/roms"
+db_path = "/tmp/arcade.db"
+save_state_root = "/tmp/save-states"
+core_root = "/tmp/cores"
+bios_root = "/tmp/bios"
+
+[emulation.n64]
+cpu_core_mode = "dynamic_recompiler"
+"#,
+        )
+        .expect("config");
+
+        assert_eq!(
+            config.emulation.n64.cpu_core_mode,
+            N64CpuCoreMode::DynamicRecompiler
+        );
     }
 
     #[test]
