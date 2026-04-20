@@ -587,8 +587,9 @@ impl NativeArcadeUiApp {
 
                 ui.horizontal_wrapped(|ui| {
                     for target in targets {
-                        let selected = selected_target
-                            .is_some_and(|selected| selected.identity.device_key == target.identity.device_key);
+                        let selected = selected_target.is_some_and(|selected| {
+                            selected.identity.device_key == target.identity.device_key
+                        });
                         let label = mapping_target_tab_label(target);
                         if scope_chip(ui, label.as_str(), true, selected, &palette).clicked() {
                             self.request_controller_mapping_target_switch(target);

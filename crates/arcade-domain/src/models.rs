@@ -553,13 +553,48 @@ pub fn default_gamepad_mapping_for_system(system: &str) -> StoredGamepadMapping 
             insert_button(&mut actions, "L3", CanonicalButton::LeftThumb);
             insert_button(&mut actions, "R3", CanonicalButton::RightThumb);
             insert_axis(&mut actions, "Left Stick Up", CanonicalAxis::LeftStickY, -1);
-            insert_axis(&mut actions, "Left Stick Down", CanonicalAxis::LeftStickY, 1);
-            insert_axis(&mut actions, "Left Stick Left", CanonicalAxis::LeftStickX, -1);
-            insert_axis(&mut actions, "Left Stick Right", CanonicalAxis::LeftStickX, 1);
-            insert_axis(&mut actions, "Right Stick Up", CanonicalAxis::RightStickY, -1);
-            insert_axis(&mut actions, "Right Stick Down", CanonicalAxis::RightStickY, 1);
-            insert_axis(&mut actions, "Right Stick Left", CanonicalAxis::RightStickX, -1);
-            insert_axis(&mut actions, "Right Stick Right", CanonicalAxis::RightStickX, 1);
+            insert_axis(
+                &mut actions,
+                "Left Stick Down",
+                CanonicalAxis::LeftStickY,
+                1,
+            );
+            insert_axis(
+                &mut actions,
+                "Left Stick Left",
+                CanonicalAxis::LeftStickX,
+                -1,
+            );
+            insert_axis(
+                &mut actions,
+                "Left Stick Right",
+                CanonicalAxis::LeftStickX,
+                1,
+            );
+            insert_axis(
+                &mut actions,
+                "Right Stick Up",
+                CanonicalAxis::RightStickY,
+                -1,
+            );
+            insert_axis(
+                &mut actions,
+                "Right Stick Down",
+                CanonicalAxis::RightStickY,
+                1,
+            );
+            insert_axis(
+                &mut actions,
+                "Right Stick Left",
+                CanonicalAxis::RightStickX,
+                -1,
+            );
+            insert_axis(
+                &mut actions,
+                "Right Stick Right",
+                CanonicalAxis::RightStickX,
+                1,
+            );
             insert_button(&mut actions, "Start", CanonicalButton::Start);
             insert_button(&mut actions, "Select", CanonicalButton::Select);
         }

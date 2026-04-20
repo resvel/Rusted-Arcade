@@ -11,10 +11,10 @@ use arcade_domain::{
     default_gamepad_mapping_for_system, get_arcade_compatibility, resolve_core,
     resolve_effective_core_override, resolve_path_from_root, AppConfig, CoverScrapePlatformIds,
     CoverScrapeRunOptions, CoverScrapeSettingsInput, CoverScrapingConfig, DetectedPadIdentity,
-    LocalCoverRelinkRunOptions, ManageOperationKind, ManageOperationSummary,
-    ManageProgressEvent, ManageRomStatus, ManageScope, ManagementConfig, N64PrimaryStick,
-    PathsConfig, RomCard, RomQuery, SaveLimits, SaveSlotData, SaveSlotSummary,
-    SavedGamepadMappingSummary, StoredGamepadMapping, SYSTEM_DEFAULT_MAPPING_KEY,
+    LocalCoverRelinkRunOptions, ManageOperationKind, ManageOperationSummary, ManageProgressEvent,
+    ManageRomStatus, ManageScope, ManagementConfig, N64PrimaryStick, PathsConfig, RomCard,
+    RomQuery, SaveLimits, SaveSlotData, SaveSlotSummary, SavedGamepadMappingSummary,
+    StoredGamepadMapping, SYSTEM_DEFAULT_MAPPING_KEY,
 };
 use sha1::{Digest, Sha1};
 use tracing::warn;
@@ -1096,9 +1096,7 @@ fn build_local_cover_index(public_root: &Path) -> Result<LocalCoverIndex> {
                     continue;
                 }
             }
-            system_index
-                .exact_paths
-                .insert(stem, candidate_public_path);
+            system_index.exact_paths.insert(stem, candidate_public_path);
         }
     }
 
@@ -1169,7 +1167,9 @@ fn resolve_local_cover_path_for_slug(
         }
         candidate = Some(stem.as_str());
     }
-    candidate.and_then(|stem| system_index.exact_paths.get(stem)).cloned()
+    candidate
+        .and_then(|stem| system_index.exact_paths.get(stem))
+        .cloned()
 }
 
 fn strip_trailing_numeric_suffix(slug: &str) -> Option<&str> {
@@ -1972,8 +1972,9 @@ mod tests {
         std::fs::write(covers_dir.join("contra-u.jpg"), b"cover").expect("write cover");
         std::fs::write(covers_dir.join("existing.jpg"), b"cover").expect("write existing cover");
 
-        let services = NativeServices::bootstrap(config.clone(), config_path_for(&config), db.clone())
-            .expect("bootstrap");
+        let services =
+            NativeServices::bootstrap(config.clone(), config_path_for(&config), db.clone())
+                .expect("bootstrap");
 
         let summary = services
             .relink_local_covers(
@@ -1995,13 +1996,19 @@ mod tests {
             .get_rom_by_id("rom-missing")
             .expect("get missing")
             .expect("missing rom");
-        assert_eq!(missing.cover_path.as_deref(), Some("/covers/nes/contra-u.jpg"));
+        assert_eq!(
+            missing.cover_path.as_deref(),
+            Some("/covers/nes/contra-u.jpg")
+        );
 
         let existing = db
             .get_rom_by_id("rom-existing")
             .expect("get existing")
             .expect("existing rom");
-        assert_eq!(existing.cover_path.as_deref(), Some("/covers/nes/existing.jpg"));
+        assert_eq!(
+            existing.cover_path.as_deref(),
+            Some("/covers/nes/existing.jpg")
+        );
     }
 
     #[test]

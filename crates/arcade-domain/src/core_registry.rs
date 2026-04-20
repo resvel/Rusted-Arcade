@@ -1087,22 +1087,13 @@ fn play_profile() -> CoreProfile {
                 "play_res_multi",
                 "Resolution Multiplier",
                 "Display",
-                vec![
-                    opt_d("1x", "1x Native"),
-                    opt("2x"),
-                    opt("4x"),
-                    opt("8x"),
-                ],
+                vec![opt_d("1x", "1x Native"), opt("2x"), opt("4x"), opt("8x")],
             ),
             var(
                 "play_presentation_mode",
                 "Presentation Mode",
                 "Display",
-                vec![
-                    opt("Fit Screen"),
-                    opt("Fill Screen"),
-                    opt("Original Size"),
-                ],
+                vec![opt("Fit Screen"), opt("Fill Screen"), opt("Original Size")],
             ),
             var(
                 "play_bilinear_filtering",

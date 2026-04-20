@@ -419,10 +419,7 @@ impl NativeArcadeUiApp {
             return;
         }
 
-        let mapping = self.resolved_mapping_for(
-            &system,
-            Some(&selected_target.identity),
-        );
+        let mapping = self.resolved_mapping_for(&system, Some(&selected_target.identity));
         let threshold = normalize_mapping_threshold(mapping.threshold);
 
         self.state.controller_mapping.load_from_mapping(
@@ -466,7 +463,9 @@ impl NativeArcadeUiApp {
         &mut self,
         target: &ControllerMappingTarget,
     ) {
-        if self.state.controller_mapping.selected_device_key() == Some(target.identity.device_key.as_str()) {
+        if self.state.controller_mapping.selected_device_key()
+            == Some(target.identity.device_key.as_str())
+        {
             return;
         }
 
@@ -550,7 +549,8 @@ impl NativeArcadeUiApp {
                 self.state
                     .controller_mapping
                     .mark_saved(normalized_threshold);
-                self.state.status = format!("Saved {} controller mapping for {}.", system, mapping_key);
+                self.state.status =
+                    format!("Saved {} controller mapping for {}.", system, mapping_key);
             }
             Err(err) => {
                 self.state.status = format!("Could not save controller mapping: {err}");
@@ -581,15 +581,15 @@ impl NativeArcadeUiApp {
             .pending_device_switch()
             .map(|(key, _)| key.to_string());
         if let Some(key) = pending_key {
-            if !targets.iter().any(|target| target.identity.device_key == key) {
+            if !targets
+                .iter()
+                .any(|target| target.identity.device_key == key)
+            {
                 self.state.controller_mapping.clear_pending_device_switch();
             }
         }
 
-        let selected_valid = self
-            .state
-            .controller_mapping
-            .selected_device_key();
+        let selected_valid = self.state.controller_mapping.selected_device_key();
         let next_selected = resolved_selected_mapping_device_key(selected_valid, targets);
         self.state
             .controller_mapping
@@ -3156,8 +3156,7 @@ mod tests {
             },
         ];
 
-        let selected =
-            resolved_selected_mapping_device_key(Some("045e:02fd:Xbox"), &targets);
+        let selected = resolved_selected_mapping_device_key(Some("045e:02fd:Xbox"), &targets);
         assert_eq!(selected.as_deref(), Some("045e:02fd:Xbox"));
     }
 
@@ -3188,8 +3187,7 @@ mod tests {
             },
         ];
 
-        let selected =
-            resolved_selected_mapping_device_key(Some("missing"), &targets);
+        let selected = resolved_selected_mapping_device_key(Some("missing"), &targets);
         assert_eq!(selected.as_deref(), Some("054c:09cc:PS4"));
     }
 

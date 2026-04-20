@@ -1,9 +1,7 @@
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
-use arcade_domain::{
-    default_gamepad_mapping_for_system, MappingEntry, StoredGamepadMapping,
-};
+use arcade_domain::{default_gamepad_mapping_for_system, MappingEntry, StoredGamepadMapping};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct ControllerMappingCacheKey {
