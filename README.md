@@ -83,11 +83,28 @@ You can override themed header/background images per system by dropping files in
 - Example file: `public/system-logos/nes_header.png`
 - Example file: `public/system-logos/nes_background.webp`
 
-Fallback behavior:
+Header selection order:
 
-- If a system-specific header file is missing, the app falls back to `public/system-logos/headerbackground.png`.
-- If a system-specific background file is missing, the app falls back to the built-in per-system background path already defined in code.
-- `ALL` view background art still uses `public/system-logos/All-background.png` (the `<system>_background.*` override applies to standard per-system views).
+- Try `public/system-logos/<system>_header.png`
+- Then `public/system-logos/<system>_header.webp`
+- Then `public/system-logos/<system>_header.jpg`
+- Then `public/system-logos/<system>_header.jpeg`
+- Fallback: `public/system-logos/headerbackground.png`
+
+Background selection order:
+
+- For normal system views (`NES`, `SNES`, `N64`, etc.):
+  - Try `public/system-logos/<system>_background.png`
+  - Then `.webp`, `.jpg`, `.jpeg`
+  - Fallback to the built-in per-system background asset path in code
+- For `ALL` view:
+  - Use `public/system-logos/All-background.png`
+  - `all_background.*` is not used for the `ALL` canvas path
+
+Rendering behavior:
+
+- Header and system backgrounds are drawn as a single full-bleed image and scaled to cover their target area.
+- The `ALL` background is also rendered as a single fitted image (not tiled by default).
 
 ## Prerequisites
 
