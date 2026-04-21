@@ -19,7 +19,7 @@ Native desktop app for the Personal Arcade project, built as a Rust workspace ar
 - Default config resolution prefers `config.toml` next to the executable.
 - Config controls ROM, core, BIOS, DB, and save-state roots plus N64 defaults.
 - SQLite is opened and bootstrapped from the native schema.
-- UI runs through `eframe` and `glow`.
+- UI runs through `eframe` with platform-aware renderer selection (`wgpu`/Metal by default on macOS, `glow` by default on Linux/Windows).
 - The libretro host loads the selected core dynamically and runs the frame loop.
 - Save states are supported through libretro serialize/unserialize with native size limits.
 
@@ -97,6 +97,8 @@ Fallback behavior:
   - Linux: `<core_name>_libretro.so`
   - Windows: `<core_name>_libretro.dll`
   - macOS: `<core_name>_libretro.dylib`
+- Optional macOS Apple Silicon N64 dynarec lane binary:
+  - `mupen64plus_next_dynarec_arm64_libretro.dylib`
 - BIOS/ROM assets you legally own
 
 ## Run
@@ -149,6 +151,10 @@ cargo run -p arcade-app -- /Users/you/path/to/config.toml
   - `management.cover_scraping.platform_ids.*`
   - `management.cover_scraping.default_limit`
   - `management.cover_scraping.default_delay_ms`
+- `Library -> Manage -> Core Settings` edits per-core libretro variables (including N64 options such as `Count Per Op` and `Count Per Op Denom Pot`).
+- `Library -> Manage -> Core Settings -> N64` includes a CPU lane selector:
+  - `Stable Cached` (`cached_interpreter`)
+  - `Experimental Dynarec` (`dynamic_recompiler`)
 - Changing DB, ROM, core, BIOS, or save-state paths is saved immediately, but those path changes are applied on the next app launch.
 
 ## macOS arcade quick setup
@@ -238,15 +244,10 @@ Core binary extension is platform-specific (`.so` on Linux, `.dll` on Windows, `
 - Existing preview metadata is surfaced in the UI, but native preview capture/generation is still deferred.
 - The native app does not implement account/admin flows; it uses one implicit local profile.
 - Hardware-render cores are still limited in the embedded host.
-- macOS is currently aimed at the safe boot path first:
-  - Default renderer is `glow` (OpenGL) on macOS.
-  - OpenGL-backed frontend integration and software frame delivery are the intended first working modes.
-  - Vulkan/MoltenVK in the embedded host is experimental and requires Vulkan-capable core binaries.
-  - `wgpu`/Metal is opt-in experimental only: set `ARCADE_MACOS_RENDERER=wgpu` (or `metal`) to run eframe through `wgpu` on macOS (`WGPU_BACKEND=metal` is auto-set if absent).
-  - N64 is single-path on macOS and always uses `mupen64plus_next`.
-  - N64 settings expose only internal resolution (`1x`, `2x`, `4x`, `8x`).
-  - macOS N64 is locked to the working `mupen64plus_next + ParaLLEl/Vulkan` path.
-  - `GLideN64`/OpenGL is not the supported embedded N64 runtime path on macOS.
+- macOS renderer behavior:
+  - Default is `wgpu` on Metal.
+  - Set `ARCADE_MACOS_RENDERER=glow` to force OpenGL frontend rendering.
+  - If `ARCADE_MACOS_RENDERER` is unset and `play_libretro.dylib` is detected in `core_root`, the app auto-selects `glow` for compatibility.
 - Arcade launches are validated before start:
   - CPS3 titles are blocked until the required assets are installed.
   - Shared arcade BIOS files are resolved from `bios_root` and `rom_root` arcade directories (see macOS arcade quick setup above).
@@ -270,10 +271,14 @@ Core binary extension is platform-specific (`.so` on Linux, `.dll` on Windows, `
 
 ### Current N64 runtime path
 
-- macOS:
+- macOS (Apple Silicon native):
   - active N64 core is `mupen64plus_next`
-  - active renderer path is `ParaLLEl` over Vulkan
-  - upstream macOS builds currently run as `Cached Interpreter`
+  - two CPU lanes are available:
+    - `Stable Cached`: loads `mupen64plus_next_libretro.dylib`
+    - `Experimental Dynarec`: prefers `mupen64plus_next_dynarec_arm64_libretro.dylib`
+  - if dynarec lane is selected and launch fails, native host retries once with cached lane for that launch
+  - active N64 graphics path is ParaLLEl (Vulkan in core)
+  - `Count Per Op` default is `Auto (0)`; no forced override is applied by the frontend
 - On Linux/X11 the host uses `parallel_n64` with:
   - core-owned Vulkan device creation
   - external X11 Vulkan presentation window
@@ -283,6 +288,17 @@ Core binary extension is platform-specific (`.so` on Linux, `.dll` on Windows, `
   - no external Win32 Vulkan present window unless `ARCADE_WINDOWS_EXTERNAL_VULKAN_PRESENT=1` is set
   - an experimental opt-in `parallel` Vulkan path with ParaLLEl-RDP upscaling support
 
+### Apple Silicon dynarec core bring-up notes
+
+The `mupen64plus_next_dynarec_arm64_libretro.dylib` lane is backed by our `third_party/mupen64plus-libretro-nx` core work for native arm64 macOS:
+
+- JIT cache uses an Apple-compliant `MAP_JIT` mapping path in `new_dynarec`.
+- Writes/exec transitions use per-thread W^X toggling via `pthread_jit_write_protect_np()`.
+- Cache maintenance follows Apple ordering (`sys_icache_invalidate` with execute-mode transition).
+- Dynarec ARM64 patch/flush sites were updated to respect that model during runtime code generation and link patching.
+
+These changes are what enabled native M1/M2 dynarec boot and gameplay in current testing.
+
 ### What is in good shape
 
 - Core selection and config wiring
@@ -290,7 +306,7 @@ Core binary extension is platform-specific (`.so` on Linux, `.dll` on Windows, `
 - Manage view and runtime config persistence for cover scraping
 - Native write-side ROM management flow
 - Linux `parallel_n64` Vulkan bring-up
-- macOS `mupen64plus_next` ParaLLEl/Vulkan path
+- macOS `mupen64plus_next` ParaLLEl/Vulkan path (cached + dynarec lane support)
 - Linux external Vulkan presentation window
 - Linux direct external presentation instead of UI texture readback
 - Configurable ParaLLEl upscale
@@ -298,7 +314,7 @@ Core binary extension is platform-specific (`.so` on Linux, `.dll` on Windows, `
 ### Remaining work
 
 - Linux `parallel_n64` Vulkan parity/regression coverage
-- macOS gameplay-speed polish on the upstream cached-interpreter `mupen64plus_next + ParaLLEl` path
+- Broader compatibility and long-session stability validation for macOS dynarec lane across more titles
 - Windows `parallel_n64` Vulkan parity and stability in the opt-in external-present path
 - Adaptive 60/30 presentation policy for heavier Linux scenes
 - Runtime validation of `4x` and `8x` upscale modes
