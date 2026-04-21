@@ -23,7 +23,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Weak};
 
 use anyhow::{anyhow, Context, Result};
-use arcade_domain::{resolve_core, EmulationConfig};
+use arcade_domain::{resolve_core, EmulationConfig, N64CpuCoreMode};
 use ash::vk;
 #[cfg(feature = "audio")]
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
@@ -904,14 +904,21 @@ struct LoadedCore {
 }
 
 fn default_core_library_filename(core_name: &str) -> String {
-    core_library_filename_candidates(core_name)
-        .into_iter()
-        .next()
-        .unwrap_or_else(|| format!("{core_name}_libretro.dylib"))
+    format!("{core_name}_libretro.dylib")
 }
 
-fn core_library_filename_candidates(core_name: &str) -> Vec<String> {
-    vec![format!("{core_name}_libretro.dylib")]
+fn core_library_filename_candidates(core_name: &str, emulation: &EmulationConfig) -> Vec<String> {
+    let mut candidates = Vec::new();
+
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    if core_name.eq_ignore_ascii_case("mupen64plus_next")
+        && emulation.n64.cpu_core_mode == N64CpuCoreMode::DynamicRecompiler
+    {
+        candidates.push(String::from("mupen64plus_next_dynarec_arm64_libretro.dylib"));
+    }
+
+    candidates.push(default_core_library_filename(core_name));
+    candidates
 }
 
 impl GlProcLoader {
@@ -1056,7 +1063,7 @@ impl LibretroHost {
     }
 
     pub fn resolve_core_candidates(&self, core_name: &str) -> Vec<PathBuf> {
-        core_library_filename_candidates(core_name)
+        core_library_filename_candidates(core_name, &self.emulation)
             .into_iter()
             .map(|file_name| self.core_root.join(file_name))
             .collect()
@@ -1976,6 +1983,55 @@ mod tests {
         fs::write(&preferred_existing, b"core").expect("write core file");
 
         assert_eq!(host.resolve_core_path("snes9x"), preferred_existing);
+    }
+
+    #[test]
+    fn resolve_core_candidates_uses_default_n64_filename_for_cached_lane() {
+        let dir = tempdir().expect("tempdir");
+        let mut emulation = EmulationConfig::default();
+        emulation.n64.cpu_core_mode = N64CpuCoreMode::CachedInterpreter;
+        let host = LibretroHost::new(
+            dir.path().join("cores"),
+            dir.path().join("bios"),
+            dir.path().join("saves"),
+            emulation,
+        );
+
+        let candidates = host.resolve_core_candidates("mupen64plus_next");
+        let file_names = candidates
+            .iter()
+            .map(|path| path.file_name().and_then(|f| f.to_str()).unwrap_or(""))
+            .collect::<Vec<_>>();
+
+        assert_eq!(file_names, vec!["mupen64plus_next_libretro.dylib"]);
+    }
+
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    #[test]
+    fn resolve_core_candidates_prefers_experimental_n64_dynarec_binary_on_arm64() {
+        let dir = tempdir().expect("tempdir");
+        let mut emulation = EmulationConfig::default();
+        emulation.n64.cpu_core_mode = N64CpuCoreMode::DynamicRecompiler;
+        let host = LibretroHost::new(
+            dir.path().join("cores"),
+            dir.path().join("bios"),
+            dir.path().join("saves"),
+            emulation,
+        );
+
+        let candidates = host.resolve_core_candidates("mupen64plus_next");
+        let file_names = candidates
+            .iter()
+            .map(|path| path.file_name().and_then(|f| f.to_str()).unwrap_or(""))
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            file_names,
+            vec![
+                "mupen64plus_next_dynarec_arm64_libretro.dylib",
+                "mupen64plus_next_libretro.dylib"
+            ]
+        );
     }
 
     #[test]

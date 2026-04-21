@@ -3,7 +3,7 @@ use crate::input::ControllerMappingTarget;
 use crate::render::fit_size;
 use crate::state::MenuFocusRegion;
 use crate::theme::{ThemePalette, SYSTEM_FILTERS};
-use arcade_domain::{DetectedPadIdentity, N64CpuCoreMode, N64PrimaryStick};
+use arcade_domain::{DetectedPadIdentity, N64PrimaryStick};
 use eframe::egui;
 
 const ALPHA_FILTERS: [&str; 28] = [
@@ -360,48 +360,6 @@ impl NativeArcadeUiApp {
                                     Err(err) => {
                                         self.state.status =
                                             format!("Failed to save primary stick preference: {err}");
-                                    }
-                                }
-                            }
-                        }
-                    }
-                });
-            }
-            if active_system.trim().eq_ignore_ascii_case("N64") {
-                let mut selected_cpu_core = self.services.n64_cpu_core_mode();
-                ui.add_space(2.0);
-                ui.horizontal_wrapped(|ui| {
-                    ui.label(
-                        egui::RichText::new("CPU Core Lane")
-                            .size(11.5)
-                            .color(palette.text_muted),
-                    );
-                    for (label, value) in [
-                        ("Stable Cached", N64CpuCoreMode::CachedInterpreter),
-                        (
-                            "Experimental Dynarec",
-                            N64CpuCoreMode::DynamicRecompiler,
-                        ),
-                    ] {
-                        if scope_chip(ui, label, true, selected_cpu_core == value, &palette)
-                            .clicked()
-                        {
-                            if value != selected_cpu_core {
-                                match self.services.update_n64_cpu_core_mode(value) {
-                                    Ok(()) => {
-                                        selected_cpu_core = value;
-                                        self.state.status = format!(
-                                            "N64 CPU core lane set to {}.",
-                                            if value == N64CpuCoreMode::CachedInterpreter {
-                                                "Stable Cached"
-                                            } else {
-                                                "Experimental Dynarec"
-                                            }
-                                        );
-                                    }
-                                    Err(err) => {
-                                        self.state.status =
-                                            format!("Failed to save N64 CPU core lane: {err}");
                                     }
                                 }
                             }

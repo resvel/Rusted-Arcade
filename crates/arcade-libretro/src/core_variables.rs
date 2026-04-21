@@ -87,6 +87,20 @@ fn apply_mupen64plus_next_forced(
         #[cfg(not(target_os = "macos"))]
         insert_core_variable(variables, "mupen64plus-rsp-plugin", "parallel");
     }
+
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    {
+        // On native Apple Silicon dynarec, CountPerOp=Auto(0) can stall timing in
+        // tight loops. Keep user-selected explicit values, but coerce Auto to 2.
+        if default_cpucore == "dynamic_recompiler" {
+            let count_per_op = variables
+                .get("mupen64plus-CountPerOp")
+                .and_then(|value| value.to_str().ok());
+            if count_per_op.is_none() || count_per_op == Some("0") {
+                insert_core_variable(variables, "mupen64plus-CountPerOp", "2");
+            }
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -430,6 +444,13 @@ mod tests {
             .n64
             .cpu_core_mode
             .as_mupen64plus_core_value();
+        #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+        let expected_count_per_op = if expected_cpucore == "dynamic_recompiler" {
+            "2"
+        } else {
+            "0"
+        };
+        #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
         let expected_count_per_op = "0";
         assert_eq!(rsp.to_str().expect("utf8"), expected_rsp);
         assert_eq!(cpucore.to_str().expect("utf8"), expected_cpucore);

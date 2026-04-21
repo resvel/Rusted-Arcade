@@ -4,7 +4,7 @@ use std::sync::mpsc;
 
 use arcade_domain::{
     CoverScrapeRunOptions, CoverScrapeSettingsInput, LocalCoverRelinkRunOptions,
-    ManageOperationKind, ManageScope, PathsConfig,
+    ManageOperationKind, ManageScope, N64CpuCoreMode, PathsConfig,
 };
 use eframe::egui;
 
@@ -271,6 +271,48 @@ impl NativeArcadeUiApp {
             if let Some(profile) = profiles.get(tab_idx) {
                 let core_name = profile.core_name.to_string();
                 let mut last_group: Option<&str> = None;
+
+                if profile.core_name == "mupen64plus_next" {
+                    let mut selected_cpu_core = self.services.n64_cpu_core_mode();
+                    ui.label(
+                        egui::RichText::new("CPU Core Lane")
+                            .small()
+                            .strong()
+                            .color(palette.text),
+                    );
+                    ui.horizontal_wrapped(|ui| {
+                        for (label, value) in [
+                            ("Stable Cached", N64CpuCoreMode::CachedInterpreter),
+                            (
+                                "Experimental Dynarec",
+                                N64CpuCoreMode::DynamicRecompiler,
+                            ),
+                        ] {
+                            let selected = selected_cpu_core == value;
+                            let response = ui.add(manage_button(label, false, selected, palette));
+                            if response.clicked() && value != selected_cpu_core {
+                                match self.services.update_n64_cpu_core_mode(value) {
+                                    Ok(()) => {
+                                        selected_cpu_core = value;
+                                        self.state.status = format!(
+                                            "N64 CPU core lane set to {}.",
+                                            if value == N64CpuCoreMode::CachedInterpreter {
+                                                "Stable Cached"
+                                            } else {
+                                                "Experimental Dynarec"
+                                            }
+                                        );
+                                    }
+                                    Err(err) => {
+                                        self.state.status =
+                                            format!("Failed to save N64 CPU core lane: {err}");
+                                    }
+                                }
+                            }
+                        }
+                    });
+                    ui.add_space(4.0);
+                }
 
                 for (var_idx, var_def) in profile.variables.iter().enumerate() {
                     // Group heading
