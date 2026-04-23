@@ -1050,7 +1050,9 @@ fn is_play_core(runtime: &HostRuntime) -> bool {
         .lock()
         .loaded_core_name
         .as_deref()
-        .is_some_and(|core| core.eq_ignore_ascii_case("play"))
+        .is_some_and(|core| {
+            core.eq_ignore_ascii_case("play") || core.eq_ignore_ascii_case("flycast")
+        })
 }
 
 fn sampled_non_black_pixels(pixels: &[u8], width: u32, height: u32) -> usize {

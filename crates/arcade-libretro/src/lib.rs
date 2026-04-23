@@ -1338,24 +1338,28 @@ impl LibretroHost {
             unsafe {
                 (api.deinit)();
             }
-            // Re-plan the video session so subsequent retry attempts dispatch to
-            // the correct backend. destroy_hw_render_session() calls end_session()
-            // which clears VideoCoordinator.session; without this, current_backend_kind()
-            // falls back to Software and HW frames are never read back.
-            {
-                let mut coordinator = self.runtime.video_coordinator.lock();
-                coordinator.plan_session(VideoSessionInfo {
-                    core_name: core_name.to_string(),
-                    requires_hw_render: requirements.requires_hw_render,
-                    requested_hw_context_type: None,
-                });
-            }
             let context = self.runtime.environment_context.lock();
             let requested_hw_render = context.requested_hw_render;
             let requested_hw_context_type = context.requested_hw_context_type;
             let last_load_error = context.last_load_error.clone();
             let last_negotiation_interface = context.last_negotiation_interface;
             drop(context);
+            // Re-plan the video session so subsequent retry attempts dispatch to
+            // the correct backend. destroy_hw_render_session() calls end_session()
+            // which clears VideoCoordinator.session; without this, current_backend_kind()
+            // falls back to Software and HW frames are never read back.
+            //
+            // Use the context type requested by the core during the failed
+            // attempt (when available) so retries can pivot to the correct
+            // backend for that core binary.
+            {
+                let mut coordinator = self.runtime.video_coordinator.lock();
+                coordinator.plan_session(VideoSessionInfo {
+                    core_name: core_name.to_string(),
+                    requires_hw_render: requirements.requires_hw_render,
+                    requested_hw_context_type,
+                });
+            }
             if let Some(reason) = last_load_error {
                 return Err(LibretroError::UnsupportedHardwareRender(reason).into());
             }
@@ -1766,18 +1770,30 @@ impl LibretroHost {
     }
 
     pub fn configure_default_controller_ports(&self, max_ports: u32) -> Result<()> {
-        let loaded_guard = self.loaded.lock();
-        let Some(loaded) = loaded_guard.as_ref() else {
-            return Ok(());
-        };
-        let Some(set_controller_port_device) = loaded.api.set_controller_port_device else {
-            return Ok(());
+        let set_controller_port_device = {
+            let loaded_guard = self.loaded.lock();
+            let Some(loaded) = loaded_guard.as_ref() else {
+                return Ok(());
+            };
+            let Some(set_controller_port_device) = loaded.api.set_controller_port_device else {
+                return Ok(());
+            };
+            set_controller_port_device
         };
 
-        let context = self.runtime.environment_context.lock();
-        for port in 0..max_ports as usize {
-            let device =
-                preferred_controller_device(context.controller_info.get(port).map(Vec::as_slice));
+        // Compute preferred devices while holding the context lock, then release
+        // all host locks before invoking the core callback to avoid re-entrant
+        // deadlocks in cores that query environment state during port updates.
+        let devices: Vec<u32> = {
+            let context = self.runtime.environment_context.lock();
+            (0..max_ports as usize)
+                .map(|port| {
+                    preferred_controller_device(context.controller_info.get(port).map(Vec::as_slice))
+                })
+                .collect()
+        };
+
+        for (port, device) in devices.into_iter().enumerate() {
             unsafe {
                 set_controller_port_device(port as u32, device);
             }

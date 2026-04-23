@@ -23,6 +23,10 @@ pub(super) fn select_backend(input: BackendPolicyInput<'_>) -> BackendSelection 
         return select_vulkan_hw_core_backend(input);
     }
 
+    if input.core_name == "flycast" {
+        return select_flycast_backend(input);
+    }
+
     if input.core_name == "play" {
         return select_play_backend(input);
     }
@@ -125,6 +129,55 @@ fn select_vulkan_hw_core_backend(input: BackendPolicyInput<'_>) -> BackendSelect
     }
 }
 
+fn select_flycast_backend(input: BackendPolicyInput<'_>) -> BackendSelection {
+    const RETRO_HW_CONTEXT_VULKAN: u32 = 6;
+
+    if let Some(requested_context_type) = input.requested_hw_context_type {
+        if requested_context_type == RETRO_HW_CONTEXT_VULKAN {
+            return BackendSelection {
+                chosen: VideoBackendKind::Vulkan,
+                fallbacks: vec![VideoBackendKind::Software],
+                allows_external_present: false,
+            };
+        }
+
+        if hw_context_type_supported(requested_context_type) {
+            if input.frontend_capabilities.supports_gl_backend() {
+                return BackendSelection {
+                    chosen: VideoBackendKind::OpenGl,
+                    fallbacks: vec![VideoBackendKind::Software],
+                    allows_external_present: false,
+                };
+            }
+            return BackendSelection {
+                chosen: VideoBackendKind::Software,
+                fallbacks: vec![],
+                allows_external_present: false,
+            };
+        }
+
+        return BackendSelection {
+            chosen: VideoBackendKind::Software,
+            fallbacks: vec![],
+            allows_external_present: false,
+        };
+    }
+
+    if input.frontend_capabilities.supports_gl_backend() {
+        return BackendSelection {
+            chosen: VideoBackendKind::OpenGl,
+            fallbacks: vec![VideoBackendKind::Software],
+            allows_external_present: false,
+        };
+    }
+
+    BackendSelection {
+        chosen: VideoBackendKind::Vulkan,
+        fallbacks: vec![VideoBackendKind::Software],
+        allows_external_present: false,
+    }
+}
+
 fn requested_context_is_gl_or_unspecified(requested_hw_context_type: Option<u32>) -> bool {
     match requested_hw_context_type {
         None => true,
@@ -220,5 +273,45 @@ mod tests {
         assert_eq!(selection.chosen, VideoBackendKind::OpenGl);
         assert!(selection.fallbacks.is_empty());
         assert!(!selection.allows_external_present);
+    }
+
+    #[test]
+    fn flycast_defaults_to_vulkan_with_software_fallback() {
+        let selection = select_backend(BackendPolicyInput {
+            core_name: "flycast",
+            requires_hw_render: false,
+            requested_hw_context_type: None,
+            frontend_capabilities: &frontend(false, true),
+        });
+
+        assert_eq!(selection.chosen, VideoBackendKind::Vulkan);
+        assert_eq!(selection.fallbacks, vec![VideoBackendKind::Software]);
+        assert!(!selection.allows_external_present);
+    }
+
+    #[test]
+    fn flycast_defaults_to_opengl_when_glow_frontend_is_available() {
+        let selection = select_backend(BackendPolicyInput {
+            core_name: "flycast",
+            requires_hw_render: false,
+            requested_hw_context_type: None,
+            frontend_capabilities: &frontend(true, true),
+        });
+
+        assert_eq!(selection.chosen, VideoBackendKind::OpenGl);
+        assert_eq!(selection.fallbacks, vec![VideoBackendKind::Software]);
+    }
+
+    #[test]
+    fn flycast_uses_opengl_when_retry_reports_gl_context() {
+        let selection = select_backend(BackendPolicyInput {
+            core_name: "flycast",
+            requires_hw_render: true,
+            requested_hw_context_type: Some(1),
+            frontend_capabilities: &frontend(true, true),
+        });
+
+        assert_eq!(selection.chosen, VideoBackendKind::OpenGl);
+        assert_eq!(selection.fallbacks, vec![VideoBackendKind::Software]);
     }
 }
