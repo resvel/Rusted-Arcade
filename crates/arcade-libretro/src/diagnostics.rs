@@ -107,6 +107,8 @@ pub(super) fn record_vulkan_source_non_black_sample(
     state.source_sample_checks = state.source_sample_checks.saturating_add(1);
     if source_non_black_seen {
         state.source_non_black_seen = true;
+        // If output recovered from all-black, clear stale black fail-fast diagnostics.
+        state.black_fail_fast_error = None;
     }
 }
 
@@ -118,6 +120,8 @@ pub(super) fn record_vulkan_swapchain_non_black_sample(
     state.swapchain_sample_checks = state.swapchain_sample_checks.saturating_add(1);
     if swapchain_non_black_seen {
         state.swapchain_non_black_seen = true;
+        // If output recovered from all-black, clear stale black fail-fast diagnostics.
+        state.black_fail_fast_error = None;
     }
 }
 
@@ -126,6 +130,8 @@ pub(super) fn record_vulkan_source_frame_size(runtime: &HostRuntime, width: u32,
     if width > 1 && height > 1 {
         state.non_tiny_source_frame_seen = true;
         state.consecutive_tiny_source_frames = 0;
+        // If the source recovered from tiny startup frames, clear stale tiny-frame diagnostics.
+        state.tiny_frame_fail_fast_error = None;
         return;
     }
 
