@@ -1,5 +1,7 @@
 use std::time::{Duration, Instant};
 
+use crate::app::AppView;
+
 const PLAY_PERF_SAMPLE_TICKS: u32 = 180;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -44,6 +46,7 @@ pub(crate) struct PlaySessionState {
     pub(crate) active_rom_id: Option<String>,
     pub(crate) active_system: Option<String>,
     pub(crate) active_core: Option<String>,
+    pub(crate) launch_view: Option<AppView>,
     pub(crate) catch_up_frame_debt: f64,
     pub(crate) perf_tick_count: u32,
     pub(crate) perf_gap_ns: u64,
@@ -79,6 +82,7 @@ impl Default for PlaySessionState {
             active_rom_id: None,
             active_system: None,
             active_core: None,
+            launch_view: None,
             catch_up_frame_debt: 0.0,
             perf_tick_count: 0,
             perf_gap_ns: 0,
@@ -99,11 +103,13 @@ impl PlaySessionState {
         rom_id: String,
         system: String,
         core: String,
+        launch_view: AppView,
     ) {
         self.status = status_message;
         self.active_rom_id = Some(rom_id);
         self.active_system = Some(system);
         self.active_core = Some(core);
+        self.launch_view = Some(launch_view);
         self.last_frame_size = None;
         self.return_pressed_at = None;
         self.return_input_held = false;
@@ -124,6 +130,7 @@ impl PlaySessionState {
         self.active_rom_id = None;
         self.active_system = None;
         self.active_core = None;
+        self.launch_view = None;
     }
 
     pub(crate) fn clear_session(&mut self) {

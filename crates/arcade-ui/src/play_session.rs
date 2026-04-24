@@ -4,7 +4,10 @@ use tracing::{info, warn};
 use arcade_services::SaveOperationError;
 use std::sync::OnceLock;
 
-use crate::{app::NativeArcadeUiApp, state::HoldAction};
+use crate::{
+    app::NativeArcadeUiApp,
+    state::{HoldAction, MenuFocusRegion},
+};
 
 impl NativeArcadeUiApp {
     const PLAY_OVERLAY_DURATION: std::time::Duration = std::time::Duration::from_millis(1800);
@@ -144,6 +147,7 @@ impl NativeArcadeUiApp {
         let mut latest_frame = None;
         let tick_started_at = std::time::Instant::now();
         let mut frames_executed = 0;
+        let mut terminal_frame_error = None;
         for _ in 0..frames_to_run {
             frames_executed += 1;
             match self.host.run_frame() {
@@ -152,13 +156,16 @@ impl NativeArcadeUiApp {
                 Err(err) => {
                     let message = err.to_string();
                     warn!("frame loop failed: {message}");
-                    if message.contains("Vulkan external-present fail-fast") {
-                        self.state.play.set_status(message);
-                        self.stop_play_session();
-                    }
+                    terminal_frame_error = Some(message);
                     break;
                 }
             }
+        }
+        if let Some(message) = terminal_frame_error {
+            self.state.play.set_status(message);
+            self.stop_play_session();
+            ctx.request_repaint();
+            return;
         }
         if let Some(frame) = latest_frame {
             self.update_frame_texture(ctx, frame);
@@ -264,14 +271,29 @@ impl NativeArcadeUiApp {
     }
 
     pub(crate) fn stop_play_session(&mut self) {
+        let return_view = self
+            .state
+            .play
+            .launch_view
+            .unwrap_or(self.state.current_view);
         self.state.play.reset_frontend_shortcut_latches();
         self.prev_keyboard_keys_down.clear();
         if let Err(err) = self.host.unload() {
             self.state.play.set_status(format!("stop failed: {err}"));
+        }
+        self.state.play.clear_session();
+        self.assets.last_frame_texture = None;
+        self.reset_play_clock();
+        if self.state.current_view != return_view {
+            self.state.current_view = return_view;
+        }
+        if let Some(source) = self.current_browse_grid_source() {
+            self.repair_grid_selection(source);
+            self.state.menu_nav.focus_region = MenuFocusRegion::Grid;
         } else {
-            self.state.play.clear_session();
-            self.assets.last_frame_texture = None;
-            self.reset_play_clock();
+            self.state
+                .menu_nav
+                .focus_top_nav_for_view(self.state.current_view);
         }
     }
 

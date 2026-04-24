@@ -63,7 +63,6 @@ pub(crate) enum ManageUiMessage {
 }
 
 impl NativeArcadeUiApp {
-    const VIEWPORT_ENTER_WAITING_FOR_UNMAXIMIZE: u8 = 1;
     const VIEWPORT_RESTORE_APPLY: u8 = 1;
     const VIEWPORT_RESTORE_VERIFY: u8 = 2;
     const VIEWPORT_RESTORE_RETRY_FRAMES: u8 = 120;
@@ -414,6 +413,10 @@ impl eframe::App for NativeArcadeUiApp {
 
         if !session_active {
             self.draw_status_bar(ctx);
+        }
+
+        if session_active != self.host.is_loaded() {
+            ctx.request_repaint();
         }
     }
 }

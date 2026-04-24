@@ -27,6 +27,10 @@ pub(super) fn default_core_variables_for(
         apply_parallel_n64_env_overrides(&mut variables);
     }
 
+    if core_name == "flycast" {
+        apply_flycast_forced(&mut variables);
+    }
+
     variables
 }
 
@@ -87,7 +91,6 @@ fn apply_mupen64plus_next_forced(
         #[cfg(not(target_os = "macos"))]
         insert_core_variable(variables, "mupen64plus-rsp-plugin", "parallel");
     }
-
 }
 
 // ---------------------------------------------------------------------------
@@ -171,6 +174,24 @@ fn apply_parallel_n64_forced(
         insert_core_variable(variables, "parallel-n64-cpucore", &cpucore_override);
     }
     insert_core_variable(variables, "parallel-n64-virefresh", "Auto");
+}
+
+// ---------------------------------------------------------------------------
+// flycast: forced (non-configurable) safety defaults
+// ---------------------------------------------------------------------------
+
+fn apply_flycast_forced(variables: &mut HashMap<String, CString>) {
+    // Current Flycast libretro documentation recommends threaded rendering and
+    // marks it as highly recommended for stable CPU/GPU scheduling.
+    insert_core_variable(variables, "flycast_threaded_rendering", "enabled");
+
+    // Keep BIOS boot disabled for normal launch flow so exiting returns to the
+    // frontend shell instead of starting in BIOS menu mode.
+    insert_core_variable(variables, "flycast_boot_to_bios", "disabled");
+
+    // Flycast docs list VGA output as the safe compatibility baseline for games
+    // that can hang in FMV/state transitions on TV modes.
+    insert_core_variable(variables, "flycast_cable_type", "VGA(RGB)");
 }
 
 // ---------------------------------------------------------------------------
@@ -519,6 +540,28 @@ mod tests {
             .expect("parallel n64 plugin override");
 
         assert_eq!(plugin.to_str().expect("utf8"), "angrylion");
+    }
+
+    #[test]
+    fn default_core_variables_apply_flycast_safety_defaults() {
+        let variables = default_core_variables_for(
+            "flycast",
+            VideoBackendKind::OpenGl,
+            &EmulationConfig::default(),
+        );
+        let threaded = variables
+            .get("flycast_threaded_rendering")
+            .expect("flycast threaded rendering default");
+        let boot_to_bios = variables
+            .get("flycast_boot_to_bios")
+            .expect("flycast boot-to-bios default");
+        let cable_type = variables
+            .get("flycast_cable_type")
+            .expect("flycast cable type default");
+
+        assert_eq!(threaded.to_str().expect("utf8"), "enabled");
+        assert_eq!(boot_to_bios.to_str().expect("utf8"), "disabled");
+        assert_eq!(cable_type.to_str().expect("utf8"), "VGA(RGB)");
     }
 
     #[cfg(target_os = "macos")]

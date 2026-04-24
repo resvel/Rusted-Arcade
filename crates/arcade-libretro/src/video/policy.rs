@@ -163,14 +163,6 @@ fn select_flycast_backend(input: BackendPolicyInput<'_>) -> BackendSelection {
         };
     }
 
-    if input.frontend_capabilities.supports_gl_backend() {
-        return BackendSelection {
-            chosen: VideoBackendKind::OpenGl,
-            fallbacks: vec![VideoBackendKind::Software],
-            allows_external_present: false,
-        };
-    }
-
     BackendSelection {
         chosen: VideoBackendKind::Vulkan,
         fallbacks: vec![VideoBackendKind::Software],
@@ -290,7 +282,7 @@ mod tests {
     }
 
     #[test]
-    fn flycast_defaults_to_opengl_when_glow_frontend_is_available() {
+    fn flycast_still_defaults_to_vulkan_when_glow_frontend_is_available() {
         let selection = select_backend(BackendPolicyInput {
             core_name: "flycast",
             requires_hw_render: false,
@@ -298,7 +290,7 @@ mod tests {
             frontend_capabilities: &frontend(true, true),
         });
 
-        assert_eq!(selection.chosen, VideoBackendKind::OpenGl);
+        assert_eq!(selection.chosen, VideoBackendKind::Vulkan);
         assert_eq!(selection.fallbacks, vec![VideoBackendKind::Software]);
     }
 

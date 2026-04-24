@@ -83,6 +83,7 @@ impl NativeArcadeUiApp {
                             plan.rom_id,
                             plan.system,
                             core_name,
+                            self.state.current_view,
                         );
                         self.assets.last_frame_texture = None;
                         self.show_play_bar();

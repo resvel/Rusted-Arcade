@@ -15,6 +15,9 @@ pub(super) fn configure_environment_context(
     backend: VideoBackendKind,
     emulation: &EmulationConfig,
 ) {
+    runtime
+        .shutdown_requested
+        .store(false, std::sync::atomic::Ordering::Relaxed);
     {
         let mut context = runtime.environment_context.lock();
         context.system_dir = StableCStringBuffer::from_path(system_root);
@@ -197,6 +200,7 @@ pub(super) unsafe fn load_api(library: &Library) -> Result<CoreApi> {
 
 pub(super) unsafe extern "C" fn retro_environment(cmd: u32, data: *mut c_void) -> bool {
     const RETRO_ENVIRONMENT_GET_CAN_DUPE: u32 = 3;
+    const RETRO_ENVIRONMENT_SHUTDOWN: u32 = 7;
     const RETRO_ENVIRONMENT_SET_PERFORMANCE_LEVEL: u32 = 8;
     const RETRO_ENVIRONMENT_GET_SYSTEM_DIRECTORY: u32 = 9;
     const RETRO_ENVIRONMENT_SET_PIXEL_FORMAT: u32 = 10;
@@ -242,6 +246,14 @@ pub(super) unsafe extern "C" fn retro_environment(cmd: u32, data: *mut c_void) -
             }
             unsafe {
                 *(data as *mut bool) = true;
+            }
+            true
+        }
+        RETRO_ENVIRONMENT_SHUTDOWN => {
+            if let Some(runtime) = active_runtime() {
+                runtime
+                    .shutdown_requested
+                    .store(true, std::sync::atomic::Ordering::Relaxed);
             }
             true
         }
@@ -362,6 +374,20 @@ pub(super) unsafe extern "C" fn retro_environment(cmd: u32, data: *mut c_void) -
                 let mut context = runtime.environment_context.lock();
                 context.requested_hw_render = true;
                 context.requested_hw_context_type = Some(callback.context_type);
+                let flycast_vulkan_policy = context
+                    .loaded_core_name
+                    .as_deref()
+                    .is_some_and(|name| name.eq_ignore_ascii_case("flycast"))
+                    && chosen_backend == VideoBackendKind::Vulkan;
+                if flycast_vulkan_policy && callback.context_type != RETRO_HW_CONTEXT_VULKAN {
+                    info!(
+                        target: "arcade_libretro::vulkan_debug",
+                        "SET_HW_RENDER: rejecting Flycast non-Vulkan context {} ({}) while policy prefers Vulkan fallback path",
+                        callback.context_type,
+                        hw_context_type_name(callback.context_type)
+                    );
+                    return false;
+                }
                 if vulkan_debug_enabled() {
                     info!(
                         target: "arcade_libretro::vulkan_debug",

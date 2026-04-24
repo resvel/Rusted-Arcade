@@ -11,6 +11,9 @@ static PLAY_DRAW_DEBUG_COUNTER: AtomicU64 = AtomicU64::new(0);
 impl NativeArcadeUiApp {
     pub(crate) fn draw_play(&mut self, ctx: &egui::Context, ui: &mut egui::Ui) {
         self.tick_play_session(ctx);
+        if !self.host.is_loaded() {
+            return;
+        }
         self.refresh_play_bar_visibility(ctx);
         self.draw_fullscreen_play(ui);
         self.draw_play_reset_bar(ctx);

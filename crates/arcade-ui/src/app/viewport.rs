@@ -45,39 +45,24 @@ impl NativeArcadeUiApp {
         if immersive_session {
             self.state.play.viewport_restore_stage = 0;
             self.state.play.viewport_restore_frames = 0;
-            if self.state.play.viewport_immersive_applied {
-                return;
-            }
-
             if self.state.play.viewport_enter_stage == 0 {
                 self.state.play.restore_maximized = viewport.maximized.unwrap_or(false);
-                if self.state.play.restore_maximized {
-                    ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(false));
-                    self.state.play.viewport_enter_stage =
-                        Self::VIEWPORT_ENTER_WAITING_FOR_UNMAXIMIZE;
-                    return;
-                }
+                self.state.play.viewport_enter_stage = 1;
             }
 
-            if self.state.play.viewport_enter_stage == Self::VIEWPORT_ENTER_WAITING_FOR_UNMAXIMIZE
-                && viewport.maximized.unwrap_or(false)
-            {
+            if !viewport.fullscreen.unwrap_or(false) {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(true));
+                self.state.play.viewport_immersive_applied = false;
                 return;
             }
 
-            ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(true));
             self.state.play.viewport_enter_stage = 0;
             self.state.play.viewport_immersive_applied = true;
             return;
         }
 
         if self.state.play.viewport_enter_stage != 0 {
-            if self.state.play.restore_maximized {
-                ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(true));
-            }
             self.state.play.viewport_enter_stage = 0;
-            self.state.play.restore_maximized = false;
-            return;
         }
 
         if external_window_session && viewport.fullscreen.unwrap_or(false) {

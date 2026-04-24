@@ -19,7 +19,7 @@ use std::num::NonZeroU32;
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Weak};
 
 use anyhow::{anyhow, Context, Result};
@@ -465,6 +465,7 @@ struct HostRuntime {
     video_coordinator: Mutex<VideoCoordinator>,
     hw_render_state: Mutex<HardwareRenderState>,
     vulkan_present_metrics: Mutex<VulkanPresentMetricsState>,
+    shutdown_requested: AtomicBool,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -914,7 +915,9 @@ fn core_library_filename_candidates(core_name: &str, emulation: &EmulationConfig
     if core_name.eq_ignore_ascii_case("mupen64plus_next")
         && emulation.n64.cpu_core_mode == N64CpuCoreMode::DynamicRecompiler
     {
-        candidates.push(String::from("mupen64plus_next_dynarec_arm64_libretro.dylib"));
+        candidates.push(String::from(
+            "mupen64plus_next_dynarec_arm64_libretro.dylib",
+        ));
     }
 
     candidates.push(default_core_library_filename(core_name));
@@ -1129,6 +1132,9 @@ impl LibretroHost {
 
         log_core_binary_load_metadata(core_name, core_path);
         let _ = self.unload();
+        self.runtime
+            .shutdown_requested
+            .store(false, Ordering::Relaxed);
         reset_vulkan_present_metrics(&self.runtime);
         let requirements = inspect_core_requirements(core_path)?;
         let selection = {
@@ -1443,6 +1449,11 @@ impl LibretroHost {
         let Some(loaded) = loaded_guard.as_ref() else {
             return Ok(None);
         };
+        if self.runtime.shutdown_requested.load(Ordering::Relaxed) {
+            return Err(anyhow!(
+                "libretro core requested frontend shutdown via RETRO_ENVIRONMENT_SHUTDOWN"
+            ));
+        }
         if let Some(error) = vulkan_present_fail_fast_error(&self.runtime) {
             // Fail-fast is terminal for the current session: once Vulkan output is
             // confirmed unhealthy, stop stepping the core and surface the explicit
@@ -1540,6 +1551,11 @@ impl LibretroHost {
         let run_started_at = std::time::Instant::now();
         unsafe {
             (loaded.api.run)();
+        }
+        if self.runtime.shutdown_requested.load(Ordering::Relaxed) {
+            return Err(anyhow!(
+                "libretro core requested frontend shutdown via RETRO_ENVIRONMENT_SHUTDOWN"
+            ));
         }
         let run_duration = run_started_at.elapsed();
         if uses_hw_render {
@@ -1788,7 +1804,9 @@ impl LibretroHost {
             let context = self.runtime.environment_context.lock();
             (0..max_ports as usize)
                 .map(|port| {
-                    preferred_controller_device(context.controller_info.get(port).map(Vec::as_slice))
+                    preferred_controller_device(
+                        context.controller_info.get(port).map(Vec::as_slice),
+                    )
                 })
                 .collect()
         };
@@ -1842,6 +1860,9 @@ impl LibretroHost {
         self.audio_output.borrow_mut().take();
         reset_callback_video_state(&self.runtime);
         self.runtime.callback_state.lock().input_state.clear();
+        self.runtime
+            .shutdown_requested
+            .store(false, Ordering::Relaxed);
         self.runtime
             .environment_context
             .lock()
@@ -2114,5 +2135,37 @@ mod tests {
         assert_eq!(frame.pixel_format, PixelFormat::Rgba8888);
 
         clear_active_runtime(&runtime);
+    }
+
+    #[test]
+    fn environment_shutdown_request_sets_runtime_shutdown_flag() {
+        *ACTIVE_RUNTIME.lock() = None;
+        let runtime = Arc::new(HostRuntime::default());
+        register_active_runtime(&runtime);
+
+        assert!(!runtime.shutdown_requested.load(Ordering::Relaxed));
+        let handled = unsafe { retro_environment(7, std::ptr::null_mut()) };
+        assert!(handled);
+        assert!(runtime.shutdown_requested.load(Ordering::Relaxed));
+
+        clear_active_runtime(&runtime);
+    }
+
+    #[test]
+    fn unload_clears_runtime_shutdown_request() {
+        let dir = tempdir().expect("tempdir");
+        let host = LibretroHost::new(
+            dir.path().join("cores"),
+            dir.path().join("bios"),
+            dir.path().join("saves"),
+            EmulationConfig::default(),
+        );
+        host.runtime
+            .shutdown_requested
+            .store(true, Ordering::Relaxed);
+
+        host.unload().expect("unload");
+
+        assert!(!host.runtime.shutdown_requested.load(Ordering::Relaxed));
     }
 }
