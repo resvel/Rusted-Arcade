@@ -27,10 +27,6 @@ pub(super) fn default_core_variables_for(
         apply_parallel_n64_env_overrides(&mut variables);
     }
 
-    if core_name == "flycast" {
-        apply_flycast_forced(&mut variables);
-    }
-
     variables
 }
 
@@ -174,24 +170,6 @@ fn apply_parallel_n64_forced(
         insert_core_variable(variables, "parallel-n64-cpucore", &cpucore_override);
     }
     insert_core_variable(variables, "parallel-n64-virefresh", "Auto");
-}
-
-// ---------------------------------------------------------------------------
-// flycast: forced (non-configurable) safety defaults
-// ---------------------------------------------------------------------------
-
-fn apply_flycast_forced(variables: &mut HashMap<String, CString>) {
-    // Current Flycast libretro documentation recommends threaded rendering and
-    // marks it as highly recommended for stable CPU/GPU scheduling.
-    insert_core_variable(variables, "flycast_threaded_rendering", "enabled");
-
-    // Keep BIOS boot disabled for normal launch flow so exiting returns to the
-    // frontend shell instead of starting in BIOS menu mode.
-    insert_core_variable(variables, "flycast_boot_to_bios", "disabled");
-
-    // Flycast docs list VGA output as the safe compatibility baseline for games
-    // that can hang in FMV/state transitions on TV modes.
-    insert_core_variable(variables, "flycast_cable_type", "VGA(RGB)");
 }
 
 // ---------------------------------------------------------------------------
@@ -543,7 +521,7 @@ mod tests {
     }
 
     #[test]
-    fn default_core_variables_apply_flycast_safety_defaults() {
+    fn default_core_variables_apply_flycast_profile_defaults() {
         let variables = default_core_variables_for(
             "flycast",
             VideoBackendKind::OpenGl,

@@ -1116,6 +1116,44 @@ fn flycast_profile() -> CoreProfile {
         system: "DREAMCAST",
         variables: vec![
             var(
+                "flycast_region",
+                "Region",
+                "System",
+                vec![opt("Default"), opt("Japan"), opt("USA"), opt("Europe")],
+            ),
+            var(
+                "flycast_language",
+                "Language",
+                "System",
+                vec![
+                    opt("Default"),
+                    opt("Japanese"),
+                    opt("English"),
+                    opt("German"),
+                    opt("French"),
+                    opt("Spanish"),
+                    opt("Italian"),
+                ],
+            ),
+            var(
+                "flycast_enable_dsp",
+                "Enable DSP",
+                "Audio",
+                vec![opt_d("enabled", "Enabled (Recommended)"), opt("disabled")],
+            ),
+            var(
+                "flycast_threaded_rendering",
+                "Threaded Rendering",
+                "Performance",
+                vec![opt_d("enabled", "Enabled (Recommended)"), opt("disabled")],
+            ),
+            var(
+                "flycast_boot_to_bios",
+                "Boot to BIOS",
+                "System",
+                vec![opt_d("disabled", "Disabled (Recommended)"), opt("enabled")],
+            ),
+            var(
                 "flycast_internal_resolution",
                 "Internal Resolution",
                 "Display",
@@ -1138,9 +1176,9 @@ fn flycast_profile() -> CoreProfile {
                 "Cable Type",
                 "Display",
                 vec![
-                    opt_d("VGA", "VGA"),
-                    opt_d("TV Composite", "Composite/AV"),
-                    opt_d("TV RGB", "TV RGB (SCART)"),
+                    opt_d("VGA(RGB)", "VGA"),
+                    opt_d("TV (Composite)", "Composite/AV"),
+                    opt_d("TV (RGB)", "TV RGB (SCART)"),
                 ],
             ),
             var(
@@ -1156,16 +1194,73 @@ fn flycast_profile() -> CoreProfile {
                 vec![opt("disabled"), opt("enabled")],
             ),
             var(
+                "flycast_alpha_sorting",
+                "Alpha Sorting",
+                "Display",
+                vec![
+                    opt_d("Per-Strip (fast, least accurate)", "Per-Strip (Fast)"),
+                    opt_d("Per-Triangle (normal)", "Per-Triangle (Normal)"),
+                    opt_d(
+                        "Per-Pixel (accurate, but slowest)",
+                        "Per-Pixel (Most Accurate)",
+                    ),
+                ],
+            ),
+            var(
+                "flycast_delay_frame_swapping",
+                "Delay Frame Swapping",
+                "Display",
+                vec![opt_d("disabled", "Disabled (Recommended)"), opt("enabled")],
+            ),
+            var(
+                "flycast_pvr2_filtering",
+                "PowerVR2 Post-Processing Filter",
+                "Display",
+                vec![opt_d("disabled", "Disabled"), opt("enabled")],
+            ),
+            var(
                 "flycast_synchronous_rendering",
                 "Synchronous Rendering",
                 "Performance",
                 vec![opt("enabled"), opt("disabled")],
             ),
             var(
+                "flycast_skip_frame",
+                "Auto Skip Frame",
+                "Performance",
+                vec![opt_d("disabled", "Disabled"), opt("enabled")],
+            ),
+            var(
+                "flycast_frame_skipping",
+                "Frame Skipping",
+                "Performance",
+                vec![
+                    opt_d("disabled", "Disabled"),
+                    opt("1"),
+                    opt("2"),
+                    opt("3"),
+                    opt("4"),
+                    opt("5"),
+                    opt("6"),
+                ],
+            ),
+            var(
+                "flycast_gdrom_fast_loading",
+                "GD-ROM Fast Loading",
+                "Performance",
+                vec![opt_d("On", "On (Faster, Less Accurate)"), opt("Off")],
+            ),
+            var(
                 "flycast_audio_buffer_size",
                 "Audio Buffer Size",
                 "Audio",
                 vec![opt("1024"), opt("2048"), opt("512")],
+            ),
+            var(
+                "flycast_per_content_vmus",
+                "Per-Game VMUs",
+                "Memory",
+                vec![opt("disabled"), opt("VMU A1"), opt("All VMUs")],
             ),
         ],
     }
