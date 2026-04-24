@@ -26,6 +26,138 @@ fn audio_profile_f64_env(name: &str, default: f64) -> f64 {
 }
 
 #[cfg(feature = "audio")]
+const PLAY_AUDIO_TARGET_LATENCY_SECS: f64 = 0.200;
+#[cfg(feature = "audio")]
+const PLAY_AUDIO_MAX_LATENCY_SECS: f64 = 0.600;
+#[cfg(feature = "audio")]
+const PLAY_AUDIO_QUEUE_CORRECTION: f64 = 0.0;
+#[cfg(feature = "audio")]
+const PLAY_AUDIO_DRIFT_LIMIT: f64 = 0.02;
+#[cfg(feature = "audio")]
+const FLYCAST_AUDIO_TARGET_LATENCY_SECS: f64 = 0.250;
+#[cfg(feature = "audio")]
+const FLYCAST_AUDIO_MAX_LATENCY_SECS: f64 = 0.700;
+#[cfg(feature = "audio")]
+const FLYCAST_AUDIO_QUEUE_CORRECTION: f64 = 0.0;
+#[cfg(feature = "audio")]
+const FLYCAST_AUDIO_DRIFT_LIMIT: f64 = 0.02;
+
+#[cfg(feature = "audio")]
+#[derive(Clone, Copy, Debug)]
+struct AudioProfile {
+    target_latency_secs: f64,
+    max_latency_secs: f64,
+    resample_queue_correction: f64,
+    resample_ratio_drift_limit: f64,
+    trim_to_target_on_overflow: bool,
+    drop_excess_silence_when_buffered: bool,
+}
+
+#[cfg(feature = "audio")]
+impl AudioProfile {
+    fn apply(self, state: &mut AudioState) {
+        state.target_latency_secs = self.target_latency_secs;
+        state.max_latency_secs = self.max_latency_secs;
+        state.resample_queue_correction = self.resample_queue_correction;
+        state.resample_ratio_drift_limit = self.resample_ratio_drift_limit;
+        state.trim_to_target_on_overflow = self.trim_to_target_on_overflow;
+        state.drop_excess_silence_when_buffered = self.drop_excess_silence_when_buffered;
+    }
+}
+
+#[cfg(feature = "audio")]
+fn default_audio_profile() -> AudioProfile {
+    AudioProfile {
+        target_latency_secs: DEFAULT_AUDIO_TARGET_LATENCY_SECS,
+        max_latency_secs: DEFAULT_AUDIO_MAX_LATENCY_SECS,
+        resample_queue_correction: DEFAULT_AUDIO_RESAMPLE_QUEUE_CORRECTION,
+        resample_ratio_drift_limit: DEFAULT_AUDIO_RESAMPLE_RATIO_DRIFT_LIMIT,
+        trim_to_target_on_overflow: true,
+        drop_excess_silence_when_buffered: false,
+    }
+}
+
+#[cfg(feature = "audio")]
+fn play_audio_profile_defaults() -> AudioProfile {
+    AudioProfile {
+        target_latency_secs: PLAY_AUDIO_TARGET_LATENCY_SECS,
+        max_latency_secs: PLAY_AUDIO_MAX_LATENCY_SECS,
+        resample_queue_correction: PLAY_AUDIO_QUEUE_CORRECTION,
+        resample_ratio_drift_limit: PLAY_AUDIO_DRIFT_LIMIT,
+        trim_to_target_on_overflow: false,
+        drop_excess_silence_when_buffered: true,
+    }
+}
+
+#[cfg(feature = "audio")]
+fn flycast_audio_profile_defaults() -> AudioProfile {
+    AudioProfile {
+        // Flycast can burst large audio batches during FMV-heavy intro/cutscene
+        // transitions; keep pitch stable and avoid aggressive trim-back-to-target.
+        target_latency_secs: FLYCAST_AUDIO_TARGET_LATENCY_SECS,
+        max_latency_secs: FLYCAST_AUDIO_MAX_LATENCY_SECS,
+        resample_queue_correction: FLYCAST_AUDIO_QUEUE_CORRECTION,
+        resample_ratio_drift_limit: FLYCAST_AUDIO_DRIFT_LIMIT,
+        trim_to_target_on_overflow: false,
+        drop_excess_silence_when_buffered: true,
+    }
+}
+
+#[cfg(feature = "audio")]
+fn audio_profile_for_core_defaults(core_name: &str) -> AudioProfile {
+    if core_name.eq_ignore_ascii_case("play") {
+        play_audio_profile_defaults()
+    } else if core_name.eq_ignore_ascii_case("flycast") {
+        flycast_audio_profile_defaults()
+    } else {
+        default_audio_profile()
+    }
+}
+
+#[cfg(feature = "audio")]
+fn apply_audio_profile_for_core(state: &mut AudioState, core_name: &str) {
+    let mut profile = audio_profile_for_core_defaults(core_name);
+
+    if core_name.eq_ignore_ascii_case("play") {
+        profile.target_latency_secs = audio_profile_f64_env(
+            "ARCADE_PLAY_AUDIO_TARGET_LATENCY_SECS",
+            profile.target_latency_secs,
+        );
+        profile.max_latency_secs = audio_profile_f64_env(
+            "ARCADE_PLAY_AUDIO_MAX_LATENCY_SECS",
+            profile.max_latency_secs,
+        );
+        profile.resample_queue_correction = audio_profile_f64_env(
+            "ARCADE_PLAY_AUDIO_QUEUE_CORRECTION",
+            profile.resample_queue_correction,
+        );
+        profile.resample_ratio_drift_limit = audio_profile_f64_env(
+            "ARCADE_PLAY_AUDIO_DRIFT_LIMIT",
+            profile.resample_ratio_drift_limit,
+        );
+    } else if core_name.eq_ignore_ascii_case("flycast") {
+        profile.target_latency_secs = audio_profile_f64_env(
+            "ARCADE_FLYCAST_AUDIO_TARGET_LATENCY_SECS",
+            profile.target_latency_secs,
+        );
+        profile.max_latency_secs = audio_profile_f64_env(
+            "ARCADE_FLYCAST_AUDIO_MAX_LATENCY_SECS",
+            profile.max_latency_secs,
+        );
+        profile.resample_queue_correction = audio_profile_f64_env(
+            "ARCADE_FLYCAST_AUDIO_QUEUE_CORRECTION",
+            profile.resample_queue_correction,
+        );
+        profile.resample_ratio_drift_limit = audio_profile_f64_env(
+            "ARCADE_FLYCAST_AUDIO_DRIFT_LIMIT",
+            profile.resample_ratio_drift_limit,
+        );
+    }
+
+    profile.apply(state);
+}
+
+#[cfg(feature = "audio")]
 pub(super) struct AudioOutput {
     pub(super) _stream: cpal::Stream,
     pub(super) sample_rate_hz: u32,
@@ -199,31 +331,7 @@ pub(super) fn set_audio_source_sample_rate(_sample_rate: f64) {}
 pub(super) fn configure_audio_profile_for_core(core_name: &str) {
     let _ = with_active_runtime(|runtime| {
         let mut state = runtime.audio_state.lock();
-        if core_name.eq_ignore_ascii_case("play") {
-            // Keep Play audio pitch-stable by default. The core can run below full speed
-            // on heavier scenes, and aggressive queue correction causes audible
-            // speed-up/slow-down artifacts.
-            state.target_latency_secs =
-                audio_profile_f64_env("ARCADE_PLAY_AUDIO_TARGET_LATENCY_SECS", 0.200);
-            state.max_latency_secs =
-                audio_profile_f64_env("ARCADE_PLAY_AUDIO_MAX_LATENCY_SECS", 0.600);
-            state.resample_queue_correction =
-                audio_profile_f64_env("ARCADE_PLAY_AUDIO_QUEUE_CORRECTION", 0.0);
-            state.resample_ratio_drift_limit =
-                audio_profile_f64_env("ARCADE_PLAY_AUDIO_DRIFT_LIMIT", 0.02);
-            // For FMV-heavy scenes, prefer continuity over aggressive latency recovery.
-            state.trim_to_target_on_overflow = false;
-            // Prevent long runs of silent samples from filling the queue and forcing
-            // later non-silent data to be dropped.
-            state.drop_excess_silence_when_buffered = true;
-        } else {
-            state.target_latency_secs = DEFAULT_AUDIO_TARGET_LATENCY_SECS;
-            state.max_latency_secs = DEFAULT_AUDIO_MAX_LATENCY_SECS;
-            state.resample_queue_correction = DEFAULT_AUDIO_RESAMPLE_QUEUE_CORRECTION;
-            state.resample_ratio_drift_limit = DEFAULT_AUDIO_RESAMPLE_RATIO_DRIFT_LIMIT;
-            state.trim_to_target_on_overflow = true;
-            state.drop_excess_silence_when_buffered = false;
-        }
+        apply_audio_profile_for_core(&mut state, core_name);
         if audio_debug_enabled() {
             info!(
                 target: "arcade_libretro::audio",
@@ -242,6 +350,51 @@ pub(super) fn configure_audio_profile_for_core(core_name: &str) {
 
 #[cfg(not(feature = "audio"))]
 pub(super) fn configure_audio_profile_for_core(_core_name: &str) {}
+
+#[cfg(all(test, feature = "audio"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn flycast_profile_defaults_are_pitch_stable() {
+        let profile = audio_profile_for_core_defaults("flycast");
+        assert!(!profile.trim_to_target_on_overflow);
+        assert!(profile.drop_excess_silence_when_buffered);
+        assert_eq!(
+            profile.resample_queue_correction,
+            FLYCAST_AUDIO_QUEUE_CORRECTION
+        );
+        assert_eq!(
+            profile.resample_ratio_drift_limit,
+            FLYCAST_AUDIO_DRIFT_LIMIT
+        );
+        assert_eq!(
+            profile.target_latency_secs,
+            FLYCAST_AUDIO_TARGET_LATENCY_SECS
+        );
+        assert_eq!(profile.max_latency_secs, FLYCAST_AUDIO_MAX_LATENCY_SECS);
+    }
+
+    #[test]
+    fn default_profile_keeps_low_latency_behavior_for_other_cores() {
+        let profile = audio_profile_for_core_defaults("pcsx_rearmed");
+        assert!(profile.trim_to_target_on_overflow);
+        assert!(!profile.drop_excess_silence_when_buffered);
+        assert_eq!(
+            profile.resample_queue_correction,
+            DEFAULT_AUDIO_RESAMPLE_QUEUE_CORRECTION
+        );
+        assert_eq!(
+            profile.resample_ratio_drift_limit,
+            DEFAULT_AUDIO_RESAMPLE_RATIO_DRIFT_LIMIT
+        );
+        assert_eq!(
+            profile.target_latency_secs,
+            DEFAULT_AUDIO_TARGET_LATENCY_SECS
+        );
+        assert_eq!(profile.max_latency_secs, DEFAULT_AUDIO_MAX_LATENCY_SECS);
+    }
+}
 
 #[cfg(feature = "audio")]
 pub(super) fn set_audio_output_sample_rate(sample_rate: f64) {
