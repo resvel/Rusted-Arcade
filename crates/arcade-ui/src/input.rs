@@ -2475,7 +2475,9 @@ fn action_to_retro_binding(
     action: &str,
     primary_stick_preference: Option<N64PrimaryStick>,
 ) -> Option<RetroActionBinding> {
-    if normalize_system_name(system) == "N64" {
+    let normalized_system = normalize_system_name(system);
+
+    if normalized_system == "N64" {
         let primary_stick = primary_stick_preference.unwrap_or(N64PrimaryStick::Left);
         let c_stick_index = match primary_stick {
             N64PrimaryStick::Left => RETRO_DEVICE_INDEX_ANALOG_RIGHT,
@@ -2524,6 +2526,25 @@ fn action_to_retro_binding(
                 axis_id: RETRO_DEVICE_ID_ANALOG_Y,
                 value: 1.0,
             }),
+            _ => None,
+        };
+    }
+
+    if normalized_system == "SATURN" {
+        return match action {
+            "Up" => Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_UP)),
+            "Down" => Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_DOWN)),
+            "Left" => Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_LEFT)),
+            "Right" => Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_RIGHT)),
+            "A" => Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_B)),
+            "B" => Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_A)),
+            "X" => Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_Y)),
+            "Y" => Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_X)),
+            "C" => Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_L2)),
+            "Z" => Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_R2)),
+            "L" => Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_L)),
+            "R" => Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_R)),
+            "Start" => Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_START)),
             _ => None,
         };
     }
@@ -4480,6 +4501,46 @@ mod tests {
         assert_eq!(
             action_to_retro_binding("PCECD", "Select", None),
             Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_SELECT))
+        );
+    }
+
+    #[test]
+    fn saturn_action_bindings_map_to_expected_retropad_ids() {
+        assert_eq!(
+            action_to_retro_binding("SATURN", "A", None),
+            Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_B))
+        );
+        assert_eq!(
+            action_to_retro_binding("SATURN", "B", None),
+            Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_A))
+        );
+        assert_eq!(
+            action_to_retro_binding("SATURN", "X", None),
+            Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_Y))
+        );
+        assert_eq!(
+            action_to_retro_binding("SATURN", "Y", None),
+            Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_X))
+        );
+        assert_eq!(
+            action_to_retro_binding("SATURN", "C", None),
+            Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_L2))
+        );
+        assert_eq!(
+            action_to_retro_binding("SATURN", "Z", None),
+            Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_R2))
+        );
+        assert_eq!(
+            action_to_retro_binding("SATURN", "L", None),
+            Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_L))
+        );
+        assert_eq!(
+            action_to_retro_binding("SATURN", "R", None),
+            Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_R))
+        );
+        assert_eq!(
+            action_to_retro_binding("SATURN", "Start", None),
+            Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_START))
         );
     }
 

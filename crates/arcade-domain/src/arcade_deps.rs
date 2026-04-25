@@ -27,6 +27,7 @@ pub const PCECD_ACCEPTED_BIOS_FILES: &[&str] = &[
     "syscard1.pce",
     "gexpress.pce",
 ];
+pub const SATURN_ACCEPTED_BIOS_FILES: &[&str] = &["sega_101.bin", "mpr-17933.bin"];
 
 const NEOGEO_BIOS_REQUIRED_ENTRIES: &[&str] = &["sp-s3.sp1", "sm1.sm1", "sfix.sfix", "000-lo.lo"];
 
@@ -160,6 +161,13 @@ pub fn get_pcecd_bios_directory(rom_root: &Path, bios_root: Option<&Path>) -> Pa
         .unwrap_or_else(|| rom_root.join("pcecd"))
 }
 
+pub fn get_saturn_bios_directory(rom_root: &Path, bios_root: Option<&Path>) -> PathBuf {
+    candidate_saturn_bios_directories(rom_root, bios_root)
+        .into_iter()
+        .find(|path| path.exists())
+        .unwrap_or_else(|| rom_root.join("saturn"))
+}
+
 pub fn find_pcecd_bios_file(rom_root: &Path, bios_root: Option<&Path>) -> Option<PathBuf> {
     let accepted = PCECD_ACCEPTED_BIOS_FILES
         .iter()
@@ -167,6 +175,34 @@ pub fn find_pcecd_bios_file(rom_root: &Path, bios_root: Option<&Path>) -> Option
         .collect::<Vec<_>>();
 
     for dir in candidate_pcecd_bios_directories(rom_root, bios_root) {
+        let entries = match fs::read_dir(&dir) {
+            Ok(entries) => entries,
+            Err(_) => continue,
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_file() {
+                continue;
+            }
+            let Some(file_name) = path.file_name().and_then(|value| value.to_str()) else {
+                continue;
+            };
+            if accepted.contains(&file_name.to_ascii_lowercase()) {
+                return Some(path);
+            }
+        }
+    }
+
+    None
+}
+
+pub fn find_saturn_bios_file(rom_root: &Path, bios_root: Option<&Path>) -> Option<PathBuf> {
+    let accepted = SATURN_ACCEPTED_BIOS_FILES
+        .iter()
+        .map(|name| name.to_ascii_lowercase())
+        .collect::<Vec<_>>();
+
+    for dir in candidate_saturn_bios_directories(rom_root, bios_root) {
         let entries = match fs::read_dir(&dir) {
             Ok(entries) => entries,
             Err(_) => continue,
@@ -203,6 +239,24 @@ fn candidate_pcecd_bios_directories(rom_root: &Path, bios_root: Option<&Path>) -
     }
     push_unique(rom_root.join("pcecd"));
     push_unique(rom_root.join("roms").join("pcecd"));
+    candidates
+}
+
+fn candidate_saturn_bios_directories(rom_root: &Path, bios_root: Option<&Path>) -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+    let mut push_unique = |path: PathBuf| {
+        if !candidates.iter().any(|existing| existing == &path) {
+            candidates.push(path);
+        }
+    };
+
+    if let Some(bios_root) = bios_root {
+        push_unique(bios_root.join("saturn"));
+        push_unique(bios_root.to_path_buf());
+        push_unique(bios_root.join("roms").join("saturn"));
+    }
+    push_unique(rom_root.join("saturn"));
+    push_unique(rom_root.join("roms").join("saturn"));
     candidates
 }
 
@@ -480,6 +534,35 @@ mod tests {
         fs::create_dir_all(&bios_root).unwrap();
 
         let preferred = get_pcecd_bios_directory(&rom_root, Some(&bios_root));
+        assert_eq!(preferred, bios_root);
+    }
+
+    #[test]
+    fn saturn_bios_lookup_supports_case_insensitive_filenames() {
+        let dir = tempdir().unwrap();
+        let rom_root = dir.path().join("roms");
+        let bios_root = dir.path().join("bios");
+        fs::create_dir_all(rom_root.join("saturn")).unwrap();
+        fs::create_dir_all(bios_root.join("saturn")).unwrap();
+        fs::write(bios_root.join("saturn").join("MPR-17933.BIN"), b"bios").unwrap();
+
+        let found = find_saturn_bios_file(&rom_root, Some(&bios_root));
+        assert!(found.is_some());
+        assert_eq!(
+            found.unwrap().file_name().and_then(|f| f.to_str()),
+            Some("MPR-17933.BIN")
+        );
+    }
+
+    #[test]
+    fn saturn_bios_lookup_prefers_existing_candidate_directory() {
+        let dir = tempdir().unwrap();
+        let rom_root = dir.path().join("roms");
+        let bios_root = dir.path().join("bios");
+        fs::create_dir_all(rom_root.join("saturn")).unwrap();
+        fs::create_dir_all(&bios_root).unwrap();
+
+        let preferred = get_saturn_bios_directory(&rom_root, Some(&bios_root));
         assert_eq!(preferred, bios_root);
     }
 }

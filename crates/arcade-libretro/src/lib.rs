@@ -588,6 +588,7 @@ fn is_audio_master_pacing_core_name(core_name: &str) -> bool {
     core_name.eq_ignore_ascii_case("flycast")
         || core_name.eq_ignore_ascii_case("mupen64plus_next")
         || core_name.eq_ignore_ascii_case("mednafen_psx_hw")
+        || core_name.eq_ignore_ascii_case("mednafen_saturn")
         || core_name.eq_ignore_ascii_case("pcsx2")
         || core_name.eq_ignore_ascii_case("play")
 }
@@ -984,6 +985,8 @@ fn core_library_filename_candidates(core_name: &str, emulation: &EmulationConfig
     candidates.push(default_core_library_filename(core_name));
     if core_name.eq_ignore_ascii_case("mednafen_pce_fast") {
         candidates.push(String::from("beetle_pce_fast_libretro.dylib"));
+    } else if core_name.eq_ignore_ascii_case("mednafen_saturn") {
+        candidates.push(String::from("beetle_saturn_libretro.dylib"));
     }
     candidates
 }
@@ -2160,6 +2163,31 @@ mod tests {
     }
 
     #[test]
+    fn resolve_core_candidates_include_saturn_compatibility_fallback_name() {
+        let dir = tempdir().expect("tempdir");
+        let host = LibretroHost::new(
+            dir.path().join("cores"),
+            dir.path().join("bios"),
+            dir.path().join("saves"),
+            EmulationConfig::default(),
+        );
+
+        let candidates = host.resolve_core_candidates("mednafen_saturn");
+        let file_names = candidates
+            .iter()
+            .map(|path| path.file_name().and_then(|f| f.to_str()).unwrap_or(""))
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            file_names,
+            vec![
+                "mednafen_saturn_libretro.dylib",
+                "beetle_saturn_libretro.dylib"
+            ]
+        );
+    }
+
+    #[test]
     fn resolve_core_path_prefers_existing_candidate() {
         let dir = tempdir().expect("tempdir");
         let core_root = dir.path().join("cores");
@@ -2347,6 +2375,7 @@ mod tests {
         assert!(is_audio_master_pacing_core_name("flycast"));
         assert!(is_audio_master_pacing_core_name("mupen64plus_next"));
         assert!(is_audio_master_pacing_core_name("mednafen_psx_hw"));
+        assert!(is_audio_master_pacing_core_name("mednafen_saturn"));
         assert!(is_audio_master_pacing_core_name("pcsx2"));
         assert!(is_audio_master_pacing_core_name("play"));
         assert!(!is_audio_master_pacing_core_name("fceumm"));

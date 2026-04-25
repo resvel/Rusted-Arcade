@@ -14,7 +14,8 @@ use arcade_domain::{
     LocalCoverRelinkRunOptions, ManageOperationKind, ManageOperationSummary, ManageProgressEvent,
     ManageRomStatus, ManageScope, ManagementConfig, N64CpuCoreMode, N64PrimaryStick, PathsConfig,
     RomCard, RomQuery, SaveLimits, SaveSlotData, SaveSlotSummary, SavedGamepadMappingSummary,
-    StoredGamepadMapping, PCECD_ACCEPTED_BIOS_FILES, SYSTEM_DEFAULT_MAPPING_KEY,
+    StoredGamepadMapping, PCECD_ACCEPTED_BIOS_FILES, SATURN_ACCEPTED_BIOS_FILES,
+    SYSTEM_DEFAULT_MAPPING_KEY,
 };
 use sha1::{Digest, Sha1};
 use tracing::warn;
@@ -313,6 +314,7 @@ impl NativeServices {
             psx: input.psx_platform_ids,
             ps2: input.ps2_platform_ids,
             dreamcast: input.dreamcast_platform_ids,
+            saturn: input.saturn_platform_ids,
             dos: input.dos_platform_ids,
             pcecd: input.pcecd_platform_ids,
         };
@@ -727,22 +729,38 @@ fn native_arcade_core_note(system: &str, core_override: Option<&str>) -> Option<
 }
 
 fn ensure_system_launch_dependencies(system: &str, paths: &PathsConfig) -> Result<()> {
-    if !system.eq_ignore_ascii_case("PCECD") {
-        return Ok(());
+    if system.eq_ignore_ascii_case("PCECD") {
+        if arcade_domain::find_pcecd_bios_file(&paths.rom_root, Some(&paths.bios_root)).is_some() {
+            return Ok(());
+        }
+
+        let preferred_bios_dir =
+            arcade_domain::get_pcecd_bios_directory(&paths.rom_root, Some(&paths.bios_root));
+        let accepted = PCECD_ACCEPTED_BIOS_FILES.join(", ");
+        return Err(anyhow!(
+            "Missing PCE-CD BIOS in {}. Add one of: {}",
+            preferred_bios_dir.display(),
+            accepted
+        ));
     }
 
-    if arcade_domain::find_pcecd_bios_file(&paths.rom_root, Some(&paths.bios_root)).is_some() {
-        return Ok(());
+    if system.eq_ignore_ascii_case("SATURN") {
+        if arcade_domain::find_saturn_bios_file(&paths.rom_root, Some(&paths.bios_root)).is_some()
+        {
+            return Ok(());
+        }
+
+        let preferred_bios_dir =
+            arcade_domain::get_saturn_bios_directory(&paths.rom_root, Some(&paths.bios_root));
+        let accepted = SATURN_ACCEPTED_BIOS_FILES.join(", ");
+        return Err(anyhow!(
+            "Missing Saturn BIOS in {}. Add one of: {}",
+            preferred_bios_dir.display(),
+            accepted
+        ));
     }
 
-    let preferred_bios_dir =
-        arcade_domain::get_pcecd_bios_directory(&paths.rom_root, Some(&paths.bios_root));
-    let accepted = PCECD_ACCEPTED_BIOS_FILES.join(", ");
-    Err(anyhow!(
-        "Missing PCE-CD BIOS in {}. Add one of: {}",
-        preferred_bios_dir.display(),
-        accepted
-    ))
+    Ok(())
 }
 
 fn normalize_system(system: &str) -> String {
@@ -763,7 +781,7 @@ struct ScanTarget {
     max_bytes: Option<u64>,
 }
 
-const SCAN_TARGETS: [ScanTarget; 13] = [
+const SCAN_TARGETS: [ScanTarget; 14] = [
     ScanTarget {
         folder: "nes",
         system: "NES",
@@ -839,6 +857,13 @@ const SCAN_TARGETS: [ScanTarget; 13] = [
         system: "DREAMCAST",
         emulator_core: "dreamcast",
         extensions: &[".cdi", ".gdi", ".chd"],
+        max_bytes: None,
+    },
+    ScanTarget {
+        folder: "saturn",
+        system: "SATURN",
+        emulator_core: "saturn",
+        extensions: &[".chd", ".cue", ".ccd", ".toc", ".m3u"],
         max_bytes: None,
     },
     ScanTarget {
@@ -1358,6 +1383,7 @@ fn platform_ids_for_system<'a>(config: &'a CoverScrapingConfig, system: &str) ->
         "PSX" => &config.platform_ids.psx,
         "PS2" => &config.platform_ids.ps2,
         "DREAMCAST" => &config.platform_ids.dreamcast,
+        "SATURN" => &config.platform_ids.saturn,
         "DOS" => &config.platform_ids.dos,
         "PCECD" => &config.platform_ids.pcecd,
         _ => &[],
@@ -1597,6 +1623,15 @@ mod tests {
         .expect("insert pcecd rom");
     }
 
+    fn seed_saturn_rom(config: &AppConfig) {
+        let conn = rusqlite::Connection::open(&config.paths.db_path).expect("open sqlite");
+        conn.execute(
+            "INSERT INTO \"Rom\" (id, system, slug, title, filePath, updatedAt)\n             VALUES ('rom-saturn-1', 'SATURN', 'dracula-x-saturn', 'Dracula X (Saturn)', 'roms/saturn/Dracula X (Saturn).chd', ?1)",
+            params![Utc::now().format("%Y-%m-%d %H:%M:%S").to_string()],
+        )
+        .expect("insert saturn rom");
+    }
+
     #[test]
     fn prepare_launch_allows_local_launches() {
         let tmp = TempDir::new().expect("tempdir");
@@ -1685,6 +1720,58 @@ mod tests {
             .expect("launch should pass with bios");
         assert_eq!(plan.system, "PCECD");
         assert_eq!(plan.resolved_core_name, "mednafen_pce_fast");
+    }
+
+    #[test]
+    fn prepare_launch_blocks_saturn_without_bios() {
+        let tmp = TempDir::new().expect("tempdir");
+        let config = make_config(&tmp);
+        let db = Database::open(&config).expect("open db");
+        seed_saturn_rom(&config);
+        let rom_path = config
+            .paths
+            .rom_root
+            .join("saturn")
+            .join("Dracula X (Saturn).chd");
+        std::fs::create_dir_all(rom_path.parent().expect("rom parent")).expect("create rom dir");
+        std::fs::write(&rom_path, b"rom").expect("write rom");
+
+        let services = NativeServices::bootstrap(config.clone(), config_path_for(&config), db)
+            .expect("bootstrap");
+
+        let err = services
+            .prepare_launch("rom-saturn-1")
+            .expect_err("launch should fail without bios");
+        assert!(err.to_string().contains("Missing Saturn BIOS"));
+        assert!(err.to_string().contains("sega_101.bin"));
+    }
+
+    #[test]
+    fn prepare_launch_allows_saturn_with_bios() {
+        let tmp = TempDir::new().expect("tempdir");
+        let config = make_config(&tmp);
+        let db = Database::open(&config).expect("open db");
+        seed_saturn_rom(&config);
+        let rom_path = config
+            .paths
+            .rom_root
+            .join("saturn")
+            .join("Dracula X (Saturn).chd");
+        std::fs::create_dir_all(rom_path.parent().expect("rom parent")).expect("create rom dir");
+        std::fs::write(&rom_path, b"rom").expect("write rom");
+
+        let bios_dir = config.paths.bios_root.join("saturn");
+        std::fs::create_dir_all(&bios_dir).expect("create bios dir");
+        std::fs::write(bios_dir.join("SEGA_101.BIN"), b"bios").expect("write bios");
+
+        let services = NativeServices::bootstrap(config.clone(), config_path_for(&config), db)
+            .expect("bootstrap");
+
+        let plan = services
+            .prepare_launch("rom-saturn-1")
+            .expect("launch should pass with bios");
+        assert_eq!(plan.system, "SATURN");
+        assert_eq!(plan.resolved_core_name, "mednafen_saturn");
     }
 
     #[test]
@@ -1864,6 +1951,7 @@ mod tests {
                 psx_platform_ids: vec![10],
                 ps2_platform_ids: vec![11],
                 dreamcast_platform_ids: vec![16],
+                saturn_platform_ids: vec![22],
                 dos_platform_ids: vec![1],
                 pcecd_platform_ids: vec![4955],
             })
@@ -1881,6 +1969,7 @@ mod tests {
             saved.management.cover_scraping.platform_ids.pcecd,
             vec![4955]
         );
+        assert_eq!(saved.management.cover_scraping.platform_ids.saturn, vec![22]);
     }
 
     #[test]
@@ -2239,6 +2328,37 @@ mod tests {
             .expect("scanned rom");
         assert_eq!(scanned.rom.system, "PCECD");
         assert_eq!(scanned.rom.file_path, "pcecd/Dracula X.chd");
+    }
+
+    #[test]
+    fn smart_scan_imports_saturn_chd_images() {
+        let tmp = TempDir::new().expect("tempdir");
+        let config = make_config(&tmp);
+        let db = Database::open(&config).expect("open db");
+        let rom_path = config.paths.rom_root.join("saturn").join("Dracula X (Saturn).chd");
+        std::fs::create_dir_all(rom_path.parent().expect("rom parent")).expect("create rom dir");
+        std::fs::write(&rom_path, b"saturn-rom").expect("write rom");
+        let services = NativeServices::bootstrap(config.clone(), config_path_for(&config), db)
+            .expect("bootstrap");
+
+        let summary = services
+            .smart_scan_roms(&ManageScope::System(String::from("SATURN")), |_| {})
+            .expect("smart scan");
+        assert_eq!(summary.kind, Some(ManageOperationKind::SmartScan));
+        assert_eq!(summary.created, 1);
+
+        let cards = services
+            .list_roms(&RomQuery {
+                system: Some(String::from("SATURN")),
+                ..RomQuery::default()
+            })
+            .expect("list roms");
+        let scanned = cards
+            .iter()
+            .find(|card| card.rom.slug == "dracula-x-saturn")
+            .expect("scanned rom");
+        assert_eq!(scanned.rom.system, "SATURN");
+        assert_eq!(scanned.rom.file_path, "saturn/Dracula X (Saturn).chd");
     }
 
     #[test]

@@ -61,6 +61,7 @@ pub struct CoverScrapeSettingsInput {
     pub psx_platform_ids: Vec<u32>,
     pub ps2_platform_ids: Vec<u32>,
     pub dreamcast_platform_ids: Vec<u32>,
+    pub saturn_platform_ids: Vec<u32>,
     pub dos_platform_ids: Vec<u32>,
     pub pcecd_platform_ids: Vec<u32>,
 }
@@ -452,6 +453,27 @@ const DOS_GAMEPAD_ACTIONS: [&str; 17] = [
     RESET_ACTION,
 ];
 
+const SATURN_GAMEPAD_ACTIONS: [&str; 18] = [
+    "Up",
+    "Down",
+    "Left",
+    "Right",
+    "A",
+    "B",
+    "C",
+    "X",
+    "Y",
+    "Z",
+    "L",
+    "R",
+    "Start",
+    EXIT_ACTION,
+    QUICK_SAVE_ACTION,
+    QUICK_LOAD_ACTION,
+    NEXT_SAVE_SLOT_ACTION,
+    RESET_ACTION,
+];
+
 const PCECD_GAMEPAD_ACTIONS: [&str; 13] = [
     "Up",
     "Down",
@@ -480,6 +502,7 @@ pub fn supported_gamepad_actions(system: &str) -> &'static [&'static str] {
         "PSX" => &PSX_GAMEPAD_ACTIONS,
         "PS2" => &PS2_GAMEPAD_ACTIONS,
         "DREAMCAST" => &DREAMCAST_GAMEPAD_ACTIONS,
+        "SATURN" => &SATURN_GAMEPAD_ACTIONS,
         "PCECD" => &PCECD_GAMEPAD_ACTIONS,
         "DOS" => &DOS_GAMEPAD_ACTIONS,
         _ => &NES_GAMEPAD_ACTIONS,
@@ -621,6 +644,17 @@ pub fn default_gamepad_mapping_for_system(system: &str) -> StoredGamepadMapping 
             insert_button(&mut actions, "B", CanonicalButton::East);
             insert_button(&mut actions, "X", CanonicalButton::West);
             insert_button(&mut actions, "Y", CanonicalButton::North);
+            insert_button(&mut actions, "Start", CanonicalButton::Start);
+        }
+        "SATURN" => {
+            insert_button(&mut actions, "A", CanonicalButton::South);
+            insert_button(&mut actions, "B", CanonicalButton::East);
+            insert_axis(&mut actions, "C", CanonicalAxis::LeftTrigger, 1);
+            insert_button(&mut actions, "X", CanonicalButton::West);
+            insert_button(&mut actions, "Y", CanonicalButton::North);
+            insert_axis(&mut actions, "Z", CanonicalAxis::RightTrigger, 1);
+            insert_button(&mut actions, "L", CanonicalButton::LeftShoulder);
+            insert_button(&mut actions, "R", CanonicalButton::RightShoulder);
             insert_button(&mut actions, "Start", CanonicalButton::Start);
         }
         "PCECD" => {
@@ -808,6 +842,65 @@ mod tests {
         assert!(actions.contains(&"Run"));
         assert!(actions.contains(&"Select"));
         assert!(actions.contains(&EXIT_ACTION));
+    }
+
+    #[test]
+    fn saturn_actions_include_six_face_buttons_and_shoulders() {
+        let actions = supported_gamepad_actions("SATURN");
+        assert!(actions.contains(&"A"));
+        assert!(actions.contains(&"B"));
+        assert!(actions.contains(&"C"));
+        assert!(actions.contains(&"X"));
+        assert!(actions.contains(&"Y"));
+        assert!(actions.contains(&"Z"));
+        assert!(actions.contains(&"L"));
+        assert!(actions.contains(&"R"));
+        assert!(actions.contains(&"Start"));
+        assert!(actions.contains(&EXIT_ACTION));
+    }
+
+    #[test]
+    fn saturn_default_mapping_assigns_faces_shoulders_and_triggers() {
+        let mapping = default_gamepad_mapping_for_system("SATURN");
+
+        assert_eq!(
+            mapping.actions.get("A"),
+            Some(&Some(MappingEntry::Button {
+                button: CanonicalButton::South,
+            }))
+        );
+        assert_eq!(
+            mapping.actions.get("B"),
+            Some(&Some(MappingEntry::Button {
+                button: CanonicalButton::East,
+            }))
+        );
+        assert_eq!(
+            mapping.actions.get("C"),
+            Some(&Some(MappingEntry::Axis {
+                axis: CanonicalAxis::LeftTrigger,
+                direction: 1,
+            }))
+        );
+        assert_eq!(
+            mapping.actions.get("Z"),
+            Some(&Some(MappingEntry::Axis {
+                axis: CanonicalAxis::RightTrigger,
+                direction: 1,
+            }))
+        );
+        assert_eq!(
+            mapping.actions.get("L"),
+            Some(&Some(MappingEntry::Button {
+                button: CanonicalButton::LeftShoulder,
+            }))
+        );
+        assert_eq!(
+            mapping.actions.get("R"),
+            Some(&Some(MappingEntry::Button {
+                button: CanonicalButton::RightShoulder,
+            }))
+        );
     }
 
     #[test]

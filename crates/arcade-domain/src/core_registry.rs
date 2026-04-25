@@ -79,6 +79,7 @@ pub fn core_profiles() -> Vec<CoreProfile> {
         pcsx2_profile(),
         play_profile(),
         flycast_profile(),
+        mednafen_saturn_profile(),
         mednafen_pce_fast_profile(),
         dosbox_pure_profile(),
     ]
@@ -1268,6 +1269,99 @@ fn flycast_profile() -> CoreProfile {
 }
 
 // ---------------------------------------------------------------------------
+// Sega Saturn: mednafen_saturn
+// ---------------------------------------------------------------------------
+
+fn mednafen_saturn_profile() -> CoreProfile {
+    CoreProfile {
+        core_name: "mednafen_saturn",
+        display_name: "Saturn",
+        system: "SATURN",
+        variables: vec![
+            var(
+                "beetle_saturn_region",
+                "System Region",
+                "System",
+                vec![
+                    opt("Auto Detect"),
+                    opt("Asia (NTSC)"),
+                    opt("Asia (PAL)"),
+                    opt("Latin America"),
+                ],
+            ),
+            var(
+                "beetle_saturn_autortc_lang",
+                "BIOS Language",
+                "System",
+                vec![
+                    opt("english"),
+                    opt("japanese"),
+                    opt("german"),
+                    opt("french"),
+                    opt("spanish"),
+                    opt("italian"),
+                ],
+            ),
+            var(
+                "beetle_saturn_autortc",
+                "RTC Automatic Set",
+                "System",
+                vec![opt("disabled"), opt("enabled")],
+            ),
+            var(
+                "beetle_saturn_cdimagecache",
+                "CD Image Cache",
+                "System",
+                vec![opt("disabled"), opt("enabled")],
+            ),
+            var(
+                "beetle_saturn_cart",
+                "Cartridge",
+                "Cartridge / Memory Card",
+                vec![
+                    opt("auto"),
+                    opt("backup"),
+                    opt("extram1"),
+                    opt("extram4"),
+                    opt("kof95"),
+                    opt("ultraman"),
+                ],
+            ),
+            var(
+                "beetle_saturn_horizontal_overscan",
+                "Horizontal Overscan Mask",
+                "Video",
+                vec![opt("disabled"), opt("enabled")],
+            ),
+            var(
+                "beetle_saturn_horizontal_blend",
+                "Horizontal Blend",
+                "Video",
+                vec![opt("disabled"), opt("enabled")],
+            ),
+            var(
+                "beetle_saturn_deinterlacer",
+                "Deinterlace Method",
+                "Video",
+                vec![opt("disabled"), opt("weave")],
+            ),
+            var(
+                "beetle_saturn_multitap_port1",
+                "6Player Adaptor on Port 1",
+                "Input",
+                vec![opt("disabled"), opt("enabled")],
+            ),
+            var(
+                "beetle_saturn_multitap_port2",
+                "6Player Adaptor on Port 2",
+                "Input",
+                vec![opt("disabled"), opt("enabled")],
+            ),
+        ],
+    }
+}
+
+// ---------------------------------------------------------------------------
 // PCE-CD: mednafen_pce_fast
 // ---------------------------------------------------------------------------
 
@@ -1487,6 +1581,7 @@ mod tests {
         assert!(core_profile_for("mupen64plus_next").is_some());
         assert!(core_profile_for("fceumm").is_some());
         assert!(core_profile_for("play").is_some());
+        assert!(core_profile_for("mednafen_saturn").is_some());
         assert!(core_profile_for("mednafen_pce_fast").is_some());
         assert!(core_profile_for("nonexistent").is_none());
     }

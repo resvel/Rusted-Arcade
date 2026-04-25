@@ -571,6 +571,8 @@ pub struct CoverScrapePlatformIds {
     pub ps2: Vec<u32>,
     #[serde(default)]
     pub dreamcast: Vec<u32>,
+    #[serde(default = "default_cover_scrape_platform_saturn")]
+    pub saturn: Vec<u32>,
     #[serde(default)]
     pub dos: Vec<u32>,
     #[serde(default = "default_cover_scrape_platform_pcecd")]
@@ -590,6 +592,7 @@ impl Default for CoverScrapePlatformIds {
             psx: Vec::new(),
             ps2: Vec::new(),
             dreamcast: Vec::new(),
+            saturn: default_cover_scrape_platform_saturn(),
             dos: Vec::new(),
             pcecd: default_cover_scrape_platform_pcecd(),
         }
@@ -629,6 +632,10 @@ fn default_cover_scrape_platform_arcade() -> Vec<u32> {
 
 fn default_cover_scrape_platform_pcecd() -> Vec<u32> {
     vec![4955]
+}
+
+fn default_cover_scrape_platform_saturn() -> Vec<u32> {
+    vec![22]
 }
 
 impl Default for AppConfig {
@@ -915,6 +922,10 @@ mod tests {
         assert_eq!(
             config.management.cover_scraping.platform_ids.pcecd,
             vec![4955]
+        );
+        assert_eq!(
+            config.management.cover_scraping.platform_ids.saturn,
+            vec![22]
         );
     }
 

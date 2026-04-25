@@ -9,6 +9,7 @@ pub const SUPPORTED_SYSTEMS: &[&str] = &[
     "PSX",
     "PS2",
     "DREAMCAST",
+    "SATURN",
     "PCECD",
     "DOS",
 ];
@@ -24,6 +25,7 @@ pub const SUPPORTED_CORES: &[&str] = &[
     "mame2003",
     "mame2003_plus",
     "mednafen_psx_hw",
+    "mednafen_saturn",
     "mednafen_pce_fast",
     "pcsx2",
     "play",
@@ -51,6 +53,7 @@ fn default_core(system: &str) -> &'static str {
         "PSX" => "mednafen_psx_hw",
         "PS2" => default_ps2_core(),
         "DREAMCAST" => "flycast",
+        "SATURN" => "mednafen_saturn",
         "PCECD" => "mednafen_pce_fast",
         "DOS" => "dosbox_pure",
         _ => "fceumm",
@@ -69,6 +72,7 @@ fn allowlist(system: &str) -> &'static [&'static str] {
         "PSX" => &["mednafen_psx_hw"],
         "PS2" => &["pcsx2", "play"],
         "DREAMCAST" => &["flycast"],
+        "SATURN" => &["mednafen_saturn"],
         "PCECD" => &["mednafen_pce_fast"],
         "DOS" => &["dosbox_pure"],
         _ => &["fceumm"],
@@ -172,7 +176,9 @@ mod tests {
         assert_eq!(resolve_core("NES", None), "fceumm");
         assert_eq!(resolve_core("SNES", None), "snes9x");
         assert_eq!(resolve_core("ARCADE", None), "fbneo");
+        assert_eq!(resolve_core("SATURN", None), "mednafen_saturn");
         assert_eq!(resolve_core("PCECD", None), "mednafen_pce_fast");
+        assert_eq!(supported_cores_for_system("SATURN"), &["mednafen_saturn"]);
     }
 
     #[test]

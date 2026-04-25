@@ -3,7 +3,7 @@ use egui::Color32;
 
 use crate::app::NativeArcadeUiApp;
 
-pub(crate) const SYSTEM_FILTERS: [&str; 13] = [
+pub(crate) const SYSTEM_FILTERS: [&str; 14] = [
     "ALL",
     "NES",
     "SNES",
@@ -15,6 +15,7 @@ pub(crate) const SYSTEM_FILTERS: [&str; 13] = [
     "PSX",
     "PS2",
     "DREAMCAST",
+    "SATURN",
     "PCECD",
     "DOS",
 ];
@@ -163,6 +164,17 @@ impl NativeArcadeUiApp {
                 border: Color32::from_rgba_premultiplied(255, 255, 255, 34),
                 text: Color32::from_rgb(250, 244, 236),
                 text_muted: Color32::from_rgb(194, 180, 166),
+            },
+            "SATURN" => ThemePalette {
+                bg_top: Color32::from_rgb(21, 22, 40),
+                bg_bottom: Color32::from_rgb(9, 10, 20),
+                accent: Color32::from_rgb(148, 162, 194),
+                accent_soft: Color32::from_rgba_premultiplied(148, 162, 194, 62),
+                panel: Color32::from_rgba_premultiplied(14, 16, 30, 230),
+                panel_alt: Color32::from_rgba_premultiplied(24, 26, 44, 235),
+                border: Color32::from_rgba_premultiplied(255, 255, 255, 32),
+                text: Color32::from_rgb(238, 242, 250),
+                text_muted: Color32::from_rgb(170, 178, 197),
             },
             "PCECD" => ThemePalette {
                 bg_top: Color32::from_rgb(24, 20, 36),
