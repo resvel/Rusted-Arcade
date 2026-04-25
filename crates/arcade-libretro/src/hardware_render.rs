@@ -77,6 +77,13 @@ pub(super) fn reset_callback_video_state(runtime: &HostRuntime) {
     audio_state.resample_phase = 0.0;
     audio_state.current_frame = None;
     audio_state.next_frame = None;
+    audio_state.produced_samples_total = 0;
+    audio_state.consumed_samples_total = 0;
+    audio_state.trimmed_samples_total = 0;
+    audio_state.produced_samples_window = 0;
+    audio_state.consumed_samples_window = 0;
+    audio_state.trimmed_samples_window = 0;
+    audio_state.flow_window_started_at = None;
 }
 
 pub(super) fn hardware_render_frontend_available() -> bool {
