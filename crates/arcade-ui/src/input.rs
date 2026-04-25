@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -26,11 +26,26 @@ use crate::{
 #[cfg(feature = "gamepad")]
 use gilrs::{ev::Code, Axis, Button, GamepadId};
 #[cfg(feature = "gamepad")]
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 const RETRO_DEVICE_JOYPAD: u32 = 1;
 const RETRO_DEVICE_ANALOG: u32 = 5;
 const RETRO_BUTTON_PRESSED_VALUE: i16 = i16::MAX;
+const RETROK_ESCAPE: u32 = 27;
+const RETROK_BACKSPACE: u32 = 8;
+const RETROK_TAB: u32 = 9;
+const RETROK_RETURN: u32 = 13;
+const RETROK_SPACE: u32 = 32;
+const RETROK_DELETE: u32 = 127;
+const RETROK_UP: u32 = 273;
+const RETROK_DOWN: u32 = 274;
+const RETROK_RIGHT: u32 = 275;
+const RETROK_LEFT: u32 = 276;
+const RETROK_INSERT: u32 = 277;
+const RETROK_HOME: u32 = 278;
+const RETROK_END: u32 = 279;
+const RETROK_PAGEUP: u32 = 280;
+const RETROK_PAGEDOWN: u32 = 281;
 
 const RETRO_DEVICE_ID_JOYPAD_B: u32 = 0;
 const RETRO_DEVICE_ID_JOYPAD_Y: u32 = 1;
@@ -207,15 +222,20 @@ impl NativeArcadeUiApp {
         } else {
             None
         };
-        let keyboard_state = self.capture_keyboard_state(ctx);
-        let mut shortcuts = self.apply_system_mapping_to_host(
-            0,
-            &keyboard_state,
-            &system,
-            None,
-            primary_stick_preference,
-        );
-        shortcuts.return_pressed |= ctx.input(|i| i.key_down(egui::Key::Escape));
+        let mut shortcuts = FrontendShortcutState::default();
+        if !prefer_retro_keyboard_passthrough(&system, self.host.has_keyboard_callback()) {
+            let keyboard_state = self.capture_keyboard_state(ctx);
+            shortcuts = self.apply_system_mapping_to_host(
+                0,
+                &keyboard_state,
+                &system,
+                None,
+                primary_stick_preference,
+            );
+        }
+        self.sync_retro_keyboard_state(ctx);
+        let escape_pressed = ctx.input(|i| i.key_down(egui::Key::Escape));
+        shortcuts.return_pressed |= escape_pressed;
 
         #[cfg(feature = "gamepad")]
         for capture in self.capture_gamepad_state(&system) {
@@ -230,6 +250,21 @@ impl NativeArcadeUiApp {
         }
 
         self.apply_frontend_shortcuts(shortcuts);
+    }
+
+    fn sync_retro_keyboard_state(&mut self, ctx: &egui::Context) {
+        if !self.host.has_keyboard_callback() {
+            self.prev_keyboard_keys_down.clear();
+            return;
+        }
+
+        let (events, keys_down) = ctx.input(|i| (i.events.clone(), i.keys_down.clone()));
+        let retro_events =
+            collect_retro_keyboard_events(&mut self.prev_keyboard_keys_down, &events, &keys_down);
+        for (down, keycode, character, key_modifiers) in retro_events {
+            self.host
+                .send_keyboard_event(down, keycode, character, key_modifiers);
+        }
     }
 
     pub(crate) fn tick_frontend_navigation(&mut self, ctx: &egui::Context) {
@@ -3070,6 +3105,221 @@ fn set_analog(app: &NativeArcadeUiApp, port: u32, index: u32, axis_id: u32, valu
         .set_input_state(port, RETRO_DEVICE_ANALOG, index, axis_id, scaled);
 }
 
+fn egui_key_to_retro_keycode(key: egui::Key) -> Option<u32> {
+    Some(match key {
+        egui::Key::ArrowDown => RETROK_DOWN,
+        egui::Key::ArrowLeft => RETROK_LEFT,
+        egui::Key::ArrowRight => RETROK_RIGHT,
+        egui::Key::ArrowUp => RETROK_UP,
+        egui::Key::Escape => RETROK_ESCAPE,
+        egui::Key::Tab => RETROK_TAB,
+        egui::Key::Backspace => RETROK_BACKSPACE,
+        egui::Key::Enter => RETROK_RETURN,
+        egui::Key::Space => RETROK_SPACE,
+        egui::Key::Insert => RETROK_INSERT,
+        egui::Key::Delete => RETROK_DELETE,
+        egui::Key::Home => RETROK_HOME,
+        egui::Key::End => RETROK_END,
+        egui::Key::PageUp => RETROK_PAGEUP,
+        egui::Key::PageDown => RETROK_PAGEDOWN,
+        egui::Key::Colon => b':' as u32,
+        egui::Key::Comma => b',' as u32,
+        egui::Key::Backslash => b'\\' as u32,
+        egui::Key::Slash => b'/' as u32,
+        egui::Key::Pipe => b'|' as u32,
+        egui::Key::Questionmark => b'?' as u32,
+        egui::Key::Exclamationmark => b'!' as u32,
+        egui::Key::OpenBracket => b'[' as u32,
+        egui::Key::CloseBracket => b']' as u32,
+        egui::Key::OpenCurlyBracket => b'{' as u32,
+        egui::Key::CloseCurlyBracket => b'}' as u32,
+        egui::Key::Backtick => b'`' as u32,
+        egui::Key::Minus => b'-' as u32,
+        egui::Key::Period => b'.' as u32,
+        egui::Key::Plus => b'+' as u32,
+        egui::Key::Equals => b'=' as u32,
+        egui::Key::Semicolon => b';' as u32,
+        egui::Key::Quote => b'\'' as u32,
+        egui::Key::Num0 => b'0' as u32,
+        egui::Key::Num1 => b'1' as u32,
+        egui::Key::Num2 => b'2' as u32,
+        egui::Key::Num3 => b'3' as u32,
+        egui::Key::Num4 => b'4' as u32,
+        egui::Key::Num5 => b'5' as u32,
+        egui::Key::Num6 => b'6' as u32,
+        egui::Key::Num7 => b'7' as u32,
+        egui::Key::Num8 => b'8' as u32,
+        egui::Key::Num9 => b'9' as u32,
+        egui::Key::A => b'a' as u32,
+        egui::Key::B => b'b' as u32,
+        egui::Key::C => b'c' as u32,
+        egui::Key::D => b'd' as u32,
+        egui::Key::E => b'e' as u32,
+        egui::Key::F => b'f' as u32,
+        egui::Key::G => b'g' as u32,
+        egui::Key::H => b'h' as u32,
+        egui::Key::I => b'i' as u32,
+        egui::Key::J => b'j' as u32,
+        egui::Key::K => b'k' as u32,
+        egui::Key::L => b'l' as u32,
+        egui::Key::M => b'm' as u32,
+        egui::Key::N => b'n' as u32,
+        egui::Key::O => b'o' as u32,
+        egui::Key::P => b'p' as u32,
+        egui::Key::Q => b'q' as u32,
+        egui::Key::R => b'r' as u32,
+        egui::Key::S => b's' as u32,
+        egui::Key::T => b't' as u32,
+        egui::Key::U => b'u' as u32,
+        egui::Key::V => b'v' as u32,
+        egui::Key::W => b'w' as u32,
+        egui::Key::X => b'x' as u32,
+        egui::Key::Y => b'y' as u32,
+        egui::Key::Z => b'z' as u32,
+        egui::Key::F1 => 282,
+        egui::Key::F2 => 283,
+        egui::Key::F3 => 284,
+        egui::Key::F4 => 285,
+        egui::Key::F5 => 286,
+        egui::Key::F6 => 287,
+        egui::Key::F7 => 288,
+        egui::Key::F8 => 289,
+        egui::Key::F9 => 290,
+        egui::Key::F10 => 291,
+        egui::Key::F11 => 292,
+        egui::Key::F12 => 293,
+        egui::Key::F13 => 294,
+        egui::Key::F14 => 295,
+        egui::Key::F15 => 296,
+        egui::Key::Copy
+        | egui::Key::Cut
+        | egui::Key::Paste
+        | egui::Key::F16
+        | egui::Key::F17
+        | egui::Key::F18
+        | egui::Key::F19
+        | egui::Key::F20
+        | egui::Key::F21
+        | egui::Key::F22
+        | egui::Key::F23
+        | egui::Key::F24
+        | egui::Key::F25
+        | egui::Key::F26
+        | egui::Key::F27
+        | egui::Key::F28
+        | egui::Key::F29
+        | egui::Key::F30
+        | egui::Key::F31
+        | egui::Key::F32
+        | egui::Key::F33
+        | egui::Key::F34
+        | egui::Key::F35 => return None,
+    })
+}
+
+fn retro_character_for_keycode(keycode: u32) -> u32 {
+    if (32..=126).contains(&keycode) {
+        keycode
+    } else {
+        0
+    }
+}
+
+#[cfg(test)]
+fn update_keyboard_key_state(
+    keys_down: &mut HashSet<u32>,
+    keycode: u32,
+    is_pressed: bool,
+) -> Option<bool> {
+    let was_pressed = keys_down.contains(&keycode);
+    if was_pressed == is_pressed {
+        return None;
+    }
+
+    if is_pressed {
+        keys_down.insert(keycode);
+    } else {
+        keys_down.remove(&keycode);
+    }
+
+    Some(is_pressed)
+}
+
+fn key_event_to_retro_keycode(key: egui::Key, physical_key: Option<egui::Key>) -> Option<u32> {
+    egui_key_to_retro_keycode(key).or_else(|| physical_key.and_then(egui_key_to_retro_keycode))
+}
+
+fn collect_retro_keyboard_events(
+    prev_keys_down: &mut HashSet<u32>,
+    events: &[egui::Event],
+    keys_down: &HashSet<egui::Key>,
+) -> Vec<(bool, u32, u32, u16)> {
+    let mut retro_events = Vec::new();
+
+    // Consume per-frame key events in order so quick taps (press+release within one frame)
+    // still reach cores that depend on keyboard edge events.
+    for event in events {
+        let egui::Event::Key {
+            key,
+            physical_key,
+            pressed,
+            modifiers: _,
+            ..
+        } = event
+        else {
+            continue;
+        };
+
+        let Some(keycode) = key_event_to_retro_keycode(*key, *physical_key) else {
+            continue;
+        };
+        if *pressed {
+            prev_keys_down.insert(keycode);
+        } else {
+            prev_keys_down.remove(&keycode);
+        }
+        let character = if *pressed {
+            retro_character_for_keycode(keycode)
+        } else {
+            0
+        };
+        retro_events.push((*pressed, keycode, character, 0));
+    }
+
+    // Safety net: reconcile with aggregate key state in case the backend misses a key event.
+    let current_keys_down = keys_down
+        .iter()
+        .copied()
+        .filter_map(egui_key_to_retro_keycode)
+        .collect::<HashSet<_>>();
+
+    let missing_presses = current_keys_down
+        .iter()
+        .copied()
+        .filter(|keycode| !prev_keys_down.contains(keycode))
+        .collect::<Vec<_>>();
+    for keycode in missing_presses {
+        prev_keys_down.insert(keycode);
+        retro_events.push((true, keycode, retro_character_for_keycode(keycode), 0));
+    }
+
+    let missing_releases = prev_keys_down
+        .iter()
+        .copied()
+        .filter(|keycode| !current_keys_down.contains(keycode))
+        .collect::<Vec<_>>();
+    for keycode in missing_releases {
+        prev_keys_down.remove(&keycode);
+        retro_events.push((false, keycode, 0, 0));
+    }
+
+    retro_events
+}
+
+fn prefer_retro_keyboard_passthrough(system: &str, has_keyboard_callback: bool) -> bool {
+    has_keyboard_callback && system.eq_ignore_ascii_case("DOS")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3127,6 +3377,103 @@ mod tests {
     fn valued_button_active_keeps_trigger_value_fallback_behavior() {
         assert!(valued_button_active(Some(false), Some(0.20), 0.10));
         assert!(!valued_button_active(Some(false), Some(0.05), 0.10));
+    }
+
+    #[test]
+    fn keyboard_key_state_emits_transitions_on_press_and_release() {
+        let mut keys = HashSet::new();
+
+        assert_eq!(
+            update_keyboard_key_state(&mut keys, RETROK_ESCAPE, true),
+            Some(true)
+        );
+        assert!(keys.contains(&RETROK_ESCAPE));
+        assert_eq!(
+            update_keyboard_key_state(&mut keys, RETROK_ESCAPE, true),
+            None
+        );
+        assert_eq!(
+            update_keyboard_key_state(&mut keys, RETROK_ESCAPE, false),
+            Some(false)
+        );
+        assert!(!keys.contains(&RETROK_ESCAPE));
+        assert_eq!(
+            update_keyboard_key_state(&mut keys, RETROK_ESCAPE, false),
+            None
+        );
+    }
+
+    #[test]
+    fn key_events_capture_quick_tap_within_single_frame() {
+        let mut previous = HashSet::new();
+        let events = vec![
+            egui::Event::Key {
+                key: egui::Key::ArrowUp,
+                physical_key: Some(egui::Key::ArrowUp),
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            },
+            egui::Event::Key {
+                key: egui::Key::ArrowUp,
+                physical_key: Some(egui::Key::ArrowUp),
+                pressed: false,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            },
+        ];
+        let keys_down = HashSet::new();
+
+        let retro = collect_retro_keyboard_events(&mut previous, &events, &keys_down);
+
+        assert_eq!(retro.len(), 2);
+        assert_eq!(retro[0].0, true);
+        assert_eq!(retro[0].1, RETROK_UP);
+        assert_eq!(retro[1].0, false);
+        assert_eq!(retro[1].1, RETROK_UP);
+        assert!(previous.is_empty());
+    }
+
+    #[test]
+    fn key_state_reconciliation_recovers_missing_press_event() {
+        let mut previous = HashSet::new();
+        let events = vec![];
+        let keys_down = [egui::Key::ArrowLeft].into_iter().collect::<HashSet<_>>();
+
+        let retro = collect_retro_keyboard_events(&mut previous, &events, &keys_down);
+
+        assert_eq!(retro.len(), 1);
+        assert_eq!(retro[0].0, true);
+        assert_eq!(retro[0].1, RETROK_LEFT);
+        assert!(previous.contains(&RETROK_LEFT));
+    }
+
+    #[test]
+    fn egui_arrow_keys_map_to_libretro_arrows() {
+        assert_eq!(
+            egui_key_to_retro_keycode(egui::Key::ArrowUp),
+            Some(RETROK_UP)
+        );
+        assert_eq!(
+            egui_key_to_retro_keycode(egui::Key::ArrowDown),
+            Some(RETROK_DOWN)
+        );
+        assert_eq!(
+            egui_key_to_retro_keycode(egui::Key::ArrowLeft),
+            Some(RETROK_LEFT)
+        );
+        assert_eq!(
+            egui_key_to_retro_keycode(egui::Key::ArrowRight),
+            Some(RETROK_RIGHT)
+        );
+    }
+
+    #[test]
+    fn dos_prefers_keyboard_passthrough_when_callback_exists() {
+        assert!(prefer_retro_keyboard_passthrough("DOS", true));
+        assert!(prefer_retro_keyboard_passthrough("dos", true));
+        assert!(!prefer_retro_keyboard_passthrough("DOS", false));
+        assert!(!prefer_retro_keyboard_passthrough("SNES", true));
     }
 
     #[test]
