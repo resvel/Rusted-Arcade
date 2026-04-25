@@ -560,7 +560,7 @@ impl NativeArcadeUiApp {
             "GB" => "/system-logos/Game_Boy_logo.png",
             "GBA" => "/system-logos/Game_Boy_Advance_logo.png",
             "N64" => "/system-logos/n64logo.png",
-            "ARCADE" => "/system-logos-web/SNK_logo.svg",
+            "ARCADE" => "/system-logos/SNK_logo.png",
             "PSX" => "/system-logos/Playstation_logo_colour.png",
             "PS2" => "/system-logos/PlayStation_2_logo.png",
             "DREAMCAST" => "/system-logos/Dreamcast_logo_Japan.png",
