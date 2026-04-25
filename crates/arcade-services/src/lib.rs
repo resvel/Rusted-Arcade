@@ -117,7 +117,7 @@ impl NativeServices {
         if !rom_path.exists() {
             return Err(anyhow!("ROM file not found: {}", rom_path.display()));
         }
-        ensure_system_launch_dependencies(&rom.system, &config.paths)?;
+        ensure_system_launch_dependencies(&rom.system, &rom_path, &config.paths)?;
         let configured_core = config
             .preferred_core_for_system(&rom.system)
             .or(rom.emulator_core.as_deref());
@@ -728,8 +728,24 @@ fn native_arcade_core_note(system: &str, core_override: Option<&str>) -> Option<
     }
 }
 
-fn ensure_system_launch_dependencies(system: &str, paths: &PathsConfig) -> Result<()> {
+fn is_pcecd_disc_content(rom_path: &Path) -> bool {
+    let extension = rom_path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| ext.to_ascii_lowercase());
+    matches!(
+        extension.as_deref(),
+        Some("chd") | Some("cue") | Some("ccd") | Some("toc") | Some("m3u")
+    )
+}
+
+fn ensure_system_launch_dependencies(system: &str, rom_path: &Path, paths: &PathsConfig) -> Result<()> {
     if system.eq_ignore_ascii_case("PCECD") {
+        // HuCard-side content does not require a CD system card BIOS.
+        if !is_pcecd_disc_content(rom_path) {
+            return Ok(());
+        }
+
         if arcade_domain::find_pcecd_bios_file(&paths.rom_root, Some(&paths.bios_root)).is_some() {
             return Ok(());
         }
@@ -870,7 +886,7 @@ const SCAN_TARGETS: [ScanTarget; 14] = [
         folder: "pcecd",
         system: "PCECD",
         emulator_core: "pcecd",
-        extensions: &[".chd", ".cue", ".ccd", ".toc", ".m3u"],
+        extensions: &[".chd", ".cue", ".ccd", ".toc", ".m3u", ".pce", ".sgx"],
         max_bytes: None,
     },
     ScanTarget {
@@ -1623,6 +1639,15 @@ mod tests {
         .expect("insert pcecd rom");
     }
 
+    fn seed_pcecd_hucard_rom(config: &AppConfig) {
+        let conn = rusqlite::Connection::open(&config.paths.db_path).expect("open sqlite");
+        conn.execute(
+            "INSERT INTO \"Rom\" (id, system, slug, title, filePath, updatedAt)\n             VALUES ('rom-pcecd-hucard-1', 'PCECD', 'bonk', 'Bonk', 'roms/pcecd/Bonk.pce', ?1)",
+            params![Utc::now().format("%Y-%m-%d %H:%M:%S").to_string()],
+        )
+        .expect("insert pcecd hucard rom");
+    }
+
     fn seed_saturn_rom(config: &AppConfig) {
         let conn = rusqlite::Connection::open(&config.paths.db_path).expect("open sqlite");
         conn.execute(
@@ -1718,6 +1743,26 @@ mod tests {
         let plan = services
             .prepare_launch("rom-pcecd-1")
             .expect("launch should pass with bios");
+        assert_eq!(plan.system, "PCECD");
+        assert_eq!(plan.resolved_core_name, "mednafen_pce_fast");
+    }
+
+    #[test]
+    fn prepare_launch_allows_pcecd_hucard_without_bios() {
+        let tmp = TempDir::new().expect("tempdir");
+        let config = make_config(&tmp);
+        let db = Database::open(&config).expect("open db");
+        seed_pcecd_hucard_rom(&config);
+        let rom_path = config.paths.rom_root.join("pcecd").join("Bonk.pce");
+        std::fs::create_dir_all(rom_path.parent().expect("rom parent")).expect("create rom dir");
+        std::fs::write(&rom_path, b"hucard-rom").expect("write rom");
+
+        let services = NativeServices::bootstrap(config.clone(), config_path_for(&config), db)
+            .expect("bootstrap");
+
+        let plan = services
+            .prepare_launch("rom-pcecd-hucard-1")
+            .expect("hucard launch should pass without bios");
         assert_eq!(plan.system, "PCECD");
         assert_eq!(plan.resolved_core_name, "mednafen_pce_fast");
     }
@@ -2328,6 +2373,37 @@ mod tests {
             .expect("scanned rom");
         assert_eq!(scanned.rom.system, "PCECD");
         assert_eq!(scanned.rom.file_path, "pcecd/Dracula X.chd");
+    }
+
+    #[test]
+    fn smart_scan_imports_pcecd_hucard_images() {
+        let tmp = TempDir::new().expect("tempdir");
+        let config = make_config(&tmp);
+        let db = Database::open(&config).expect("open db");
+        let rom_path = config.paths.rom_root.join("pcecd").join("Bonk.pce");
+        std::fs::create_dir_all(rom_path.parent().expect("rom parent")).expect("create rom dir");
+        std::fs::write(&rom_path, b"pce-hucard-rom").expect("write rom");
+        let services = NativeServices::bootstrap(config.clone(), config_path_for(&config), db)
+            .expect("bootstrap");
+
+        let summary = services
+            .smart_scan_roms(&ManageScope::System(String::from("PCECD")), |_| {})
+            .expect("smart scan");
+        assert_eq!(summary.kind, Some(ManageOperationKind::SmartScan));
+        assert_eq!(summary.created, 1);
+
+        let cards = services
+            .list_roms(&RomQuery {
+                system: Some(String::from("PCECD")),
+                ..RomQuery::default()
+            })
+            .expect("list roms");
+        let scanned = cards
+            .iter()
+            .find(|card| card.rom.slug == "bonk")
+            .expect("scanned rom");
+        assert_eq!(scanned.rom.system, "PCECD");
+        assert_eq!(scanned.rom.file_path, "pcecd/Bonk.pce");
     }
 
     #[test]

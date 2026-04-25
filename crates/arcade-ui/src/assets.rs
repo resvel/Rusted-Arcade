@@ -564,6 +564,8 @@ impl NativeArcadeUiApp {
             "PSX" => "/system-logos/Playstation_logo_colour.png",
             "PS2" => "/system-logos/PlayStation_2_logo.png",
             "DREAMCAST" => "/system-logos/Dreamcast_logo_Japan.png",
+            "SATURN" => "/system-logos/SegaSaturn_logo.png",
+            "PCECD" => "/system-logos/pcecd_logo.png",
             "DOS" => "/system-logos/Msdos.png",
             _ => "/system-logos/arcadesystem.png",
         };
@@ -598,6 +600,8 @@ impl NativeArcadeUiApp {
             "PSX" => egui::vec2(62.0, 18.0),
             "PS2" => egui::vec2(56.0, 18.0),
             "DREAMCAST" => egui::vec2(64.0, 18.0),
+            "SATURN" => egui::vec2(66.0, 18.0),
+            "PCECD" => egui::vec2(60.0, 18.0),
             "DOS" => egui::vec2(42.0, 18.0),
             _ => egui::vec2(42.0, 15.0),
         }
