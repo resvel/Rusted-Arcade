@@ -55,6 +55,10 @@ pub struct NativeArcadeUiApp {
     pub(crate) next_gamepad_connect_seq: u64,
     /// RETROK keycodes that were down last frame (for keyboard callback event generation).
     pub(crate) prev_keyboard_keys_down: HashSet<u32>,
+    /// DOS passthrough: keys pressed since last emulated frame boundary.
+    pub(crate) retro_keys_pressed_since_frame: HashSet<u32>,
+    /// Deferred key releases for DOS keyboard passthrough; flushed after at least one core frame.
+    pub(crate) pending_retro_key_releases: Vec<(u32, u16)>,
 }
 
 pub(crate) enum ManageUiMessage {
@@ -233,6 +237,8 @@ impl NativeArcadeUiApp {
             #[cfg(feature = "gamepad")]
             next_gamepad_connect_seq: 0,
             prev_keyboard_keys_down: HashSet::new(),
+            retro_keys_pressed_since_frame: HashSet::new(),
+            pending_retro_key_releases: Vec::new(),
         };
 
         #[cfg(feature = "gamepad")]

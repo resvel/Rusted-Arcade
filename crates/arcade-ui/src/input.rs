@@ -29,8 +29,13 @@ use gilrs::{ev::Code, Axis, Button, GamepadId};
 use std::collections::HashMap;
 
 const RETRO_DEVICE_JOYPAD: u32 = 1;
+const RETRO_DEVICE_KEYBOARD: u32 = 3;
 const RETRO_DEVICE_ANALOG: u32 = 5;
 const RETRO_BUTTON_PRESSED_VALUE: i16 = i16::MAX;
+const RETROKMOD_SHIFT: u16 = 0x01;
+const RETROKMOD_CTRL: u16 = 0x02;
+const RETROKMOD_ALT: u16 = 0x04;
+const RETROKMOD_META: u16 = 0x08;
 const RETROK_ESCAPE: u32 = 27;
 const RETROK_BACKSPACE: u32 = 8;
 const RETROK_TAB: u32 = 9;
@@ -46,6 +51,9 @@ const RETROK_HOME: u32 = 278;
 const RETROK_END: u32 = 279;
 const RETROK_PAGEUP: u32 = 280;
 const RETROK_PAGEDOWN: u32 = 281;
+const RETROK_LSHIFT: u32 = 304;
+const RETROK_LCTRL: u32 = 306;
+const RETROK_LALT: u32 = 308;
 
 const RETRO_DEVICE_ID_JOYPAD_B: u32 = 0;
 const RETRO_DEVICE_ID_JOYPAD_Y: u32 = 1;
@@ -217,13 +225,15 @@ impl NativeArcadeUiApp {
         self.host.clear_input_state();
 
         let system = self.active_input_system();
+        let dos_keyboard_passthrough =
+            prefer_retro_keyboard_passthrough(&system, self.host.has_keyboard_callback());
         let primary_stick_preference = if system_uses_primary_stick_selector(&system) {
             Some(self.services.n64_primary_stick())
         } else {
             None
         };
         let mut shortcuts = FrontendShortcutState::default();
-        if !prefer_retro_keyboard_passthrough(&system, self.host.has_keyboard_callback()) {
+        if !dos_keyboard_passthrough {
             let keyboard_state = self.capture_keyboard_state(ctx);
             shortcuts = self.apply_system_mapping_to_host(
                 0,
@@ -233,7 +243,7 @@ impl NativeArcadeUiApp {
                 primary_stick_preference,
             );
         }
-        self.sync_retro_keyboard_state(ctx);
+        self.sync_retro_keyboard_state(ctx, dos_keyboard_passthrough);
         let escape_pressed = ctx.input(|i| i.key_down(egui::Key::Escape));
         shortcuts.return_pressed |= escape_pressed;
 
@@ -252,18 +262,57 @@ impl NativeArcadeUiApp {
         self.apply_frontend_shortcuts(shortcuts);
     }
 
-    fn sync_retro_keyboard_state(&mut self, ctx: &egui::Context) {
+    fn sync_retro_keyboard_state(&mut self, ctx: &egui::Context, defer_tap_releases: bool) {
         if !self.host.has_keyboard_callback() {
             self.prev_keyboard_keys_down.clear();
+            self.retro_keys_pressed_since_frame.clear();
+            self.pending_retro_key_releases.clear();
             return;
         }
 
-        let (events, keys_down) = ctx.input(|i| (i.events.clone(), i.keys_down.clone()));
-        let retro_events =
-            collect_retro_keyboard_events(&mut self.prev_keyboard_keys_down, &events, &keys_down);
-        for (down, keycode, character, key_modifiers) in retro_events {
+        let (events, keys_down, current_modifiers) =
+            ctx.input(|i| (i.events.clone(), i.keys_down.clone(), i.modifiers));
+        let retro_events = collect_retro_keyboard_events(
+            &mut self.prev_keyboard_keys_down,
+            &mut self.retro_keys_pressed_since_frame,
+            &events,
+            &keys_down,
+            current_modifiers,
+            defer_tap_releases,
+            !defer_tap_releases,
+        );
+        for (down, keycode, character, key_modifiers) in retro_events.immediate_events {
             self.host
                 .send_keyboard_event(down, keycode, character, key_modifiers);
+        }
+        self.pending_retro_key_releases
+            .extend(retro_events.deferred_releases);
+
+        if defer_tap_releases {
+            for keycode in collect_retro_keyboard_polled_keys(&keys_down, current_modifiers) {
+                self.host
+                    .set_input_state(0, RETRO_DEVICE_KEYBOARD, 0, keycode, 1);
+            }
+        }
+    }
+
+    pub(crate) fn mark_retro_keyboard_frame_advanced(&mut self) {
+        self.retro_keys_pressed_since_frame.clear();
+    }
+
+    pub(crate) fn flush_deferred_retro_keyboard_releases(&mut self) {
+        if self.pending_retro_key_releases.is_empty() {
+            return;
+        }
+        if !self.host.has_keyboard_callback() {
+            self.pending_retro_key_releases.clear();
+            return;
+        }
+
+        let deferred = std::mem::take(&mut self.pending_retro_key_releases);
+        for (keycode, key_modifiers) in deferred {
+            self.host
+                .send_keyboard_event(false, keycode, 0, key_modifiers);
         }
     }
 
@@ -3105,6 +3154,14 @@ fn set_analog(app: &NativeArcadeUiApp, port: u32, index: u32, axis_id: u32, valu
         .set_input_state(port, RETRO_DEVICE_ANALOG, index, axis_id, scaled);
 }
 
+type RetroKeyboardEvent = (bool, u32, u32, u16);
+
+#[derive(Default)]
+struct RetroKeyboardEventBatch {
+    immediate_events: Vec<RetroKeyboardEvent>,
+    deferred_releases: Vec<(u32, u16)>,
+}
+
 fn egui_key_to_retro_keycode(key: egui::Key) -> Option<u32> {
     Some(match key {
         egui::Key::ArrowDown => RETROK_DOWN,
@@ -3249,21 +3306,63 @@ fn key_event_to_retro_keycode(key: egui::Key, physical_key: Option<egui::Key>) -
     egui_key_to_retro_keycode(key).or_else(|| physical_key.and_then(egui_key_to_retro_keycode))
 }
 
+fn retro_key_modifiers_from_egui(modifiers: egui::Modifiers) -> u16 {
+    let mut bits = 0u16;
+    if modifiers.shift {
+        bits |= RETROKMOD_SHIFT;
+    }
+    if modifiers.ctrl {
+        bits |= RETROKMOD_CTRL;
+    }
+    if modifiers.alt {
+        bits |= RETROKMOD_ALT;
+    }
+    if modifiers.mac_cmd {
+        bits |= RETROKMOD_META;
+    }
+    bits
+}
+
+fn collect_retro_keyboard_polled_keys(
+    keys_down: &HashSet<egui::Key>,
+    modifiers: egui::Modifiers,
+) -> HashSet<u32> {
+    let mut keys = keys_down
+        .iter()
+        .copied()
+        .filter_map(egui_key_to_retro_keycode)
+        .collect::<HashSet<_>>();
+    if modifiers.shift {
+        keys.insert(RETROK_LSHIFT);
+    }
+    if modifiers.ctrl {
+        keys.insert(RETROK_LCTRL);
+    }
+    if modifiers.alt {
+        keys.insert(RETROK_LALT);
+    }
+    keys
+}
+
 fn collect_retro_keyboard_events(
     prev_keys_down: &mut HashSet<u32>,
+    pressed_since_frame: &mut HashSet<u32>,
     events: &[egui::Event],
     keys_down: &HashSet<egui::Key>,
-) -> Vec<(bool, u32, u32, u16)> {
-    let mut retro_events = Vec::new();
+    current_modifiers: egui::Modifiers,
+    defer_same_frame_releases: bool,
+    reconcile_releases_from_state: bool,
+) -> RetroKeyboardEventBatch {
+    let mut retro_events = RetroKeyboardEventBatch::default();
 
     // Consume per-frame key events in order so quick taps (press+release within one frame)
-    // still reach cores that depend on keyboard edge events.
+    // and short cross-frame taps still reach cores that depend on keyboard polling.
     for event in events {
         let egui::Event::Key {
             key,
             physical_key,
             pressed,
-            modifiers: _,
+            modifiers,
             ..
         } = event
         else {
@@ -3273,7 +3372,9 @@ fn collect_retro_keyboard_events(
         let Some(keycode) = key_event_to_retro_keycode(*key, *physical_key) else {
             continue;
         };
+        let key_modifiers = retro_key_modifiers_from_egui(*modifiers);
         if *pressed {
+            pressed_since_frame.insert(keycode);
             prev_keys_down.insert(keycode);
         } else {
             prev_keys_down.remove(&keycode);
@@ -3283,10 +3384,17 @@ fn collect_retro_keyboard_events(
         } else {
             0
         };
-        retro_events.push((*pressed, keycode, character, 0));
+        if !*pressed && defer_same_frame_releases && pressed_since_frame.contains(&keycode) {
+            retro_events.deferred_releases.push((keycode, key_modifiers));
+        } else {
+            retro_events
+                .immediate_events
+                .push((*pressed, keycode, character, key_modifiers));
+        }
     }
 
     // Safety net: reconcile with aggregate key state in case the backend misses a key event.
+    let key_modifiers = retro_key_modifiers_from_egui(current_modifiers);
     let current_keys_down = keys_down
         .iter()
         .copied()
@@ -3300,17 +3408,26 @@ fn collect_retro_keyboard_events(
         .collect::<Vec<_>>();
     for keycode in missing_presses {
         prev_keys_down.insert(keycode);
-        retro_events.push((true, keycode, retro_character_for_keycode(keycode), 0));
+        retro_events.immediate_events.push((
+            true,
+            keycode,
+            retro_character_for_keycode(keycode),
+            key_modifiers,
+        ));
     }
 
-    let missing_releases = prev_keys_down
-        .iter()
-        .copied()
-        .filter(|keycode| !current_keys_down.contains(keycode))
-        .collect::<Vec<_>>();
-    for keycode in missing_releases {
-        prev_keys_down.remove(&keycode);
-        retro_events.push((false, keycode, 0, 0));
+    if reconcile_releases_from_state {
+        let missing_releases = prev_keys_down
+            .iter()
+            .copied()
+            .filter(|keycode| !current_keys_down.contains(keycode))
+            .collect::<Vec<_>>();
+        for keycode in missing_releases {
+            prev_keys_down.remove(&keycode);
+            retro_events
+                .immediate_events
+                .push((false, keycode, 0, key_modifiers));
+        }
     }
 
     retro_events
@@ -3404,8 +3521,9 @@ mod tests {
     }
 
     #[test]
-    fn key_events_capture_quick_tap_within_single_frame() {
+    fn key_events_capture_quick_tap_within_single_frame_with_deferred_release() {
         let mut previous = HashSet::new();
+        let mut pressed_since_frame = HashSet::new();
         let events = vec![
             egui::Event::Key {
                 key: egui::Key::ArrowUp,
@@ -3424,28 +3542,234 @@ mod tests {
         ];
         let keys_down = HashSet::new();
 
-        let retro = collect_retro_keyboard_events(&mut previous, &events, &keys_down);
+        let retro = collect_retro_keyboard_events(
+            &mut previous,
+            &mut pressed_since_frame,
+            &events,
+            &keys_down,
+            egui::Modifiers::NONE,
+            true,
+            false,
+        );
 
-        assert_eq!(retro.len(), 2);
-        assert_eq!(retro[0].0, true);
-        assert_eq!(retro[0].1, RETROK_UP);
-        assert_eq!(retro[1].0, false);
-        assert_eq!(retro[1].1, RETROK_UP);
+        assert_eq!(retro.immediate_events.len(), 1);
+        assert_eq!(retro.immediate_events[0].0, true);
+        assert_eq!(retro.immediate_events[0].1, RETROK_UP);
+        assert_eq!(retro.deferred_releases, vec![(RETROK_UP, 0)]);
         assert!(previous.is_empty());
     }
 
     #[test]
     fn key_state_reconciliation_recovers_missing_press_event() {
         let mut previous = HashSet::new();
+        let mut pressed_since_frame = HashSet::new();
         let events = vec![];
         let keys_down = [egui::Key::ArrowLeft].into_iter().collect::<HashSet<_>>();
 
-        let retro = collect_retro_keyboard_events(&mut previous, &events, &keys_down);
+        let retro = collect_retro_keyboard_events(
+            &mut previous,
+            &mut pressed_since_frame,
+            &events,
+            &keys_down,
+            egui::Modifiers::NONE,
+            true,
+            false,
+        );
 
-        assert_eq!(retro.len(), 1);
-        assert_eq!(retro[0].0, true);
-        assert_eq!(retro[0].1, RETROK_LEFT);
+        assert_eq!(retro.immediate_events.len(), 1);
+        assert_eq!(retro.immediate_events[0].0, true);
+        assert_eq!(retro.immediate_events[0].1, RETROK_LEFT);
         assert!(previous.contains(&RETROK_LEFT));
+    }
+
+    #[test]
+    fn quick_tap_without_deferral_emits_release_immediately() {
+        let mut previous = HashSet::new();
+        let mut pressed_since_frame = HashSet::new();
+        let events = vec![
+            egui::Event::Key {
+                key: egui::Key::ArrowUp,
+                physical_key: Some(egui::Key::ArrowUp),
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            },
+            egui::Event::Key {
+                key: egui::Key::ArrowUp,
+                physical_key: Some(egui::Key::ArrowUp),
+                pressed: false,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            },
+        ];
+        let keys_down = HashSet::new();
+
+        let retro = collect_retro_keyboard_events(
+            &mut previous,
+            &mut pressed_since_frame,
+            &events,
+            &keys_down,
+            egui::Modifiers::NONE,
+            false,
+            true,
+        );
+
+        assert_eq!(retro.immediate_events.len(), 2);
+        assert!(retro.deferred_releases.is_empty());
+        assert_eq!(retro.immediate_events[0].0, true);
+        assert_eq!(retro.immediate_events[1].0, false);
+    }
+
+    #[test]
+    fn retro_key_modifiers_maps_shift_ctrl_alt_and_meta() {
+        let modifiers = egui::Modifiers {
+            alt: true,
+            ctrl: true,
+            shift: true,
+            mac_cmd: true,
+            command: true,
+        };
+
+        let bits = retro_key_modifiers_from_egui(modifiers);
+        assert_eq!(
+            bits,
+            RETROKMOD_SHIFT | RETROKMOD_CTRL | RETROKMOD_ALT | RETROKMOD_META
+        );
+    }
+
+    #[test]
+    fn reconciliation_uses_current_modifier_state() {
+        let mut previous = HashSet::new();
+        let mut pressed_since_frame = HashSet::new();
+        let events = vec![];
+        let keys_down = [egui::Key::A].into_iter().collect::<HashSet<_>>();
+        let modifiers = egui::Modifiers {
+            alt: false,
+            ctrl: true,
+            shift: true,
+            mac_cmd: false,
+            command: true,
+        };
+
+        let retro = collect_retro_keyboard_events(
+            &mut previous,
+            &mut pressed_since_frame,
+            &events,
+            &keys_down,
+            modifiers,
+            true,
+            true,
+        );
+
+        assert_eq!(retro.immediate_events.len(), 1);
+        assert_eq!(
+            retro.immediate_events[0],
+            (
+                true,
+                b'a' as u32,
+                b'a' as u32,
+                RETROKMOD_SHIFT | RETROKMOD_CTRL
+            )
+        );
+    }
+
+    #[test]
+    fn cross_tick_tap_without_frame_advancement_defers_release() {
+        let mut previous = HashSet::new();
+        let mut pressed_since_frame = HashSet::new();
+
+        let press_events = vec![egui::Event::Key {
+            key: egui::Key::ArrowUp,
+            physical_key: Some(egui::Key::ArrowUp),
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        }];
+        let pressed_keys_down = [egui::Key::ArrowUp].into_iter().collect::<HashSet<_>>();
+        let press_batch = collect_retro_keyboard_events(
+            &mut previous,
+            &mut pressed_since_frame,
+            &press_events,
+            &pressed_keys_down,
+            egui::Modifiers::NONE,
+            true,
+            false,
+        );
+        assert_eq!(press_batch.immediate_events.len(), 1);
+        assert!(press_batch.deferred_releases.is_empty());
+
+        let release_events = vec![egui::Event::Key {
+            key: egui::Key::ArrowUp,
+            physical_key: Some(egui::Key::ArrowUp),
+            pressed: false,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        }];
+        let released_keys_down = HashSet::new();
+        let release_batch = collect_retro_keyboard_events(
+            &mut previous,
+            &mut pressed_since_frame,
+            &release_events,
+            &released_keys_down,
+            egui::Modifiers::NONE,
+            true,
+            false,
+        );
+        assert!(release_batch.immediate_events.is_empty());
+        assert_eq!(release_batch.deferred_releases, vec![(RETROK_UP, 0)]);
+    }
+
+    #[test]
+    fn keyboard_polled_state_keeps_held_key_across_ticks() {
+        let keys_down = [egui::Key::ArrowDown].into_iter().collect::<HashSet<_>>();
+        let modifiers = egui::Modifiers::NONE;
+
+        let first_tick = collect_retro_keyboard_polled_keys(&keys_down, modifiers);
+        let second_tick = collect_retro_keyboard_polled_keys(&keys_down, modifiers);
+
+        assert!(first_tick.contains(&RETROK_DOWN));
+        assert!(second_tick.contains(&RETROK_DOWN));
+    }
+
+    #[test]
+    fn keyboard_polled_state_includes_synthetic_modifier_keys() {
+        let keys_down = [egui::Key::ArrowLeft].into_iter().collect::<HashSet<_>>();
+        let modifiers = egui::Modifiers {
+            alt: true,
+            ctrl: true,
+            shift: true,
+            mac_cmd: false,
+            command: false,
+        };
+
+        let polled = collect_retro_keyboard_polled_keys(&keys_down, modifiers);
+
+        assert!(polled.contains(&RETROK_LEFT));
+        assert!(polled.contains(&RETROK_LSHIFT));
+        assert!(polled.contains(&RETROK_LCTRL));
+        assert!(polled.contains(&RETROK_LALT));
+    }
+
+    #[test]
+    fn dos_path_does_not_synthesize_release_from_keys_down_snapshot() {
+        let mut previous = [RETROK_DOWN].into_iter().collect::<HashSet<_>>();
+        let mut pressed_since_frame = HashSet::new();
+        let events = vec![];
+        let keys_down = HashSet::new();
+
+        let retro = collect_retro_keyboard_events(
+            &mut previous,
+            &mut pressed_since_frame,
+            &events,
+            &keys_down,
+            egui::Modifiers::NONE,
+            true,
+            false,
+        );
+
+        assert!(retro.immediate_events.is_empty());
+        assert!(retro.deferred_releases.is_empty());
+        assert!(previous.contains(&RETROK_DOWN));
     }
 
     #[test]

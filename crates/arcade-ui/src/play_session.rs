@@ -202,6 +202,10 @@ impl NativeArcadeUiApp {
                 }
             }
         }
+        if frames_executed > 0 {
+            self.mark_retro_keyboard_frame_advanced();
+            self.flush_deferred_retro_keyboard_releases();
+        }
         if let Some(message) = terminal_frame_error {
             self.state.play.set_status(message);
             self.stop_play_session();
@@ -321,6 +325,8 @@ impl NativeArcadeUiApp {
             .unwrap_or(self.state.current_view);
         self.state.play.reset_frontend_shortcut_latches();
         self.prev_keyboard_keys_down.clear();
+        self.retro_keys_pressed_since_frame.clear();
+        self.pending_retro_key_releases.clear();
         if let Err(err) = self.host.unload() {
             self.state.play.set_status(format!("stop failed: {err}"));
         }
