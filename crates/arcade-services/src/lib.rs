@@ -14,7 +14,7 @@ use arcade_domain::{
     LocalCoverRelinkRunOptions, ManageOperationKind, ManageOperationSummary, ManageProgressEvent,
     ManageRomStatus, ManageScope, ManagementConfig, N64CpuCoreMode, N64PrimaryStick, PathsConfig,
     RomCard, RomQuery, SaveLimits, SaveSlotData, SaveSlotSummary, SavedGamepadMappingSummary,
-    StoredGamepadMapping, SYSTEM_DEFAULT_MAPPING_KEY,
+    StoredGamepadMapping, PCECD_ACCEPTED_BIOS_FILES, SYSTEM_DEFAULT_MAPPING_KEY,
 };
 use sha1::{Digest, Sha1};
 use tracing::warn;
@@ -116,6 +116,7 @@ impl NativeServices {
         if !rom_path.exists() {
             return Err(anyhow!("ROM file not found: {}", rom_path.display()));
         }
+        ensure_system_launch_dependencies(&rom.system, &config.paths)?;
         let configured_core = config
             .preferred_core_for_system(&rom.system)
             .or(rom.emulator_core.as_deref());
@@ -312,6 +313,8 @@ impl NativeServices {
             psx: input.psx_platform_ids,
             ps2: input.ps2_platform_ids,
             dreamcast: input.dreamcast_platform_ids,
+            dos: input.dos_platform_ids,
+            pcecd: input.pcecd_platform_ids,
         };
         config.save_to_path(self.config_path.as_ref())?;
         Ok(())
@@ -723,6 +726,25 @@ fn native_arcade_core_note(system: &str, core_override: Option<&str>) -> Option<
     }
 }
 
+fn ensure_system_launch_dependencies(system: &str, paths: &PathsConfig) -> Result<()> {
+    if !system.eq_ignore_ascii_case("PCECD") {
+        return Ok(());
+    }
+
+    if arcade_domain::find_pcecd_bios_file(&paths.rom_root, Some(&paths.bios_root)).is_some() {
+        return Ok(());
+    }
+
+    let preferred_bios_dir =
+        arcade_domain::get_pcecd_bios_directory(&paths.rom_root, Some(&paths.bios_root));
+    let accepted = PCECD_ACCEPTED_BIOS_FILES.join(", ");
+    Err(anyhow!(
+        "Missing PCE-CD BIOS in {}. Add one of: {}",
+        preferred_bios_dir.display(),
+        accepted
+    ))
+}
+
 fn normalize_system(system: &str) -> String {
     let normalized = system.trim().to_ascii_uppercase();
     if normalized.is_empty() {
@@ -741,7 +763,7 @@ struct ScanTarget {
     max_bytes: Option<u64>,
 }
 
-const SCAN_TARGETS: [ScanTarget; 12] = [
+const SCAN_TARGETS: [ScanTarget; 13] = [
     ScanTarget {
         folder: "nes",
         system: "NES",
@@ -817,6 +839,13 @@ const SCAN_TARGETS: [ScanTarget; 12] = [
         system: "DREAMCAST",
         emulator_core: "dreamcast",
         extensions: &[".cdi", ".gdi", ".chd"],
+        max_bytes: None,
+    },
+    ScanTarget {
+        folder: "pcecd",
+        system: "PCECD",
+        emulator_core: "pcecd",
+        extensions: &[".chd", ".cue", ".ccd", ".toc", ".m3u"],
         max_bytes: None,
     },
     ScanTarget {
@@ -1329,6 +1358,8 @@ fn platform_ids_for_system<'a>(config: &'a CoverScrapingConfig, system: &str) ->
         "PSX" => &config.platform_ids.psx,
         "PS2" => &config.platform_ids.ps2,
         "DREAMCAST" => &config.platform_ids.dreamcast,
+        "DOS" => &config.platform_ids.dos,
+        "PCECD" => &config.platform_ids.pcecd,
         _ => &[],
     }
 }
@@ -1557,6 +1588,15 @@ mod tests {
         .expect("insert arcade rom");
     }
 
+    fn seed_pcecd_rom(config: &AppConfig) {
+        let conn = rusqlite::Connection::open(&config.paths.db_path).expect("open sqlite");
+        conn.execute(
+            "INSERT INTO \"Rom\" (id, system, slug, title, filePath, updatedAt)\n             VALUES ('rom-pcecd-1', 'PCECD', 'dracula-x', 'Dracula X', 'roms/pcecd/Dracula X.chd', ?1)",
+            params![Utc::now().format("%Y-%m-%d %H:%M:%S").to_string()],
+        )
+        .expect("insert pcecd rom");
+    }
+
     #[test]
     fn prepare_launch_allows_local_launches() {
         let tmp = TempDir::new().expect("tempdir");
@@ -1601,6 +1641,50 @@ mod tests {
 
         let err = services.prepare_launch("rom-1").expect_err("must fail");
         assert!(err.to_string().starts_with("ROM file not found: "));
+    }
+
+    #[test]
+    fn prepare_launch_blocks_pcecd_without_bios() {
+        let tmp = TempDir::new().expect("tempdir");
+        let config = make_config(&tmp);
+        let db = Database::open(&config).expect("open db");
+        seed_pcecd_rom(&config);
+        let rom_path = config.paths.rom_root.join("pcecd").join("Dracula X.chd");
+        std::fs::create_dir_all(rom_path.parent().expect("rom parent")).expect("create rom dir");
+        std::fs::write(&rom_path, b"rom").expect("write rom");
+
+        let services = NativeServices::bootstrap(config.clone(), config_path_for(&config), db)
+            .expect("bootstrap");
+
+        let err = services
+            .prepare_launch("rom-pcecd-1")
+            .expect_err("launch should fail without bios");
+        assert!(err.to_string().contains("Missing PCE-CD BIOS"));
+        assert!(err.to_string().contains("syscard3.pce"));
+    }
+
+    #[test]
+    fn prepare_launch_allows_pcecd_with_bios() {
+        let tmp = TempDir::new().expect("tempdir");
+        let config = make_config(&tmp);
+        let db = Database::open(&config).expect("open db");
+        seed_pcecd_rom(&config);
+        let rom_path = config.paths.rom_root.join("pcecd").join("Dracula X.chd");
+        std::fs::create_dir_all(rom_path.parent().expect("rom parent")).expect("create rom dir");
+        std::fs::write(&rom_path, b"rom").expect("write rom");
+
+        let bios_dir = config.paths.bios_root.join("pcecd");
+        std::fs::create_dir_all(&bios_dir).expect("create bios dir");
+        std::fs::write(bios_dir.join("SYSCARD3.PCE"), b"bios").expect("write bios");
+
+        let services = NativeServices::bootstrap(config.clone(), config_path_for(&config), db)
+            .expect("bootstrap");
+
+        let plan = services
+            .prepare_launch("rom-pcecd-1")
+            .expect("launch should pass with bios");
+        assert_eq!(plan.system, "PCECD");
+        assert_eq!(plan.resolved_core_name, "mednafen_pce_fast");
     }
 
     #[test]
@@ -1781,6 +1865,7 @@ mod tests {
                 ps2_platform_ids: vec![11],
                 dreamcast_platform_ids: vec![16],
                 dos_platform_ids: vec![1],
+                pcecd_platform_ids: vec![4955],
             })
             .expect("save settings");
 
@@ -1792,6 +1877,10 @@ mod tests {
         assert_eq!(saved.management.cover_scraping.default_limit, 25);
         assert_eq!(saved.management.cover_scraping.default_delay_ms, 90);
         assert_eq!(saved.management.cover_scraping.platform_ids.nes, vec![7]);
+        assert_eq!(
+            saved.management.cover_scraping.platform_ids.pcecd,
+            vec![4955]
+        );
     }
 
     #[test]
@@ -2119,6 +2208,37 @@ mod tests {
             .expect("scanned rom");
         assert_eq!(scanned.rom.system, "PS2");
         assert_eq!(scanned.rom.file_path, "ps2/Test PS2 Game.bin");
+    }
+
+    #[test]
+    fn smart_scan_imports_pcecd_chd_images() {
+        let tmp = TempDir::new().expect("tempdir");
+        let config = make_config(&tmp);
+        let db = Database::open(&config).expect("open db");
+        let rom_path = config.paths.rom_root.join("pcecd").join("Dracula X.chd");
+        std::fs::create_dir_all(rom_path.parent().expect("rom parent")).expect("create rom dir");
+        std::fs::write(&rom_path, b"pcecd-rom").expect("write rom");
+        let services = NativeServices::bootstrap(config.clone(), config_path_for(&config), db)
+            .expect("bootstrap");
+
+        let summary = services
+            .smart_scan_roms(&ManageScope::System(String::from("PCECD")), |_| {})
+            .expect("smart scan");
+        assert_eq!(summary.kind, Some(ManageOperationKind::SmartScan));
+        assert_eq!(summary.created, 1);
+
+        let cards = services
+            .list_roms(&RomQuery {
+                system: Some(String::from("PCECD")),
+                ..RomQuery::default()
+            })
+            .expect("list roms");
+        let scanned = cards
+            .iter()
+            .find(|card| card.rom.slug == "dracula-x")
+            .expect("scanned rom");
+        assert_eq!(scanned.rom.system, "PCECD");
+        assert_eq!(scanned.rom.file_path, "pcecd/Dracula X.chd");
     }
 
     #[test]

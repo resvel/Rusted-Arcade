@@ -164,7 +164,7 @@ impl NativeArcadeUiApp {
                 .map(|rom| rom.rom.system.as_str())
         })?;
         match system {
-            "NES" | "SNES" | "GENESIS" => Some(4.0 / 3.0),
+            "NES" | "SNES" | "GENESIS" | "PCECD" => Some(4.0 / 3.0),
             "N64" => {
                 let config = self.services.config();
                 match config.emulation.n64.aspect_ratio {

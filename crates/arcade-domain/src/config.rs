@@ -571,8 +571,10 @@ pub struct CoverScrapePlatformIds {
     pub ps2: Vec<u32>,
     #[serde(default)]
     pub dreamcast: Vec<u32>,
-    // The `dos` field was mistakenly added; it is not used by the services.
-    // It has been removed to keep the struct in sync with the rest of the code.
+    #[serde(default)]
+    pub dos: Vec<u32>,
+    #[serde(default = "default_cover_scrape_platform_pcecd")]
+    pub pcecd: Vec<u32>,
 }
 
 impl Default for CoverScrapePlatformIds {
@@ -588,6 +590,8 @@ impl Default for CoverScrapePlatformIds {
             psx: Vec::new(),
             ps2: Vec::new(),
             dreamcast: Vec::new(),
+            dos: Vec::new(),
+            pcecd: default_cover_scrape_platform_pcecd(),
         }
     }
 }
@@ -621,6 +625,10 @@ fn default_cover_scrape_platform_n64() -> Vec<u32> {
 
 fn default_cover_scrape_platform_arcade() -> Vec<u32> {
     vec![23]
+}
+
+fn default_cover_scrape_platform_pcecd() -> Vec<u32> {
+    vec![4955]
 }
 
 impl Default for AppConfig {
@@ -903,6 +911,10 @@ mod tests {
         assert_eq!(
             config.management.cover_scraping.platform_ids.arcade,
             vec![23]
+        );
+        assert_eq!(
+            config.management.cover_scraping.platform_ids.pcecd,
+            vec![4955]
         );
     }
 

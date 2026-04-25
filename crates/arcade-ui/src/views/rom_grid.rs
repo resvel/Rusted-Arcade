@@ -752,6 +752,7 @@ fn preferred_cover_aspect_for_system(system: &str) -> f32 {
         "GBA" => 1.22,
         "N64" => 0.86,
         "ARCADE" => 0.78,
+        "PCECD" => 0.8,
         _ => 0.8,
     }
 }

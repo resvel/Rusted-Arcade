@@ -2533,6 +2533,8 @@ fn action_to_retro_binding(
         "Down" => Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_DOWN)),
         "Left" => Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_LEFT)),
         "Right" => Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_RIGHT)),
+        "I" => Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_A)),
+        "II" => Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_B)),
         "A" | "Circle" => Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_A)),
         "B" | "Cross" => Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_B)),
         "X" | "Triangle" => Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_X)),
@@ -2583,7 +2585,7 @@ fn action_to_retro_binding(
             axis_id: RETRO_DEVICE_ID_ANALOG_X,
             value: 1.0,
         }),
-        "Start" => Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_START)),
+        "Start" | "Run" => Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_START)),
         "Select" | "Coin" => Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_SELECT)),
         "C" | "C-Up" => Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_X)),
         "D" | "C-Left" => Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_Y)),
@@ -3385,7 +3387,9 @@ fn collect_retro_keyboard_events(
             0
         };
         if !*pressed && defer_same_frame_releases && pressed_since_frame.contains(&keycode) {
-            retro_events.deferred_releases.push((keycode, key_modifiers));
+            retro_events
+                .deferred_releases
+                .push((keycode, key_modifiers));
         } else {
             retro_events
                 .immediate_events
@@ -4456,6 +4460,26 @@ mod tests {
                 axis_id: RETRO_DEVICE_ID_ANALOG_X,
                 value: -1.0,
             })
+        );
+    }
+
+    #[test]
+    fn pcecd_action_bindings_map_to_expected_retropad_ids() {
+        assert_eq!(
+            action_to_retro_binding("PCECD", "I", None),
+            Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_A))
+        );
+        assert_eq!(
+            action_to_retro_binding("PCECD", "II", None),
+            Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_B))
+        );
+        assert_eq!(
+            action_to_retro_binding("PCECD", "Run", None),
+            Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_START))
+        );
+        assert_eq!(
+            action_to_retro_binding("PCECD", "Select", None),
+            Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_SELECT))
         );
     }
 

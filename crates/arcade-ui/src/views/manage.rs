@@ -24,6 +24,7 @@ const TGDB_PLATFORM_IDS_PSX: &[u32] = &[1];
 const TGDB_PLATFORM_IDS_PS2: &[u32] = &[2];
 const TGDB_PLATFORM_IDS_DREAMCAST: &[u32] = &[8];
 const TGDB_PLATFORM_IDS_DOS: &[u32] = &[9];
+const TGDB_PLATFORM_IDS_PCECD: &[u32] = &[4955];
 
 impl NativeArcadeUiApp {
     pub(crate) fn sync_manage_settings_from_services(&mut self) {
@@ -950,6 +951,7 @@ impl NativeArcadeUiApp {
             ps2_platform_ids: TGDB_PLATFORM_IDS_PS2.to_vec(),
             dreamcast_platform_ids: TGDB_PLATFORM_IDS_DREAMCAST.to_vec(),
             dos_platform_ids: TGDB_PLATFORM_IDS_DOS.to_vec(),
+            pcecd_platform_ids: TGDB_PLATFORM_IDS_PCECD.to_vec(),
         })
     }
 
@@ -1283,8 +1285,12 @@ fn manage_toggle_chip(
     response
 }
 
-fn scrape_system_values() -> [&'static str; 7] {
-    ["NES", "SNES", "GENESIS", "GB", "GBA", "N64", "ARCADE"]
+fn scrape_system_values() -> Vec<&'static str> {
+    SYSTEM_FILTERS
+        .iter()
+        .copied()
+        .filter(|system| *system != "ALL")
+        .collect()
 }
 
 #[derive(Clone, Copy)]

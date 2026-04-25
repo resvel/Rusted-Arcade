@@ -79,6 +79,7 @@ pub fn core_profiles() -> Vec<CoreProfile> {
         pcsx2_profile(),
         play_profile(),
         flycast_profile(),
+        mednafen_pce_fast_profile(),
         dosbox_pure_profile(),
     ]
 }
@@ -1267,6 +1268,76 @@ fn flycast_profile() -> CoreProfile {
 }
 
 // ---------------------------------------------------------------------------
+// PCE-CD: mednafen_pce_fast
+// ---------------------------------------------------------------------------
+
+fn mednafen_pce_fast_profile() -> CoreProfile {
+    CoreProfile {
+        core_name: "mednafen_pce_fast",
+        display_name: "PCE-CD",
+        system: "PCECD",
+        variables: vec![
+            var(
+                "pce_fast_cdimagecache",
+                "CD Image Cache",
+                "PC Engine CD",
+                vec![
+                    opt_d("disabled", "Disabled (Lower RAM Use)"),
+                    opt_d("enabled", "Enabled (Faster Seeks)"),
+                ],
+            ),
+            var(
+                "pce_fast_cdbios",
+                "CD BIOS",
+                "PC Engine CD",
+                vec![
+                    opt_d("syscard3.pce", "System Card 3"),
+                    opt_d("syscard2.pce", "System Card 2"),
+                    opt_d("syscard1.pce", "System Card 1"),
+                    opt_d("gexpress.pce", "Games Express"),
+                ],
+            ),
+            var(
+                "pce_fast_nospritelimit",
+                "No Sprite Limit",
+                "Emulation Hacks",
+                vec![opt_d("disabled", "Disabled (Accurate)"), opt("enabled")],
+            ),
+            var(
+                "pce_fast_ocmultiplier",
+                "CPU Overclock Multiplier",
+                "Emulation Hacks",
+                vec![opt("1"), opt("2"), opt("3"), opt("4"), opt("6"), opt("8")],
+            ),
+            var(
+                "pce_fast_palette",
+                "Color Palette",
+                "Video",
+                vec![opt("RGB"), opt("Composite"), opt("S-Video")],
+            ),
+            var(
+                "pce_fast_hoverscan",
+                "Horizontal Overscan",
+                "Video",
+                vec![opt("352"), opt("340"), opt("336"), opt("320")],
+            ),
+            var(
+                "pce_fast_initial_scanline",
+                "Initial Scanline",
+                "Video",
+                vec![opt("3"), opt("0"), opt("8"), opt("16")],
+            ),
+            var(
+                "pce_fast_last_scanline",
+                "Last Scanline",
+                "Video",
+                vec![opt("242"), opt("239"), opt("232"), opt("224")],
+            ),
+        ],
+    }
+}
+
+// ---------------------------------------------------------------------------
 // DOS: dosbox_pure
 // ---------------------------------------------------------------------------
 
@@ -1416,6 +1487,7 @@ mod tests {
         assert!(core_profile_for("mupen64plus_next").is_some());
         assert!(core_profile_for("fceumm").is_some());
         assert!(core_profile_for("play").is_some());
+        assert!(core_profile_for("mednafen_pce_fast").is_some());
         assert!(core_profile_for("nonexistent").is_none());
     }
 

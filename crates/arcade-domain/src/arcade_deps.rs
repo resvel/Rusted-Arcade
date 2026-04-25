@@ -21,6 +21,12 @@ pub struct ArcadeCompatibility {
 
 pub const ARCADE_SHARED_BIOS_FILES: &[&str] = &["neogeo.zip", "qsound.zip", "pgm.zip"];
 pub const ARCADE_CPS3_BLOCKED_TITLES: &[&str] = &["sfiii", "sfiii2", "sfiii3", "jojo", "redearth"];
+pub const PCECD_ACCEPTED_BIOS_FILES: &[&str] = &[
+    "syscard3.pce",
+    "syscard2.pce",
+    "syscard1.pce",
+    "gexpress.pce",
+];
 
 const NEOGEO_BIOS_REQUIRED_ENTRIES: &[&str] = &["sp-s3.sp1", "sm1.sm1", "sfix.sfix", "000-lo.lo"];
 
@@ -144,6 +150,59 @@ fn candidate_arcade_bios_directories(rom_root: &Path, bios_root: Option<&Path>) 
     }
     push_unique(rom_root.join("arcade-mame2003"));
     push_unique(rom_root.join("roms").join("arcade-mame2003"));
+    candidates
+}
+
+pub fn get_pcecd_bios_directory(rom_root: &Path, bios_root: Option<&Path>) -> PathBuf {
+    candidate_pcecd_bios_directories(rom_root, bios_root)
+        .into_iter()
+        .find(|path| path.exists())
+        .unwrap_or_else(|| rom_root.join("pcecd"))
+}
+
+pub fn find_pcecd_bios_file(rom_root: &Path, bios_root: Option<&Path>) -> Option<PathBuf> {
+    let accepted = PCECD_ACCEPTED_BIOS_FILES
+        .iter()
+        .map(|name| name.to_ascii_lowercase())
+        .collect::<Vec<_>>();
+
+    for dir in candidate_pcecd_bios_directories(rom_root, bios_root) {
+        let entries = match fs::read_dir(&dir) {
+            Ok(entries) => entries,
+            Err(_) => continue,
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_file() {
+                continue;
+            }
+            let Some(file_name) = path.file_name().and_then(|value| value.to_str()) else {
+                continue;
+            };
+            if accepted.contains(&file_name.to_ascii_lowercase()) {
+                return Some(path);
+            }
+        }
+    }
+
+    None
+}
+
+fn candidate_pcecd_bios_directories(rom_root: &Path, bios_root: Option<&Path>) -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+    let mut push_unique = |path: PathBuf| {
+        if !candidates.iter().any(|existing| existing == &path) {
+            candidates.push(path);
+        }
+    };
+
+    if let Some(bios_root) = bios_root {
+        push_unique(bios_root.join("pcecd"));
+        push_unique(bios_root.to_path_buf());
+        push_unique(bios_root.join("roms").join("pcecd"));
+    }
+    push_unique(rom_root.join("pcecd"));
+    push_unique(rom_root.join("roms").join("pcecd"));
     candidates
 }
 
@@ -393,5 +452,34 @@ mod tests {
             .missing_set_entries
             .iter()
             .any(|entry| entry == "04m_g01.bin"));
+    }
+
+    #[test]
+    fn pcecd_bios_lookup_supports_case_insensitive_filenames() {
+        let dir = tempdir().unwrap();
+        let rom_root = dir.path().join("roms");
+        let bios_root = dir.path().join("bios");
+        fs::create_dir_all(rom_root.join("pcecd")).unwrap();
+        fs::create_dir_all(bios_root.join("pcecd")).unwrap();
+        fs::write(bios_root.join("pcecd").join("SYSCARD3.PCE"), b"bios").unwrap();
+
+        let found = find_pcecd_bios_file(&rom_root, Some(&bios_root));
+        assert!(found.is_some());
+        assert_eq!(
+            found.unwrap().file_name().and_then(|f| f.to_str()),
+            Some("SYSCARD3.PCE")
+        );
+    }
+
+    #[test]
+    fn pcecd_bios_lookup_prefers_existing_candidate_directory() {
+        let dir = tempdir().unwrap();
+        let rom_root = dir.path().join("roms");
+        let bios_root = dir.path().join("bios");
+        fs::create_dir_all(rom_root.join("pcecd")).unwrap();
+        fs::create_dir_all(&bios_root).unwrap();
+
+        let preferred = get_pcecd_bios_directory(&rom_root, Some(&bios_root));
+        assert_eq!(preferred, bios_root);
     }
 }

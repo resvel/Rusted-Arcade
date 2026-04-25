@@ -982,6 +982,9 @@ fn core_library_filename_candidates(core_name: &str, emulation: &EmulationConfig
     }
 
     candidates.push(default_core_library_filename(core_name));
+    if core_name.eq_ignore_ascii_case("mednafen_pce_fast") {
+        candidates.push(String::from("beetle_pce_fast_libretro.dylib"));
+    }
     candidates
 }
 
@@ -2128,6 +2131,31 @@ mod tests {
                 .map(|path| path.file_name().and_then(|f| f.to_str()).unwrap_or(""))
                 .collect::<Vec<_>>(),
             vec!["fceumm_libretro.dylib"]
+        );
+    }
+
+    #[test]
+    fn resolve_core_candidates_include_pce_fast_compatibility_fallback_name() {
+        let dir = tempdir().expect("tempdir");
+        let host = LibretroHost::new(
+            dir.path().join("cores"),
+            dir.path().join("bios"),
+            dir.path().join("saves"),
+            EmulationConfig::default(),
+        );
+
+        let candidates = host.resolve_core_candidates("mednafen_pce_fast");
+        let file_names = candidates
+            .iter()
+            .map(|path| path.file_name().and_then(|f| f.to_str()).unwrap_or(""))
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            file_names,
+            vec![
+                "mednafen_pce_fast_libretro.dylib",
+                "beetle_pce_fast_libretro.dylib"
+            ]
         );
     }
 

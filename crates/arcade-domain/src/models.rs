@@ -62,6 +62,7 @@ pub struct CoverScrapeSettingsInput {
     pub ps2_platform_ids: Vec<u32>,
     pub dreamcast_platform_ids: Vec<u32>,
     pub dos_platform_ids: Vec<u32>,
+    pub pcecd_platform_ids: Vec<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -451,6 +452,22 @@ const DOS_GAMEPAD_ACTIONS: [&str; 17] = [
     RESET_ACTION,
 ];
 
+const PCECD_GAMEPAD_ACTIONS: [&str; 13] = [
+    "Up",
+    "Down",
+    "Left",
+    "Right",
+    "I",
+    "II",
+    "Run",
+    "Select",
+    EXIT_ACTION,
+    QUICK_SAVE_ACTION,
+    QUICK_LOAD_ACTION,
+    NEXT_SAVE_SLOT_ACTION,
+    RESET_ACTION,
+];
+
 pub fn supported_gamepad_actions(system: &str) -> &'static [&'static str] {
     match system.trim().to_ascii_uppercase().as_str() {
         "NES" => &NES_GAMEPAD_ACTIONS,
@@ -463,6 +480,7 @@ pub fn supported_gamepad_actions(system: &str) -> &'static [&'static str] {
         "PSX" => &PSX_GAMEPAD_ACTIONS,
         "PS2" => &PS2_GAMEPAD_ACTIONS,
         "DREAMCAST" => &DREAMCAST_GAMEPAD_ACTIONS,
+        "PCECD" => &PCECD_GAMEPAD_ACTIONS,
         "DOS" => &DOS_GAMEPAD_ACTIONS,
         _ => &NES_GAMEPAD_ACTIONS,
     }
@@ -604,6 +622,12 @@ pub fn default_gamepad_mapping_for_system(system: &str) -> StoredGamepadMapping 
             insert_button(&mut actions, "X", CanonicalButton::West);
             insert_button(&mut actions, "Y", CanonicalButton::North);
             insert_button(&mut actions, "Start", CanonicalButton::Start);
+        }
+        "PCECD" => {
+            insert_button(&mut actions, "I", CanonicalButton::South);
+            insert_button(&mut actions, "II", CanonicalButton::East);
+            insert_button(&mut actions, "Run", CanonicalButton::Start);
+            insert_button(&mut actions, "Select", CanonicalButton::Select);
         }
         "DOS" => {
             insert_button(&mut actions, "A", CanonicalButton::South);
@@ -774,6 +798,16 @@ mod tests {
         assert!(actions.contains(&QUICK_LOAD_ACTION));
         assert!(actions.contains(&NEXT_SAVE_SLOT_ACTION));
         assert!(actions.contains(&RESET_ACTION));
+    }
+
+    #[test]
+    fn pcecd_actions_include_face_buttons_and_run_select() {
+        let actions = supported_gamepad_actions("PCECD");
+        assert!(actions.contains(&"I"));
+        assert!(actions.contains(&"II"));
+        assert!(actions.contains(&"Run"));
+        assert!(actions.contains(&"Select"));
+        assert!(actions.contains(&EXIT_ACTION));
     }
 
     #[test]

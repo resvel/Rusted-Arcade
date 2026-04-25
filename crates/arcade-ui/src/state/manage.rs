@@ -46,8 +46,10 @@ impl ManageState {
 
 impl Default for ManageState {
     fn default() -> Self {
-        let scrape_systems = ["NES", "SNES", "GENESIS", "GB", "GBA", "N64", "ARCADE"]
-            .into_iter()
+        let scrape_systems = crate::theme::SYSTEM_FILTERS
+            .iter()
+            .copied()
+            .filter(|system| *system != "ALL")
             .map(String::from)
             .collect();
 
