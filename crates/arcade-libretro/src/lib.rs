@@ -584,12 +584,20 @@ fn sanitized_video_fps(fps: f64) -> Option<f64> {
     }
 }
 
+fn is_audio_master_pacing_core_name(core_name: &str) -> bool {
+    core_name.eq_ignore_ascii_case("flycast")
+        || core_name.eq_ignore_ascii_case("mupen64plus_next")
+        || core_name.eq_ignore_ascii_case("mednafen_psx_hw")
+        || core_name.eq_ignore_ascii_case("pcsx2")
+        || core_name.eq_ignore_ascii_case("play")
+}
+
 fn frame_time_usecs_for_core(
-    is_flycast: bool,
+    is_fixed_step_core: bool,
     reference_usecs: i64,
     measured_delta_usecs: Option<i64>,
 ) -> i64 {
-    if is_flycast {
+    if is_fixed_step_core {
         return reference_usecs.max(0);
     }
 
@@ -1485,15 +1493,15 @@ impl LibretroHost {
     pub fn frame_interval(&self) -> Option<std::time::Duration> {
         let loaded_fps = self.loaded.lock().as_ref().map(|c| c.video_fps)?;
         let mut fps = loaded_fps;
-        let (is_flycast, runtime_video_fps) = {
+        let (is_audio_master_core, runtime_video_fps) = {
             let context = self.runtime.environment_context.lock();
-            let is_flycast = context
+            let is_audio_master_core = context
                 .loaded_core_name
                 .as_deref()
-                .is_some_and(|name| name.eq_ignore_ascii_case("flycast"));
-            (is_flycast, context.runtime_video_fps)
+                .is_some_and(is_audio_master_pacing_core_name);
+            (is_audio_master_core, context.runtime_video_fps)
         };
-        if is_flycast {
+        if is_audio_master_core {
             fps = runtime_video_fps.unwrap_or(loaded_fps);
         }
         let fps = normalize_display_fps(sanitized_video_fps(fps)?);
@@ -1552,15 +1560,15 @@ impl LibretroHost {
         let loaded_video_fps = loaded.video_fps;
         let target_size = hw_render_target_size(loaded.video_max_size, loaded.video_base_size);
         drop(loaded_guard);
-        let (is_flycast_core, runtime_video_fps) = {
+        let (is_audio_master_core, runtime_video_fps) = {
             let context = self.runtime.environment_context.lock();
-            let is_flycast = context
+            let is_audio_master_core = context
                 .loaded_core_name
                 .as_deref()
-                .is_some_and(|name| name.eq_ignore_ascii_case("flycast"));
-            (is_flycast, context.runtime_video_fps)
+                .is_some_and(is_audio_master_pacing_core_name);
+            (is_audio_master_core, context.runtime_video_fps)
         };
-        let pacing_video_fps = if is_flycast_core {
+        let pacing_video_fps = if is_audio_master_core {
             runtime_video_fps.unwrap_or(loaded_video_fps)
         } else {
             loaded_video_fps
@@ -1620,10 +1628,10 @@ impl LibretroHost {
             let callback = context.frame_time_callback;
             callback.map(|callback| {
                 let now = std::time::Instant::now();
-                let is_flycast = context
+                let is_fixed_step_core = context
                     .loaded_core_name
                     .as_deref()
-                    .is_some_and(|name| name.eq_ignore_ascii_case("flycast"));
+                    .is_some_and(is_audio_master_pacing_core_name);
                 let reference_usecs = if context.frame_time_reference_usecs > 0 {
                     context.frame_time_reference_usecs
                 } else {
@@ -1636,8 +1644,11 @@ impl LibretroHost {
                     None
                 };
                 context.frame_time_last_instant = Some(now);
-                let usec =
-                    frame_time_usecs_for_core(is_flycast, reference_usecs, measured_delta_usecs);
+                let usec = frame_time_usecs_for_core(
+                    is_fixed_step_core,
+                    reference_usecs,
+                    measured_delta_usecs,
+                );
                 (callback, usec)
             })
         };
@@ -2287,7 +2298,7 @@ mod tests {
     }
 
     #[test]
-    fn frame_time_usecs_for_flycast_stays_fixed() {
+    fn frame_time_usecs_for_fixed_step_core_stays_fixed() {
         assert_eq!(
             frame_time_usecs_for_core(true, 16_667, Some(33_333)),
             16_667
@@ -2295,12 +2306,22 @@ mod tests {
     }
 
     #[test]
-    fn frame_time_usecs_for_non_flycast_uses_measured_delta() {
+    fn frame_time_usecs_for_variable_delta_core_uses_measured_delta() {
         assert_eq!(
             frame_time_usecs_for_core(false, 16_667, Some(20_000)),
             20_000
         );
         assert_eq!(frame_time_usecs_for_core(false, 16_667, None), 16_667);
+    }
+
+    #[test]
+    fn audio_master_pacing_core_set_includes_n64_psx_and_ps2() {
+        assert!(is_audio_master_pacing_core_name("flycast"));
+        assert!(is_audio_master_pacing_core_name("mupen64plus_next"));
+        assert!(is_audio_master_pacing_core_name("mednafen_psx_hw"));
+        assert!(is_audio_master_pacing_core_name("pcsx2"));
+        assert!(is_audio_master_pacing_core_name("play"));
+        assert!(!is_audio_master_pacing_core_name("fceumm"));
     }
 
     #[test]

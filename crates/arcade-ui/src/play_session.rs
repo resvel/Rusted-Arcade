@@ -10,10 +10,10 @@ use crate::{
     state::{HoldAction, MenuFocusRegion},
 };
 
-const FLYCAST_AUDIO_DRAIN_WATERMARK: f64 = 1.25;
-const FLYCAST_AUDIO_REFILL_WATERMARK: f64 = 0.85;
+const AUDIO_MASTER_DRAIN_WATERMARK: f64 = 1.25;
+const AUDIO_MASTER_REFILL_WATERMARK: f64 = 0.85;
 
-fn flycast_audio_master_frames_to_run(snapshot: Option<AudioQueueSnapshot>) -> Option<u32> {
+fn audio_master_frames_to_run(snapshot: Option<AudioQueueSnapshot>) -> Option<u32> {
     let snapshot = snapshot?;
     if snapshot.target_frames == 0 {
         return None;
@@ -21,13 +21,21 @@ fn flycast_audio_master_frames_to_run(snapshot: Option<AudioQueueSnapshot>) -> O
 
     let queue_frames = snapshot.queue_frames as f64;
     let target_frames = snapshot.target_frames as f64;
-    if queue_frames >= target_frames * FLYCAST_AUDIO_DRAIN_WATERMARK {
+    if queue_frames >= target_frames * AUDIO_MASTER_DRAIN_WATERMARK {
         Some(0)
-    } else if queue_frames <= target_frames * FLYCAST_AUDIO_REFILL_WATERMARK {
+    } else if queue_frames <= target_frames * AUDIO_MASTER_REFILL_WATERMARK {
         Some(2)
     } else {
         Some(1)
     }
+}
+
+fn is_audio_master_pacing_core(core_name: &str) -> bool {
+    core_name.eq_ignore_ascii_case("flycast")
+        || core_name.eq_ignore_ascii_case("mupen64plus_next")
+        || core_name.eq_ignore_ascii_case("mednafen_psx_hw")
+        || core_name.eq_ignore_ascii_case("pcsx2")
+        || core_name.eq_ignore_ascii_case("play")
 }
 
 impl NativeArcadeUiApp {
@@ -67,37 +75,29 @@ impl NativeArcadeUiApp {
             self.reset_play_clock();
             elapsed = frame_interval;
         }
-        let n64_target_pacing = self
-            .state
-            .play
-            .active_core
-            .as_deref()
-            .is_some_and(|core| core.eq_ignore_ascii_case("mupen64plus_next"));
+        let active_core = self.state.play.active_core.as_deref();
+        let n64_target_pacing =
+            active_core.is_some_and(|core| core.eq_ignore_ascii_case("mupen64plus_next"));
         let arcade_low_latency_pacing = self
             .state
             .play
             .active_system
             .as_deref()
             .is_some_and(|system| system.eq_ignore_ascii_case("ARCADE"));
-        let dreamcast_low_latency_pacing = self
-            .state
-            .play
-            .active_core
-            .as_deref()
-            .is_some_and(|core| core.eq_ignore_ascii_case("flycast"));
+        let dreamcast_low_latency_pacing =
+            active_core.is_some_and(|core| core.eq_ignore_ascii_case("flycast"));
         let low_latency_pacing = arcade_low_latency_pacing || dreamcast_low_latency_pacing;
-        let play_tight_pacing = self
-            .state
-            .play
-            .active_core
-            .as_deref()
-            .is_some_and(|core| core.eq_ignore_ascii_case("play"));
-        let flycast_audio_master_frames = flycast_audio_master_frames_to_run(
-            dreamcast_low_latency_pacing
+        let play_tight_pacing = active_core.is_some_and(|core| core.eq_ignore_ascii_case("play"));
+        let audio_master_frames = audio_master_frames_to_run(
+            active_core
+                .is_some_and(is_audio_master_pacing_core)
                 .then(|| self.host.audio_queue_snapshot())
                 .flatten(),
         );
-        if n64_target_pacing {
+        if audio_master_frames.is_some() {
+            // Audio-master pacing derives frame budget from queue occupancy,
+            // not wall-clock elapsed time.
+        } else if n64_target_pacing {
             let frame_budget = self.state.play.catch_up_frame_debt
                 + (elapsed.as_secs_f64() / frame_interval.as_secs_f64());
             if frame_budget < 1.0 {
@@ -110,9 +110,6 @@ impl NativeArcadeUiApp {
                 ctx.request_repaint_after(remaining);
                 return;
             }
-        } else if flycast_audio_master_frames.is_some() {
-            // Flycast audio-master pacing derives frame budget from queue occupancy,
-            // not wall-clock elapsed time.
         } else if elapsed < frame_interval {
             if low_latency_pacing {
                 // Immediate repaint avoids timer jitter that can degrade effective cadence
@@ -124,7 +121,11 @@ impl NativeArcadeUiApp {
             return;
         }
 
-        let frames_to_run = if n64_target_pacing {
+        let frames_to_run = if let Some(frames_to_run) = audio_master_frames {
+            self.state.play.set_last_frame_run_at(now);
+            self.state.play.catch_up_frame_debt = 0.0;
+            frames_to_run
+        } else if n64_target_pacing {
             let elapsed_frames = elapsed.as_secs_f64() / frame_interval.as_secs_f64();
             let frame_budget =
                 (self.state.play.catch_up_frame_debt + elapsed_frames).clamp(1.0, 3.0);
@@ -156,10 +157,6 @@ impl NativeArcadeUiApp {
             self.state.play.set_last_frame_run_at(now);
             self.state.play.catch_up_frame_debt =
                 (frame_budget - frames_to_run as f64).clamp(0.0, 0.35);
-            frames_to_run
-        } else if let Some(frames_to_run) = flycast_audio_master_frames {
-            self.state.play.set_last_frame_run_at(now);
-            self.state.play.catch_up_frame_debt = 0.0;
             frames_to_run
         } else if low_latency_pacing {
             let elapsed_frames = elapsed.as_secs_f64() / frame_interval.as_secs_f64();
@@ -247,7 +244,9 @@ impl NativeArcadeUiApp {
             );
         }
 
-        if n64_target_pacing {
+        if audio_master_frames.is_some() {
+            ctx.request_repaint();
+        } else if n64_target_pacing {
             let smooth_pacing = n64_smooth_pacing_enabled();
             if smooth_pacing && tick_work > frame_interval.saturating_mul(2) {
                 // A single long frame (e.g. shader compile) can create bursty catch-up.
@@ -284,8 +283,6 @@ impl NativeArcadeUiApp {
                 self.state.play.catch_up_frame_debt = self.state.play.catch_up_frame_debt.min(0.25);
                 ctx.request_repaint();
             }
-        } else if flycast_audio_master_frames.is_some() {
-            ctx.request_repaint();
         } else if low_latency_pacing {
             let target_interval = frame_interval.saturating_mul(frames_executed.max(1));
             let post_tick_elapsed =
@@ -526,36 +523,45 @@ mod tests {
     }
 
     #[test]
-    fn flycast_audio_master_prefers_drain_when_queue_is_high() {
+    fn audio_master_prefers_drain_when_queue_is_high() {
         let target = 10_000;
         let queue = (target as f64 * 1.25).ceil() as usize;
         assert_eq!(
-            flycast_audio_master_frames_to_run(Some(snapshot(queue, target))),
+            audio_master_frames_to_run(Some(snapshot(queue, target))),
             Some(0)
         );
     }
 
     #[test]
-    fn flycast_audio_master_prefers_refill_when_queue_is_low() {
+    fn audio_master_prefers_refill_when_queue_is_low() {
         let target = 10_000;
         let queue = (target as f64 * 0.85).floor() as usize;
         assert_eq!(
-            flycast_audio_master_frames_to_run(Some(snapshot(queue, target))),
+            audio_master_frames_to_run(Some(snapshot(queue, target))),
             Some(2)
         );
     }
 
     #[test]
-    fn flycast_audio_master_holds_steady_in_mid_band() {
+    fn audio_master_holds_steady_in_mid_band() {
         let target = 10_000;
         assert_eq!(
-            flycast_audio_master_frames_to_run(Some(snapshot(10_000, target))),
+            audio_master_frames_to_run(Some(snapshot(10_000, target))),
             Some(1)
         );
     }
 
     #[test]
-    fn flycast_audio_master_returns_none_without_snapshot() {
-        assert_eq!(flycast_audio_master_frames_to_run(None), None);
+    fn audio_master_returns_none_without_snapshot() {
+        assert_eq!(audio_master_frames_to_run(None), None);
+    }
+
+    #[test]
+    fn audio_master_pacing_cores_include_n64_psx_and_ps2() {
+        assert!(is_audio_master_pacing_core("mupen64plus_next"));
+        assert!(is_audio_master_pacing_core("mednafen_psx_hw"));
+        assert!(is_audio_master_pacing_core("pcsx2"));
+        assert!(is_audio_master_pacing_core("play"));
+        assert!(!is_audio_master_pacing_core("fceumm"));
     }
 }
