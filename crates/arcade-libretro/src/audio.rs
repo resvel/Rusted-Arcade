@@ -34,13 +34,13 @@ const PLAY_AUDIO_QUEUE_CORRECTION: f64 = 0.0;
 #[cfg(feature = "audio")]
 const PLAY_AUDIO_DRIFT_LIMIT: f64 = 0.02;
 #[cfg(feature = "audio")]
-const FLYCAST_AUDIO_TARGET_LATENCY_SECS: f64 = 0.250;
+const FLYCAST_AUDIO_TARGET_LATENCY_SECS: f64 = 0.120;
 #[cfg(feature = "audio")]
-const FLYCAST_AUDIO_MAX_LATENCY_SECS: f64 = 0.700;
+const FLYCAST_AUDIO_MAX_LATENCY_SECS: f64 = 0.300;
 #[cfg(feature = "audio")]
 const FLYCAST_AUDIO_QUEUE_CORRECTION: f64 = 0.0;
 #[cfg(feature = "audio")]
-const FLYCAST_AUDIO_DRIFT_LIMIT: f64 = 0.02;
+const FLYCAST_AUDIO_DRIFT_LIMIT: f64 = 0.05;
 
 #[cfg(feature = "audio")]
 #[derive(Clone, Copy, Debug)]
@@ -92,8 +92,9 @@ fn play_audio_profile_defaults() -> AudioProfile {
 #[cfg(feature = "audio")]
 fn flycast_audio_profile_defaults() -> AudioProfile {
     AudioProfile {
-        // Flycast can burst large audio batches during FMV-heavy intro/cutscene
-        // transitions; keep pitch stable and avoid aggressive trim-back-to-target.
+        // Flycast pacing is driven from queue occupancy in the UI tick loop,
+        // so keep resample correction neutral and use trim as an emergency-only
+        // guardrail.
         target_latency_secs: FLYCAST_AUDIO_TARGET_LATENCY_SECS,
         max_latency_secs: FLYCAST_AUDIO_MAX_LATENCY_SECS,
         resample_queue_correction: FLYCAST_AUDIO_QUEUE_CORRECTION,
@@ -490,16 +491,19 @@ fn push_audio_samples(samples: &[i16]) {
         }
     }
     let queue_before = state.samples.len();
-    let queue = &mut state.samples;
-    let overflow = queue
+    let overflow = state
+        .samples
         .len()
         .saturating_add(samples.len())
         .saturating_sub(MAX_AUDIO_SAMPLES);
     for _ in 0..overflow {
-        let _ = queue.pop_front();
+        let _ = state.samples.pop_front();
     }
-    queue.extend(samples.iter().copied());
-    let queue_after = queue.len();
+    state.samples.extend(samples.iter().copied());
+    let produced = samples.len() as u64;
+    state.produced_samples_total = state.produced_samples_total.saturating_add(produced);
+    state.produced_samples_window = state.produced_samples_window.saturating_add(produced);
+    let queue_after = state.samples.len();
 
     if overflow > 0 || (debug_enabled && (previous_silent != is_silent || n % 500 == 0)) {
         info!(
@@ -524,6 +528,46 @@ fn audio_frames_for_latency(sample_rate_hz: f64, latency_secs: f64) -> usize {
     }
 
     (sample_rate_hz * latency_secs).round() as usize
+}
+
+#[cfg(feature = "audio")]
+fn maybe_log_audio_flow_window(state: &mut AudioState) {
+    let now = std::time::Instant::now();
+    let started_at = state.flow_window_started_at.get_or_insert(now);
+    let elapsed = now.saturating_duration_since(*started_at);
+    if elapsed < std::time::Duration::from_secs(1) {
+        return;
+    }
+
+    let elapsed_secs = elapsed.as_secs_f64().max(0.001);
+    let produced_frames_per_sec = (state.produced_samples_window as f64 / 2.0) / elapsed_secs;
+    let consumed_frames_per_sec = (state.consumed_samples_window as f64 / 2.0) / elapsed_secs;
+    let trimmed_frames_per_sec = (state.trimmed_samples_window as f64 / 2.0) / elapsed_secs;
+    let queue_frames = state.samples.len() / 2;
+    let target_frames =
+        audio_frames_for_latency(state.output_sample_rate, state.target_latency_secs);
+    let max_frames = audio_frames_for_latency(state.output_sample_rate, state.max_latency_secs)
+        .max(target_frames + 1);
+    info!(
+        target: "arcade_libretro::audio",
+        elapsed_secs = elapsed_secs,
+        produced_fps = produced_frames_per_sec,
+        consumed_fps = consumed_frames_per_sec,
+        trimmed_fps = trimmed_frames_per_sec,
+        queue_frames,
+        target_frames,
+        max_frames,
+        source_rate = state.source_sample_rate,
+        output_rate = state.output_sample_rate,
+        produced_total_frames = state.produced_samples_total / 2,
+        consumed_total_frames = state.consumed_samples_total / 2,
+        trimmed_total_frames = state.trimmed_samples_total / 2,
+        "audio flow window"
+    );
+    state.produced_samples_window = 0;
+    state.consumed_samples_window = 0;
+    state.trimmed_samples_window = 0;
+    *started_at = now;
 }
 
 #[cfg(feature = "audio")]
@@ -554,6 +598,9 @@ fn trim_audio_queue_for_latency(state: &mut AudioState) {
     let samples_to_drop = frames_to_drop.saturating_mul(2).min(state.samples.len());
     let queue_before = state.samples.len();
     state.samples.drain(..samples_to_drop);
+    let trimmed = samples_to_drop as u64;
+    state.trimmed_samples_total = state.trimmed_samples_total.saturating_add(trimmed);
+    state.trimmed_samples_window = state.trimmed_samples_window.saturating_add(trimmed);
     state.current_frame = None;
     state.next_frame = None;
     state.resample_phase = 0.0;
@@ -577,8 +624,17 @@ fn trim_audio_queue_for_latency(state: &mut AudioState) {
 fn pop_stereo_frame(state: &mut AudioState) -> (i16, i16) {
     let queue_before = state.samples.len();
     let underflow = queue_before < 2;
-    let left = state.samples.pop_front().unwrap_or(0);
-    let right = state.samples.pop_front().unwrap_or(0);
+    let left = state.samples.pop_front();
+    let right = state.samples.pop_front();
+    let consumed_samples = left.is_some() as u64 + right.is_some() as u64;
+    state.consumed_samples_total = state
+        .consumed_samples_total
+        .saturating_add(consumed_samples);
+    state.consumed_samples_window = state
+        .consumed_samples_window
+        .saturating_add(consumed_samples);
+    let left = left.unwrap_or(0);
+    let right = right.unwrap_or(0);
     if underflow {
         if UNDERFLOW_WARN_COUNT.fetch_add(1, Ordering::Relaxed) < 20 {
             eprintln!(
@@ -718,6 +774,7 @@ fn write_output_i16(output: &mut [i16], channels: usize) {
             *sample = 0;
         }
     }
+    maybe_log_audio_flow_window(&mut state);
 
     let n = CB_COUNT.fetch_add(1, Ordering::Relaxed);
     let out_peak: u16 = output.iter().map(|s| s.unsigned_abs()).max().unwrap_or(0);
@@ -773,6 +830,7 @@ fn write_output_u16(output: &mut [u16], channels: usize) {
             *sample = i16::MAX as u16;
         }
     }
+    maybe_log_audio_flow_window(&mut state);
 }
 
 #[cfg(feature = "audio")]
@@ -822,6 +880,7 @@ fn write_output_f32(output: &mut [f32], channels: usize) {
             *sample = 0.0;
         }
     }
+    maybe_log_audio_flow_window(&mut state);
 
     let n = CB_COUNT.fetch_add(1, Ordering::Relaxed);
     let out_peak: f32 = output.iter().map(|s| s.abs()).fold(0.0f32, f32::max);

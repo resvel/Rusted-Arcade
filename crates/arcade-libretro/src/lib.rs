@@ -75,6 +75,16 @@ pub struct FrameBuffer {
     pub pixel_format: PixelFormat,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct AudioQueueSnapshot {
+    pub queue_frames: usize,
+    pub target_frames: usize,
+    pub max_frames: usize,
+    pub source_rate: f64,
+    pub output_rate: f64,
+    pub trimmed_total_frames: u64,
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum PixelFormat {
     #[default]
@@ -144,6 +154,13 @@ struct AudioState {
     resample_ratio_drift_limit: f64,
     trim_to_target_on_overflow: bool,
     drop_excess_silence_when_buffered: bool,
+    produced_samples_total: u64,
+    consumed_samples_total: u64,
+    trimmed_samples_total: u64,
+    produced_samples_window: u64,
+    consumed_samples_window: u64,
+    trimmed_samples_window: u64,
+    flow_window_started_at: Option<std::time::Instant>,
 }
 
 impl Default for AudioState {
@@ -161,6 +178,13 @@ impl Default for AudioState {
             resample_ratio_drift_limit: DEFAULT_AUDIO_RESAMPLE_RATIO_DRIFT_LIMIT,
             trim_to_target_on_overflow: true,
             drop_excess_silence_when_buffered: false,
+            produced_samples_total: 0,
+            consumed_samples_total: 0,
+            trimmed_samples_total: 0,
+            produced_samples_window: 0,
+            consumed_samples_window: 0,
+            trimmed_samples_window: 0,
+            flow_window_started_at: None,
         }
     }
 }
@@ -216,6 +240,7 @@ struct EnvironmentContext {
     frame_time_callback: Option<RetroFrameTimeCallbackFn>,
     frame_time_reference_usecs: i64,
     frame_time_last_instant: Option<std::time::Instant>,
+    runtime_video_fps: Option<f64>,
     run_fps_probe_start: Option<std::time::Instant>,
     run_fps_probe_frames: u32,
     run_fps_probe_logged: bool,
@@ -549,6 +574,34 @@ fn active_runtime() -> Option<Arc<HostRuntime>> {
 fn with_active_runtime<T>(f: impl FnOnce(&HostRuntime) -> T) -> Option<T> {
     let runtime = active_runtime()?;
     Some(f(&runtime))
+}
+
+fn sanitized_video_fps(fps: f64) -> Option<f64> {
+    if fps.is_finite() && fps > 0.0 {
+        Some(fps)
+    } else {
+        None
+    }
+}
+
+fn frame_time_usecs_for_core(
+    is_flycast: bool,
+    reference_usecs: i64,
+    measured_delta_usecs: Option<i64>,
+) -> i64 {
+    if is_flycast {
+        return reference_usecs.max(0);
+    }
+
+    measured_delta_usecs.unwrap_or(reference_usecs).max(0)
+}
+
+fn audio_frames_for_latency(sample_rate_hz: f64, latency_secs: f64) -> usize {
+    if !sample_rate_hz.is_finite() || sample_rate_hz <= 0.0 || latency_secs <= 0.0 {
+        return 0;
+    }
+
+    (sample_rate_hz * latency_secs).round() as usize
 }
 
 fn log_core_binary_load_metadata(core_name: &str, core_path: &Path) {
@@ -1196,6 +1249,7 @@ impl LibretroHost {
                 context.requested_hw_context_type = None;
                 context.last_load_error = None;
                 context.last_negotiation_interface = None;
+                context.runtime_video_fps = None;
             }
 
             if matches!(
@@ -1264,6 +1318,10 @@ impl LibretroHost {
                 };
                 unsafe {
                     (api.get_system_av_info)(&mut av_info as *mut RetroSystemAvInfo);
+                }
+                {
+                    let mut context = self.runtime.environment_context.lock();
+                    context.runtime_video_fps = sanitized_video_fps(av_info.timing.fps);
                 }
                 let _version = unsafe { (api.api_version)() };
                 let normalized_video_fps = normalize_display_fps(av_info.timing.fps);
@@ -1425,14 +1483,44 @@ impl LibretroHost {
     }
 
     pub fn frame_interval(&self) -> Option<std::time::Duration> {
-        let mut fps = self.loaded.lock().as_ref().map(|c| c.video_fps)?;
-        if !fps.is_finite() || fps <= 0.0 {
-            return None;
+        let loaded_fps = self.loaded.lock().as_ref().map(|c| c.video_fps)?;
+        let mut fps = loaded_fps;
+        let (is_flycast, runtime_video_fps) = {
+            let context = self.runtime.environment_context.lock();
+            let is_flycast = context
+                .loaded_core_name
+                .as_deref()
+                .is_some_and(|name| name.eq_ignore_ascii_case("flycast"));
+            (is_flycast, context.runtime_video_fps)
+        };
+        if is_flycast {
+            fps = runtime_video_fps.unwrap_or(loaded_fps);
         }
-
-        fps = normalize_display_fps(fps);
+        let fps = normalize_display_fps(sanitized_video_fps(fps)?);
 
         Some(std::time::Duration::from_secs_f64(1.0 / fps))
+    }
+
+    pub fn audio_queue_snapshot(&self) -> Option<AudioQueueSnapshot> {
+        if !self.is_loaded() {
+            return None;
+        }
+        let state = self.runtime.audio_state.lock();
+        let output_rate = state.output_sample_rate;
+        let target_frames = audio_frames_for_latency(output_rate, state.target_latency_secs);
+        if target_frames == 0 {
+            return None;
+        }
+        let max_frames =
+            audio_frames_for_latency(output_rate, state.max_latency_secs).max(target_frames + 1);
+        Some(AudioQueueSnapshot {
+            queue_frames: state.samples.len() / 2,
+            target_frames,
+            max_frames,
+            source_rate: state.source_sample_rate,
+            output_rate,
+            trimmed_total_frames: state.trimmed_samples_total / 2,
+        })
     }
 
     pub fn video_aspect_ratio(&self) -> Option<f32> {
@@ -1461,13 +1549,25 @@ impl LibretroHost {
             return Err(anyhow!(error));
         }
         let uses_hw_render = loaded.uses_hw_render;
+        let loaded_video_fps = loaded.video_fps;
         let target_size = hw_render_target_size(loaded.video_max_size, loaded.video_base_size);
-        let default_frame_time_usecs = if loaded.video_fps.is_finite() && loaded.video_fps > 0.0 {
-            (1_000_000.0 / loaded.video_fps).round() as i64
-        } else {
-            16_667
-        };
         drop(loaded_guard);
+        let (is_flycast_core, runtime_video_fps) = {
+            let context = self.runtime.environment_context.lock();
+            let is_flycast = context
+                .loaded_core_name
+                .as_deref()
+                .is_some_and(|name| name.eq_ignore_ascii_case("flycast"));
+            (is_flycast, context.runtime_video_fps)
+        };
+        let pacing_video_fps = if is_flycast_core {
+            runtime_video_fps.unwrap_or(loaded_video_fps)
+        } else {
+            loaded_video_fps
+        };
+        let default_frame_time_usecs = sanitized_video_fps(pacing_video_fps)
+            .map(|fps| (1_000_000.0 / fps).round() as i64)
+            .unwrap_or(16_667);
 
         if uses_hw_render && hardware_render_requested() && !hardware_render_context_ready() {
             invoke_hw_context_reset()?;
@@ -1520,30 +1620,47 @@ impl LibretroHost {
             let callback = context.frame_time_callback;
             callback.map(|callback| {
                 let now = std::time::Instant::now();
+                let is_flycast = context
+                    .loaded_core_name
+                    .as_deref()
+                    .is_some_and(|name| name.eq_ignore_ascii_case("flycast"));
                 let reference_usecs = if context.frame_time_reference_usecs > 0 {
                     context.frame_time_reference_usecs
                 } else {
                     default_frame_time_usecs
                 };
-                let usec = if let Some(previous) = context.frame_time_last_instant {
+                let measured_delta_usecs = if let Some(previous) = context.frame_time_last_instant {
                     let delta = now.saturating_duration_since(previous).as_micros();
-                    delta.min(i64::MAX as u128) as i64
+                    Some(delta.min(i64::MAX as u128) as i64)
                 } else {
-                    reference_usecs
+                    None
                 };
                 context.frame_time_last_instant = Some(now);
-                (callback, usec.max(0))
+                let usec =
+                    frame_time_usecs_for_core(is_flycast, reference_usecs, measured_delta_usecs);
+                (callback, usec)
             })
         };
         if let Some((callback, usec)) = frame_time_callback {
             unsafe { callback(usec) };
         }
         let audio_callback = {
-            let context = self.runtime.environment_context.lock();
-            context
-                .audio_callback_enabled
-                .then_some(context.audio_callback)
-                .flatten()
+            let mut context = self.runtime.environment_context.lock();
+            let is_flycast = context
+                .loaded_core_name
+                .as_deref()
+                .is_some_and(|name| name.eq_ignore_ascii_case("flycast"));
+            if is_flycast {
+                // Flycast should stay on push-audio pacing. Keep pull-callbacks
+                // disabled even if a core-side state change tries to re-enable them.
+                context.audio_callback_enabled = false;
+                None
+            } else {
+                context
+                    .audio_callback_enabled
+                    .then_some(context.audio_callback)
+                    .flatten()
+            }
         };
         if let Some(callback) = audio_callback {
             unsafe { callback() };
@@ -1863,11 +1980,11 @@ impl LibretroHost {
         self.runtime
             .shutdown_requested
             .store(false, Ordering::Relaxed);
-        self.runtime
-            .environment_context
-            .lock()
-            .controller_info
-            .clear();
+        {
+            let mut context = self.runtime.environment_context.lock();
+            context.controller_info.clear();
+            context.runtime_video_fps = None;
+        }
         reset_vulkan_present_metrics(&self.runtime);
         clear_active_runtime(&self.runtime);
         Ok(())
@@ -2167,5 +2284,57 @@ mod tests {
         host.unload().expect("unload");
 
         assert!(!host.runtime.shutdown_requested.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn frame_time_usecs_for_flycast_stays_fixed() {
+        assert_eq!(
+            frame_time_usecs_for_core(true, 16_667, Some(33_333)),
+            16_667
+        );
+    }
+
+    #[test]
+    fn frame_time_usecs_for_non_flycast_uses_measured_delta() {
+        assert_eq!(
+            frame_time_usecs_for_core(false, 16_667, Some(20_000)),
+            20_000
+        );
+        assert_eq!(frame_time_usecs_for_core(false, 16_667, None), 16_667);
+    }
+
+    #[test]
+    fn set_system_av_info_updates_runtime_video_fps() {
+        *ACTIVE_RUNTIME.lock() = None;
+        let runtime = Arc::new(HostRuntime::default());
+        register_active_runtime(&runtime);
+
+        let mut av_info = RetroSystemAvInfo {
+            geometry: RetroGameGeometry {
+                base_width: 640,
+                base_height: 480,
+                max_width: 640,
+                max_height: 480,
+                aspect_ratio: 4.0 / 3.0,
+            },
+            timing: RetroSystemTiming {
+                fps: 59.94,
+                sample_rate: 44_100.0,
+            },
+        };
+        let handled = unsafe {
+            retro_environment(
+                32,
+                (&mut av_info as *mut RetroSystemAvInfo).cast::<c_void>(),
+            )
+        };
+
+        assert!(handled);
+        assert_eq!(
+            runtime.environment_context.lock().runtime_video_fps,
+            Some(59.94)
+        );
+
+        clear_active_runtime(&runtime);
     }
 }

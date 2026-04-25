@@ -1,6 +1,7 @@
 use eframe::egui;
 use tracing::{info, warn};
 
+use arcade_libretro::AudioQueueSnapshot;
 use arcade_services::SaveOperationError;
 use std::sync::OnceLock;
 
@@ -8,6 +9,26 @@ use crate::{
     app::NativeArcadeUiApp,
     state::{HoldAction, MenuFocusRegion},
 };
+
+const FLYCAST_AUDIO_DRAIN_WATERMARK: f64 = 1.25;
+const FLYCAST_AUDIO_REFILL_WATERMARK: f64 = 0.85;
+
+fn flycast_audio_master_frames_to_run(snapshot: Option<AudioQueueSnapshot>) -> Option<u32> {
+    let snapshot = snapshot?;
+    if snapshot.target_frames == 0 {
+        return None;
+    }
+
+    let queue_frames = snapshot.queue_frames as f64;
+    let target_frames = snapshot.target_frames as f64;
+    if queue_frames >= target_frames * FLYCAST_AUDIO_DRAIN_WATERMARK {
+        Some(0)
+    } else if queue_frames <= target_frames * FLYCAST_AUDIO_REFILL_WATERMARK {
+        Some(2)
+    } else {
+        Some(1)
+    }
+}
 
 impl NativeArcadeUiApp {
     const PLAY_OVERLAY_DURATION: std::time::Duration = std::time::Duration::from_millis(1800);
@@ -19,6 +40,8 @@ impl NativeArcadeUiApp {
         const MAX_STALE_FRAMES: u32 = 3;
         const ARCADE_MAX_CATCH_UP_FRAMES: u32 = 2;
         const ARCADE_MAX_FRAME_BUDGET: f64 = 2.5;
+        const DREAMCAST_MAX_CATCH_UP_FRAMES: u32 = 1;
+        const DREAMCAST_MAX_FRAME_BUDGET: f64 = 1.35;
         const LOW_LATENCY_MAX_REPAINT_WAIT: std::time::Duration =
             std::time::Duration::from_millis(1);
 
@@ -56,12 +79,24 @@ impl NativeArcadeUiApp {
             .active_system
             .as_deref()
             .is_some_and(|system| system.eq_ignore_ascii_case("ARCADE"));
+        let dreamcast_low_latency_pacing = self
+            .state
+            .play
+            .active_core
+            .as_deref()
+            .is_some_and(|core| core.eq_ignore_ascii_case("flycast"));
+        let low_latency_pacing = arcade_low_latency_pacing || dreamcast_low_latency_pacing;
         let play_tight_pacing = self
             .state
             .play
             .active_core
             .as_deref()
             .is_some_and(|core| core.eq_ignore_ascii_case("play"));
+        let flycast_audio_master_frames = flycast_audio_master_frames_to_run(
+            dreamcast_low_latency_pacing
+                .then(|| self.host.audio_queue_snapshot())
+                .flatten(),
+        );
         if n64_target_pacing {
             let frame_budget = self.state.play.catch_up_frame_debt
                 + (elapsed.as_secs_f64() / frame_interval.as_secs_f64());
@@ -75,8 +110,11 @@ impl NativeArcadeUiApp {
                 ctx.request_repaint_after(remaining);
                 return;
             }
+        } else if flycast_audio_master_frames.is_some() {
+            // Flycast audio-master pacing derives frame budget from queue occupancy,
+            // not wall-clock elapsed time.
         } else if elapsed < frame_interval {
-            if arcade_low_latency_pacing {
+            if low_latency_pacing {
                 // Immediate repaint avoids timer jitter that can degrade effective cadence
                 // despite low frame work time.
                 ctx.request_repaint();
@@ -119,14 +157,20 @@ impl NativeArcadeUiApp {
             self.state.play.catch_up_frame_debt =
                 (frame_budget - frames_to_run as f64).clamp(0.0, 0.35);
             frames_to_run
-        } else if arcade_low_latency_pacing {
+        } else if let Some(frames_to_run) = flycast_audio_master_frames {
+            self.state.play.set_last_frame_run_at(now);
+            self.state.play.catch_up_frame_debt = 0.0;
+            frames_to_run
+        } else if low_latency_pacing {
             let elapsed_frames = elapsed.as_secs_f64() / frame_interval.as_secs_f64();
-            let frame_budget = (self.state.play.catch_up_frame_debt + elapsed_frames)
-                .clamp(1.0, ARCADE_MAX_FRAME_BUDGET);
-            let frames_to_run = frame_budget
-                .floor()
-                .clamp(1.0, ARCADE_MAX_CATCH_UP_FRAMES as f64)
-                as u32;
+            let (max_frame_budget, max_catch_up_frames) = if dreamcast_low_latency_pacing {
+                (DREAMCAST_MAX_FRAME_BUDGET, DREAMCAST_MAX_CATCH_UP_FRAMES)
+            } else {
+                (ARCADE_MAX_FRAME_BUDGET, ARCADE_MAX_CATCH_UP_FRAMES)
+            };
+            let frame_budget =
+                (self.state.play.catch_up_frame_debt + elapsed_frames).clamp(1.0, max_frame_budget);
+            let frames_to_run = frame_budget.floor().clamp(1.0, max_catch_up_frames as f64) as u32;
             self.state.play.set_last_frame_run_at(now);
             self.state.play.catch_up_frame_debt =
                 (frame_budget - frames_to_run as f64).clamp(0.0, 1.0);
@@ -240,7 +284,9 @@ impl NativeArcadeUiApp {
                 self.state.play.catch_up_frame_debt = self.state.play.catch_up_frame_debt.min(0.25);
                 ctx.request_repaint();
             }
-        } else if arcade_low_latency_pacing {
+        } else if flycast_audio_master_frames.is_some() {
+            ctx.request_repaint();
+        } else if low_latency_pacing {
             let target_interval = frame_interval.saturating_mul(frames_executed.max(1));
             let post_tick_elapsed =
                 std::time::Instant::now().duration_since(self.state.play.last_frame_run_at);
@@ -462,4 +508,54 @@ fn n64_smooth_pacing_enabled() -> bool {
         }
         Err(_) => true,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn snapshot(queue_frames: usize, target_frames: usize) -> AudioQueueSnapshot {
+        AudioQueueSnapshot {
+            queue_frames,
+            target_frames,
+            max_frames: target_frames.saturating_mul(2).max(target_frames + 1),
+            source_rate: 44_100.0,
+            output_rate: 44_100.0,
+            trimmed_total_frames: 0,
+        }
+    }
+
+    #[test]
+    fn flycast_audio_master_prefers_drain_when_queue_is_high() {
+        let target = 10_000;
+        let queue = (target as f64 * 1.25).ceil() as usize;
+        assert_eq!(
+            flycast_audio_master_frames_to_run(Some(snapshot(queue, target))),
+            Some(0)
+        );
+    }
+
+    #[test]
+    fn flycast_audio_master_prefers_refill_when_queue_is_low() {
+        let target = 10_000;
+        let queue = (target as f64 * 0.85).floor() as usize;
+        assert_eq!(
+            flycast_audio_master_frames_to_run(Some(snapshot(queue, target))),
+            Some(2)
+        );
+    }
+
+    #[test]
+    fn flycast_audio_master_holds_steady_in_mid_band() {
+        let target = 10_000;
+        assert_eq!(
+            flycast_audio_master_frames_to_run(Some(snapshot(10_000, target))),
+            Some(1)
+        );
+    }
+
+    #[test]
+    fn flycast_audio_master_returns_none_without_snapshot() {
+        assert_eq!(flycast_audio_master_frames_to_run(None), None);
+    }
 }

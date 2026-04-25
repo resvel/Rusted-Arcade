@@ -39,6 +39,7 @@ pub(super) fn configure_environment_context(
         context.frame_time_callback = None;
         context.frame_time_reference_usecs = 0;
         context.frame_time_last_instant = None;
+        context.runtime_video_fps = None;
         context.run_fps_probe_start = None;
         context.run_fps_probe_frames = 0;
         context.run_fps_probe_logged = false;
@@ -314,17 +315,33 @@ pub(super) unsafe extern "C" fn retro_environment(cmd: u32, data: *mut c_void) -
             let audio = unsafe { &*(data as *const RetroAudioCallback) };
             if let Some(runtime) = active_runtime() {
                 let mut context = runtime.environment_context.lock();
+                let disable_for_flycast = context
+                    .loaded_core_name
+                    .as_deref()
+                    .is_some_and(|core| core.eq_ignore_ascii_case("flycast"));
+                let callback_enabled = audio.callback.is_some() && !disable_for_flycast;
                 context.audio_callback = audio.callback;
                 context.audio_set_state_callback = audio.set_state;
-                context.audio_callback_enabled = audio.callback.is_some();
+                context.audio_callback_enabled = callback_enabled;
                 if let Some(set_state) = audio.set_state {
-                    unsafe { set_state(true) };
+                    unsafe { set_state(callback_enabled) };
+                }
+                if disable_for_flycast && audio.callback.is_some() {
+                    info!(
+                        target: "arcade_libretro::audio",
+                        "flycast requested RETRO_ENVIRONMENT_SET_AUDIO_CALLBACK; forcing callback disabled to keep push-audio pacing stable"
+                    );
                 }
             }
             info!(
                 target: "arcade_libretro::audio",
                 callback_registered = audio.callback.is_some(),
                 set_state_registered = audio.set_state.is_some(),
+                callback_enabled = if let Some(runtime) = active_runtime() {
+                    runtime.environment_context.lock().audio_callback_enabled
+                } else {
+                    false
+                },
                 "core requested RETRO_ENVIRONMENT_SET_AUDIO_CALLBACK"
             );
             true
@@ -614,6 +631,8 @@ pub(super) unsafe extern "C" fn retro_environment(cmd: u32, data: *mut c_void) -
                     av_info.timing.sample_rate,
                 );
             }
+            let mut context = runtime.environment_context.lock();
+            context.runtime_video_fps = sanitized_video_fps(av_info.timing.fps);
             true
         }
         RETRO_ENVIRONMENT_SET_GEOMETRY => {
