@@ -19,6 +19,7 @@ recentRun*.log
 /data/
 /roms/
 /public/covers/
+/public/system-logos-web/
 
 # Local third-party scratch copies/backups
 /third_party/*-backup-*/

@@ -366,18 +366,18 @@ impl NativeArcadeUiApp {
         }
 
         let candidate = match self.active_system() {
-            "NES" => "system-logos/nesbackground.webp",
-            "SNES" => "system-logos-web/snesbackground.w960.webp",
-            "GENESIS" => "system-logos-web/genesisbackground.w960.webp",
-            "GB" => "system-logos-web/gameboybackground.w960.webp",
-            "GBA" => "system-logos-web/GBAsectionbackground.w960.webp",
-            "N64" => "system-logos-web/n64sectionbackground.w960.webp",
-            "ARCADE" => "system-logos-web/arcadebackground.w1200.webp",
-            "PSX" => "system-logos/psxBackground.jpg",
-            "PS2" => "system-logos/ps2Background.jpg",
-            "DREAMCAST" => "system-logos/backgroundDreamcast.jpg",
+            "NES" => "system-logos/nes_background.jpg",
+            "SNES" => "system-logos/snes_background.jpg",
+            "GENESIS" => "system-logos/genesis_background.jpg",
+            "GB" => "system-logos/gb_background.webp",
+            "GBA" => "system-logos/gba_background.jpg",
+            "N64" => "system-logos/n64_background.webp",
+            "ARCADE" => "system-logos/arcade_background.jpg",
+            "PSX" => "system-logos/psx_background.jpg",
+            "PS2" => "system-logos/ps2_background.jpg",
+            "DREAMCAST" => "system-logos/dreamcast_background.jpg",
             "DOS" => "system-logos/DOSbackGround.png",
-            _ => "system-logos-web/arcadebackground.w1200.webp",
+            _ => "system-logos/arcade_background.jpg",
         };
         self.resolve_db_asset_path(candidate)
     }

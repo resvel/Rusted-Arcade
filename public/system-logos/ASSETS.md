@@ -17,12 +17,6 @@ This folder keeps original uploaded controller images and cleaned transparent ve
 
 All cleaned controller assets have transparent backgrounds (alpha channel) and are intended for placement over themed UI backgrounds.
 
-## Optimized Runtime Variants
+## Runtime Background Assets
 
-Generated web-optimized variants used by the frontend live in `public/system-logos-web/`.
-
-Generate/update them with:
-
-```bash
-npm run optimize-system-logos-web
-```
+The frontend now loads runtime backgrounds directly from `public/system-logos/`.
