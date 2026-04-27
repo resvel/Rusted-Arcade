@@ -245,16 +245,24 @@ Older saved mappings that do not include newer frontend actions are backfilled w
 
 Core binary extension is platform-specific (`.so` on Linux, `.dll` on Windows, `.dylib` on macOS).
 
-- `fceumm_libretro`
-- `snes9x_libretro`
-- `genesis_plus_gx_libretro`
-- `gambatte_libretro`
-- `mgba_libretro`
-- `parallel_n64_libretro`
-- `mupen64plus_next_libretro`
-- `fbneo_libretro`
-- `mame2003_libretro`
-- `mame2003_plus_libretro`
+See [CORES.md](CORES.md) for the authoritative list of supported cores and system-specific notes.
+
+Current supported cores:
+- `fceumm_libretro` (NES)
+- `gambatte_libretro` (Game Boy)
+- `mednafen_pce_fast_libretro` (PCE / TurboGrafx-16)
+- `snes9x_libretro` (SNES)
+- `genesis_plus_gx_libretro` (Genesis / Mega Drive)
+- `mednafen_saturn_libretro` (Sega Saturn)
+- `mupen64plus_next_libretro` (N64)
+- `mgba_libretro` (Game Boy Advance)
+- `mednafen_psx_hw_libretro` (PlayStation 1 with hardware rendering)
+- `pcsx2_libretro` (PlayStation 2)
+- `play_libretro` (PlayStation 2 - alternative core)
+- `flycast_libretro` (Dreamcast)
+- `fbneo_libretro` (Arcade — FBNeo)
+- `mame2003_plus_libretro` (Arcade — MAME 2003 Plus)
+- `dosbox_pure_libretro` (DOS)
 
 ## Important notes
 
@@ -288,22 +296,16 @@ Core binary extension is platform-specific (`.so` on Linux, `.dll` on Windows, `
 
 ### Current N64 runtime path
 
-- macOS (Apple Silicon native):
-  - active N64 core is `mupen64plus_next`
-  - two CPU lanes are available:
+The current development focus is macOS Apple Silicon. N64 support across platforms:
+
+- **macOS (Apple Silicon)**:
+  - Active N64 core: `mupen64plus_next`
+  - Two CPU lanes available:
     - `Stable Cached`: loads `mupen64plus_next_libretro.dylib`
     - `Experimental Dynarec`: prefers `mupen64plus_next_dynarec_arm64_libretro.dylib`
-  - if dynarec lane is selected and launch fails, native host retries once with cached lane for that launch
-  - active N64 graphics path is ParaLLEl (Vulkan in core)
+  - If dynarec lane is selected and launch fails, native host retries once with cached lane
+  - Graphics path: ParaLLEl (Vulkan in core)
   - `Count Per Op` default is `Auto (0)`; no forced override is applied by the frontend
-- On Linux/X11 the host uses `parallel_n64` with:
-  - core-owned Vulkan device creation
-  - external X11 Vulkan presentation window
-  - direct external GPU presentation
-- On Windows the host currently defaults to:
-  - the software CPU-frame path with `parallel-n64-gfxplugin=angrylion`
-  - no external Win32 Vulkan present window unless `ARCADE_WINDOWS_EXTERNAL_VULKAN_PRESENT=1` is set
-  - an experimental opt-in `parallel` Vulkan path with ParaLLEl-RDP upscaling support
 
 ### Apple Silicon dynarec core bring-up notes
 
@@ -322,21 +324,17 @@ These changes are what enabled native M1/M2 dynarec boot and gameplay in current
 - Executable-local config and asset path layout for packaged builds
 - Manage view and runtime config persistence for cover scraping
 - Native write-side ROM management flow
-- Linux `parallel_n64` Vulkan bring-up
 - macOS `mupen64plus_next` ParaLLEl/Vulkan path (cached + dynarec lane support)
-- Linux external Vulkan presentation window
-- Linux direct external presentation instead of UI texture readback
 - Configurable ParaLLEl upscale
+- Support for multiple systems: NES, SNES, Genesis, N64, Game Boy, GBA, Arcade, PSX, PS2, Dreamcast, Saturn, PCE, DOS
 
 ### Remaining work
 
-- Linux `parallel_n64` Vulkan parity/regression coverage
 - Broader compatibility and long-session stability validation for macOS dynarec lane across more titles
-- Windows `parallel_n64` Vulkan parity and stability in the opt-in external-present path
-- Adaptive 60/30 presentation policy for heavier Linux scenes
 - Runtime validation of `4x` and `8x` upscale modes
-- Additional UX polish for the external Vulkan window lifecycle if needed
+- Additional UX polish for system-specific features across newly supported platforms
 - Broader end-to-end validation of native cover scraping against real downloads
+- Cross-platform parity testing for newly added systems (Saturn, PCE, Dreamcast, PS2, PSX, DOS)
 
 ## N64 GoodName Renamer
 
@@ -387,13 +385,11 @@ cargo test -p arcade-libretro
 cargo check -p arcade-app
 ```
 
-Windows-target Rust compile has not been revalidated in this Linux environment for the current Vulkan work. Real Windows runtime QA is still required for final sign-off.
-
 ## Release Gates
 
 Still required before final release sign-off:
 
-1. Real Windows runtime QA on a clean machine.
-2. `parallel_n64` Vulkan parity QA on Windows.
-3. Longer stability pass for the required matrix.
-4. Final clean-machine smoke for both Linux and Windows ZIP artifacts.
+1. macOS dynarec stability validation across broader game library.
+2. Cross-platform parity testing for newly added systems.
+3. Longer stability pass for the required platform matrix.
+4. Final clean-machine smoke test for macOS application.
