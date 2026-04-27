@@ -144,6 +144,26 @@ struct FrontendShortcutState {
     return_pressed: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RetroKeyboardRouting {
+    Passthrough,
+    SystemMapping,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ShortcutDirectionalGuardMode {
+    Disabled,
+    Enabled,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct RuntimeInputPolicy {
+    keyboard_routing: RetroKeyboardRouting,
+    uses_primary_stick_selector: bool,
+    supports_native_analog: bool,
+    shortcut_directional_guard: ShortcutDirectionalGuardMode,
+}
+
 #[derive(Default, Clone, Copy)]
 struct FrontendNavInput {
     left: bool,
@@ -225,9 +245,13 @@ impl NativeArcadeUiApp {
         self.host.clear_input_state();
 
         let system = self.active_input_system();
-        let dos_keyboard_passthrough =
-            prefer_retro_keyboard_passthrough(&system, self.host.has_keyboard_callback());
-        let primary_stick_preference = if system_uses_primary_stick_selector(&system) {
+        let input_policy =
+            runtime_input_policy_for_system(&system, self.host.has_keyboard_callback());
+        let dos_keyboard_passthrough = matches!(
+            input_policy.keyboard_routing,
+            RetroKeyboardRouting::Passthrough
+        );
+        let primary_stick_preference = if input_policy.uses_primary_stick_selector {
             Some(self.services.n64_primary_stick())
         } else {
             None
@@ -239,6 +263,7 @@ impl NativeArcadeUiApp {
                 0,
                 &keyboard_state,
                 &system,
+                &input_policy,
                 None,
                 primary_stick_preference,
             );
@@ -253,6 +278,7 @@ impl NativeArcadeUiApp {
                 capture.port,
                 &capture.state,
                 &system,
+                &input_policy,
                 Some(&capture.identity),
                 primary_stick_preference,
             );
@@ -1028,19 +1054,6 @@ impl NativeArcadeUiApp {
                 &dpad_left_debug,
                 &dpad_right_debug,
             ];
-            let dpad_active =
-                dpad_up_pressed || dpad_down_pressed || dpad_left_pressed || dpad_right_pressed;
-            let guide_pressed =
-                deghost_non_dpad_button_against_active_dpad(&guide_debug, &dpad_debugs);
-            let right_thumb_pressed =
-                deghost_non_dpad_button_against_active_dpad(&right_thumb_debug, &dpad_debugs);
-            guide_debug.effective_is_pressed =
-                strict_safety_effective_non_dpad_button(&guide_debug, &dpad_debugs, dpad_active);
-            right_thumb_debug.effective_is_pressed = strict_safety_effective_non_dpad_button(
-                &right_thumb_debug,
-                &dpad_debugs,
-                dpad_active,
-            );
             let dpad_x = effective_raw_dpad_x;
             // gilrs already normalizes DPadY with platform reversal rules; applying
             // our Sony stick inversion here would double-invert on macOS.
@@ -1050,24 +1063,53 @@ impl NativeArcadeUiApp {
             let right_y = normalize_vertical_axis(raw_right_y, invert_vertical);
             let dpad_fallback_x = if has_explicit_dpad_input { 0.0 } else { left_x };
             let dpad_fallback_y = if has_explicit_dpad_input { 0.0 } else { left_y };
+            let explicit_dpad_up_active =
+                explicit_dpad_direction_active(dpad_up_pressed, dpad_y, false);
+            let explicit_dpad_down_active =
+                explicit_dpad_direction_active(dpad_down_pressed, dpad_y, true);
+            let explicit_dpad_left_active =
+                explicit_dpad_direction_active(dpad_left_pressed, dpad_x, false);
+            let explicit_dpad_right_active =
+                explicit_dpad_direction_active(dpad_right_pressed, dpad_x, true);
+            let explicit_dpad_active = explicit_dpad_up_active
+                || explicit_dpad_down_active
+                || explicit_dpad_left_active
+                || explicit_dpad_right_active;
+            guide_debug.effective_is_pressed = strict_safety_effective_non_dpad_button(
+                &guide_debug,
+                &dpad_debugs,
+                explicit_dpad_active,
+            );
+            right_thumb_debug.effective_is_pressed = strict_safety_effective_non_dpad_button(
+                &right_thumb_debug,
+                &dpad_debugs,
+                explicit_dpad_active,
+            );
+            let dpad_up_active = direction_active(dpad_up_pressed, dpad_y, dpad_fallback_y, false);
+            let dpad_down_active =
+                direction_active(dpad_down_pressed, dpad_y, dpad_fallback_y, true);
+            let dpad_left_active =
+                direction_active(dpad_left_pressed, dpad_x, dpad_fallback_x, false);
+            let dpad_right_active =
+                direction_active(dpad_right_pressed, dpad_x, dpad_fallback_x, true);
             let state = CanonicalPadState {
-                dpad_up: direction_active(dpad_up_pressed, dpad_y, dpad_fallback_y, false),
-                dpad_down: direction_active(dpad_down_pressed, dpad_y, dpad_fallback_y, true),
-                dpad_left: direction_active(dpad_left_pressed, dpad_x, dpad_fallback_x, false),
-                dpad_right: direction_active(dpad_right_pressed, dpad_x, dpad_fallback_x, true),
+                dpad_up: dpad_up_active,
+                dpad_down: dpad_down_active,
+                dpad_left: dpad_left_active,
+                dpad_right: dpad_right_active,
                 south: button_pressed_digital(&gamepad, Button::South),
                 east: button_pressed_digital(&gamepad, Button::East),
                 north: button_pressed_digital(&gamepad, Button::North),
                 west: button_pressed_digital(&gamepad, Button::West),
                 left_shoulder: button_pressed_digital(&gamepad, Button::LeftTrigger),
                 right_shoulder: button_pressed_digital(&gamepad, Button::RightTrigger),
-                guide: guide_pressed,
+                guide: guide_debug.effective_is_pressed,
                 left_trigger: trigger_axis_value(&gamepad, Axis::LeftZ, Button::LeftTrigger2),
                 right_trigger: trigger_axis_value(&gamepad, Axis::RightZ, Button::RightTrigger2),
                 select: button_pressed_digital(&gamepad, Button::Select),
                 start: button_pressed_digital(&gamepad, Button::Start),
                 left_thumb: button_pressed_digital(&gamepad, Button::LeftThumb),
-                right_thumb: right_thumb_pressed,
+                right_thumb: right_thumb_debug.effective_is_pressed,
                 left_x,
                 left_y,
                 right_x: raw_right_x,
@@ -1252,6 +1294,7 @@ impl NativeArcadeUiApp {
         port: u32,
         state: &CanonicalPadState,
         system: &str,
+        input_policy: &RuntimeInputPolicy,
         device: Option<&DetectedPadIdentity>,
         primary_stick_preference: Option<N64PrimaryStick>,
     ) -> FrontendShortcutState {
@@ -1282,7 +1325,7 @@ impl NativeArcadeUiApp {
             }
         }
 
-        if system_supports_native_analog(system) && !use_explicit_n64_stick_mapping {
+        if input_policy.supports_native_analog && !use_explicit_n64_stick_mapping {
             let preference = primary_stick_preference.unwrap_or(N64PrimaryStick::Left);
             let (primary_x, primary_y) = primary_stick_axes_for_system(system, state, preference);
             if primary_x.abs() > f32::EPSILON {
@@ -1305,7 +1348,7 @@ impl NativeArcadeUiApp {
             }
         }
 
-        frontend_shortcuts_from_mapping(&mapping, state)
+        frontend_shortcuts_from_mapping(&mapping, state, input_policy)
     }
 
     fn apply_frontend_shortcuts(&mut self, shortcuts: FrontendShortcutState) {
@@ -2352,12 +2395,28 @@ fn mapping_entry_is_active(
 fn frontend_shortcuts_from_mapping(
     mapping: &StoredGamepadMapping,
     state: &CanonicalPadState,
+    input_policy: &RuntimeInputPolicy,
 ) -> FrontendShortcutState {
     FrontendShortcutState {
         reset: mapped_action_is_active(mapping, RESET_ACTION, state),
-        quick_save: mapped_shortcut_action_is_active(mapping, QUICK_SAVE_ACTION, state),
-        quick_load: mapped_shortcut_action_is_active(mapping, QUICK_LOAD_ACTION, state),
-        next_save_slot: mapped_shortcut_action_is_active(mapping, NEXT_SAVE_SLOT_ACTION, state),
+        quick_save: mapped_shortcut_action_is_active(
+            mapping,
+            QUICK_SAVE_ACTION,
+            state,
+            input_policy,
+        ),
+        quick_load: mapped_shortcut_action_is_active(
+            mapping,
+            QUICK_LOAD_ACTION,
+            state,
+            input_policy,
+        ),
+        next_save_slot: mapped_shortcut_action_is_active(
+            mapping,
+            NEXT_SAVE_SLOT_ACTION,
+            state,
+            input_policy,
+        ),
         return_pressed: mapped_exit_action_is_active(mapping, state),
     }
 }
@@ -2385,6 +2444,7 @@ fn mapped_shortcut_action_is_active(
     mapping: &StoredGamepadMapping,
     action: &str,
     state: &CanonicalPadState,
+    input_policy: &RuntimeInputPolicy,
 ) -> bool {
     let Some(Some(entry)) = mapping.actions.get(action) else {
         return false;
@@ -2393,10 +2453,12 @@ fn mapped_shortcut_action_is_active(
         return false;
     }
 
-    // Guard against controller cross-talk where D-pad movement can momentarily
-    // alias to meta buttons on some drivers. If directional input is active,
-    // only allow shortcut actions that are explicitly mapped to directional entries.
-    if directional_input_active(state) && !mapping_entry_is_directional(entry) {
+    if matches!(
+        input_policy.shortcut_directional_guard,
+        ShortcutDirectionalGuardMode::Enabled
+    ) && directional_input_active(state)
+        && !mapping_entry_is_directional(entry)
+    {
         return false;
     }
 
@@ -2978,6 +3040,15 @@ fn direction_active(
 }
 
 #[cfg(feature = "gamepad")]
+fn explicit_dpad_direction_active(
+    button_pressed: bool,
+    dpad_axis_value: f32,
+    positive: bool,
+) -> bool {
+    direction_active(button_pressed, dpad_axis_value, 0.0, positive)
+}
+
+#[cfg(feature = "gamepad")]
 fn axis_direction_active(value: f32, positive: bool, threshold: f32) -> bool {
     if positive {
         value >= threshold
@@ -3131,12 +3202,23 @@ fn normalize_dpad_vertical_axis(value: f32) -> f32 {
     value
 }
 
-fn system_uses_primary_stick_selector(system: &str) -> bool {
-    system.eq_ignore_ascii_case("N64") || system.eq_ignore_ascii_case("DREAMCAST")
-}
-
-fn system_supports_native_analog(system: &str) -> bool {
-    system_uses_primary_stick_selector(system)
+fn runtime_input_policy_for_system(
+    system: &str,
+    has_keyboard_callback: bool,
+) -> RuntimeInputPolicy {
+    let normalized_system = normalize_system_name(system);
+    let uses_primary_stick_selector = matches!(normalized_system.as_str(), "N64" | "DREAMCAST");
+    RuntimeInputPolicy {
+        keyboard_routing: if has_keyboard_callback && normalized_system == "DOS" {
+            RetroKeyboardRouting::Passthrough
+        } else {
+            RetroKeyboardRouting::SystemMapping
+        },
+        uses_primary_stick_selector,
+        supports_native_analog: uses_primary_stick_selector,
+        // Keep hook available for targeted re-enable without restoring a global guard.
+        shortcut_directional_guard: ShortcutDirectionalGuardMode::Disabled,
+    }
 }
 
 fn normalize_mapping_threshold(value: f32) -> f32 {
@@ -3457,11 +3539,6 @@ fn collect_retro_keyboard_events(
 
     retro_events
 }
-
-fn prefer_retro_keyboard_passthrough(system: &str, has_keyboard_callback: bool) -> bool {
-    has_keyboard_callback && system.eq_ignore_ascii_case("DOS")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3487,6 +3564,15 @@ mod tests {
     fn dpad_direction_active_uses_axis_when_buttons_are_not_available() {
         assert!(dpad_direction_active_from_parts(false, 1.0, 0.0, true));
         assert!(dpad_direction_active_from_parts(false, -1.0, 0.0, false));
+    }
+
+    #[cfg(feature = "gamepad")]
+    #[test]
+    fn explicit_dpad_direction_active_ignores_left_stick_fallback() {
+        assert!(explicit_dpad_direction_active(false, 1.0, true));
+        assert!(explicit_dpad_direction_active(false, -1.0, false));
+        assert!(!explicit_dpad_direction_active(false, 0.0, true));
+        assert!(direction_active(false, 0.0, 1.0, true));
     }
 
     #[cfg(feature = "gamepad")]
@@ -3818,11 +3904,23 @@ mod tests {
     }
 
     #[test]
-    fn dos_prefers_keyboard_passthrough_when_callback_exists() {
-        assert!(prefer_retro_keyboard_passthrough("DOS", true));
-        assert!(prefer_retro_keyboard_passthrough("dos", true));
-        assert!(!prefer_retro_keyboard_passthrough("DOS", false));
-        assert!(!prefer_retro_keyboard_passthrough("SNES", true));
+    fn runtime_policy_routes_keyboard_passthrough_for_dos_only() {
+        assert_eq!(
+            runtime_input_policy_for_system("DOS", true).keyboard_routing,
+            RetroKeyboardRouting::Passthrough
+        );
+        assert_eq!(
+            runtime_input_policy_for_system("dos", true).keyboard_routing,
+            RetroKeyboardRouting::Passthrough
+        );
+        assert_eq!(
+            runtime_input_policy_for_system("DOS", false).keyboard_routing,
+            RetroKeyboardRouting::SystemMapping
+        );
+        assert_eq!(
+            runtime_input_policy_for_system("SNES", true).keyboard_routing,
+            RetroKeyboardRouting::SystemMapping
+        );
     }
 
     #[test]
@@ -4067,6 +4165,42 @@ mod tests {
 
     #[cfg(feature = "gamepad")]
     #[test]
+    fn strict_safety_effective_non_dpad_button_suppresses_axis_only_dpad_activity() {
+        let suspect = ControllerInputButtonDebug {
+            code: Some(9),
+            is_pressed: true,
+            ..Default::default()
+        };
+        let dpad_up = ControllerInputButtonDebug {
+            code: None,
+            is_pressed: false,
+            ..Default::default()
+        };
+        let dpad_down = ControllerInputButtonDebug {
+            code: None,
+            is_pressed: false,
+            ..Default::default()
+        };
+        let dpad_left = ControllerInputButtonDebug {
+            code: None,
+            is_pressed: false,
+            ..Default::default()
+        };
+        let dpad_right = ControllerInputButtonDebug {
+            code: None,
+            is_pressed: false,
+            ..Default::default()
+        };
+        let dpad_active = explicit_dpad_direction_active(false, 1.0, true);
+        assert!(!strict_safety_effective_non_dpad_button(
+            &suspect,
+            &[&dpad_up, &dpad_down, &dpad_left, &dpad_right],
+            dpad_active
+        ));
+    }
+
+    #[cfg(feature = "gamepad")]
+    #[test]
     fn runtime_mapping_profile_prefers_device_override_then_system_default() {
         let saved = vec![
             String::from(SYSTEM_DEFAULT_MAPPING_KEY),
@@ -4306,14 +4440,48 @@ mod tests {
     }
 
     #[test]
-    fn single_stick_systems_forward_native_analog_axes_by_default() {
-        assert!(!system_supports_native_analog("NES"));
-        assert!(!system_supports_native_analog("SNES"));
-        assert!(!system_supports_native_analog("ARCADE"));
-        assert!(system_supports_native_analog("N64"));
-        assert!(system_supports_native_analog("n64"));
-        assert!(system_supports_native_analog("DREAMCAST"));
-        assert!(system_supports_native_analog("dreamcast"));
+    fn runtime_policy_resolves_primary_stick_and_analog_capabilities() {
+        assert!(!runtime_input_policy_for_system("NES", false).supports_native_analog);
+        assert!(!runtime_input_policy_for_system("NES", false).uses_primary_stick_selector);
+        assert!(!runtime_input_policy_for_system("SNES", false).supports_native_analog);
+        assert!(!runtime_input_policy_for_system("ARCADE", false).supports_native_analog);
+        assert!(runtime_input_policy_for_system("N64", false).supports_native_analog);
+        assert!(runtime_input_policy_for_system("N64", false).uses_primary_stick_selector);
+        assert!(runtime_input_policy_for_system("n64", false).supports_native_analog);
+        assert!(runtime_input_policy_for_system("DREAMCAST", false).supports_native_analog);
+        assert!(runtime_input_policy_for_system("DREAMCAST", false).uses_primary_stick_selector);
+        assert!(runtime_input_policy_for_system("dreamcast", false).supports_native_analog);
+        assert!(!runtime_input_policy_for_system("SATURN", false).supports_native_analog);
+        assert!(!runtime_input_policy_for_system("SATURN", false).uses_primary_stick_selector);
+        assert!(!runtime_input_policy_for_system("PCECD", false).supports_native_analog);
+        assert_eq!(
+            runtime_input_policy_for_system("ALL", false),
+            runtime_input_policy_for_system("NES", false)
+        );
+    }
+
+    #[test]
+    fn runtime_policy_defaults_shortcut_directional_guard_to_disabled() {
+        assert_eq!(
+            runtime_input_policy_for_system("DOS", false).shortcut_directional_guard,
+            ShortcutDirectionalGuardMode::Disabled
+        );
+        assert_eq!(
+            runtime_input_policy_for_system("N64", false).shortcut_directional_guard,
+            ShortcutDirectionalGuardMode::Disabled
+        );
+        assert_eq!(
+            runtime_input_policy_for_system("DREAMCAST", false).shortcut_directional_guard,
+            ShortcutDirectionalGuardMode::Disabled
+        );
+        assert_eq!(
+            runtime_input_policy_for_system("SATURN", false).shortcut_directional_guard,
+            ShortcutDirectionalGuardMode::Disabled
+        );
+        assert_eq!(
+            runtime_input_policy_for_system("PCECD", false).shortcut_directional_guard,
+            ShortcutDirectionalGuardMode::Disabled
+        );
     }
 
     #[test]
@@ -4589,7 +4757,7 @@ mod tests {
     }
 
     #[test]
-    fn mapped_shortcut_is_blocked_when_directional_input_is_active() {
+    fn mapped_shortcut_remains_active_during_directional_input_when_guard_disabled() {
         let mut mapping = default_gamepad_mapping_for_system("NES");
         mapping.actions.insert(
             QUICK_LOAD_ACTION.to_string(),
@@ -4602,10 +4770,12 @@ mod tests {
             guide: true,
             ..Default::default()
         };
-        assert!(!mapped_shortcut_action_is_active(
+        let policy = runtime_input_policy_for_system("NES", false);
+        assert!(mapped_shortcut_action_is_active(
             &mapping,
             QUICK_LOAD_ACTION,
-            &state
+            &state,
+            &policy
         ));
     }
 
@@ -4622,10 +4792,12 @@ mod tests {
             guide: true,
             ..Default::default()
         };
+        let policy = runtime_input_policy_for_system("NES", false);
         assert!(mapped_shortcut_action_is_active(
             &mapping,
             QUICK_LOAD_ACTION,
-            &state
+            &state,
+            &policy
         ));
     }
 
@@ -4642,10 +4814,36 @@ mod tests {
             dpad_up: true,
             ..Default::default()
         };
+        let policy = runtime_input_policy_for_system("NES", false);
         assert!(mapped_shortcut_action_is_active(
             &mapping,
             QUICK_LOAD_ACTION,
-            &state
+            &state,
+            &policy
+        ));
+    }
+
+    #[test]
+    fn mapped_shortcut_is_blocked_when_directional_guard_is_enabled() {
+        let mut mapping = default_gamepad_mapping_for_system("NES");
+        mapping.actions.insert(
+            QUICK_LOAD_ACTION.to_string(),
+            Some(MappingEntry::Button {
+                button: CanonicalButton::Guide,
+            }),
+        );
+        let state = CanonicalPadState {
+            dpad_down: true,
+            guide: true,
+            ..Default::default()
+        };
+        let mut policy = runtime_input_policy_for_system("NES", false);
+        policy.shortcut_directional_guard = ShortcutDirectionalGuardMode::Enabled;
+        assert!(!mapped_shortcut_action_is_active(
+            &mapping,
+            QUICK_LOAD_ACTION,
+            &state,
+            &policy
         ));
     }
 
