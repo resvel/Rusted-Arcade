@@ -2,11 +2,30 @@
 
 macOS native desktop app for the Personal Arcade project, built as a Rust workspace around `egui`, SQLite, and libretro. This is a macOS-only implementation focused on Apple Silicon (M1/M2/M3) performance.
 
+## Libretro Backend
+
+Personal Arcade Native is a **libretro frontend**. Libretro is an open API standard that allows emulation cores to be developed independently and loaded at runtime. This architecture provides several benefits:
+
+- **Modular design**: Cores are loaded dynamically as `.dylib` plugins, keeping the app binary small
+- **Standardized interface**: All cores implement the same libretro API for video, audio, input, and state management
+- **Wide emulation support**: Access to 15+ emulation cores covering 11 different gaming systems
+- **User-provided cores**: Users can update or add cores without rebuilding the application
+
+The `arcade-libretro` crate implements the libretro host, managing:
+- Dynamic core loading and lifecycle
+- Video output and frame rendering into the UI
+- Audio callback routing via `cpal`
+- Input event translation to controller callbacks
+- Save state serialization/unserialize through libretro's API
+- Environment variable handling for core configuration
+
+**Core Distribution Policy:** This project ships app binaries only. Libretro cores must be obtained separately from official libretro repositories and placed in the configured `core_root` directory. See [CORES.md](CORES.md) for the complete list of supported cores and setup instructions.
+
 ## Workspace
 
 - `arcade-app`: desktop entry point and feature wiring
 - `arcade-ui`: native `egui` shell, views, rendering, and input handling
-- `arcade-libretro`: dynamic libretro core host
+- `arcade-libretro`: dynamic libretro core host (implements libretro API integration)
 - `arcade-domain`: config, models, core resolution, and arcade compatibility policy
 - `arcade-data`: SQLite bootstrap, migrations, and repositories
 - `arcade-services`: app-facing use cases for library, favorites, save states, and controller mappings
@@ -60,9 +79,10 @@ macOS native desktop app for the Personal Arcade project, built as a Rust worksp
   - managed ROM inventory review
 - Launches a separate `Play` session view when a ROM starts
 - Includes a compact `Library` sidebar editor for system-specific controller mappings backed by `GamepadMapping`, including configurable in-play frontend shortcuts
-- Loads libretro cores dynamically and wires video, audio, input, environment, and VFS callbacks
-- Runs ROMs through the embedded libretro host and renders frames into the UI
-- Supports libretro save-state serialize/unserialize with slots `0..=9`
+- Loads libretro cores dynamically from the `core_root` directory as `.dylib` plugins
+- Implements the full libretro API contract: video callbacks, audio output, input handling, environment variables, and VFS support
+- Runs ROMs through the libretro host and renders emulation output into the UI in real-time
+- Supports libretro save-state serialize/unserialize through the API with slots `0..=9`
 - Enforces native save-state limits:
   - per-slot max: `5 MiB`
   - per-profile max: `25 MiB`
