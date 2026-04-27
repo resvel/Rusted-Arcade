@@ -311,7 +311,7 @@ impl NativeArcadeUiApp {
     }
 
     fn resolve_all_background_path(&self) -> Option<PathBuf> {
-        self.resolve_db_asset_path("/system-logos/All-background.png")
+        self.resolve_db_asset_path("/system-logos/All-background.jpg")
     }
 
     fn resolve_header_background_path(&self) -> Option<PathBuf> {
@@ -330,7 +330,7 @@ impl NativeArcadeUiApp {
             }
         }
 
-        self.resolve_db_asset_path("/system-logos/headerbackground.png")
+        self.resolve_db_asset_path("/system-logos/headerbackground.jpg")
     }
 
     fn resolve_header_title_path(&self) -> Option<PathBuf> {
@@ -369,7 +369,7 @@ impl NativeArcadeUiApp {
             "NES" => "system-logos/nes_background.jpg",
             "SNES" => "system-logos/snes_background.jpg",
             "GENESIS" => "system-logos/genesis_background.jpg",
-            "GB" => "system-logos/gb_background.webp",
+            "GB" => "system-logos/gb_background.jpg",
             "GBA" => "system-logos/gba_background.jpg",
             "N64" => "system-logos/n64_background.webp",
             "ARCADE" => "system-logos/arcade_background.jpg",
