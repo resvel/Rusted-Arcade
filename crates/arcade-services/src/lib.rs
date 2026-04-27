@@ -739,7 +739,11 @@ fn is_pcecd_disc_content(rom_path: &Path) -> bool {
     )
 }
 
-fn ensure_system_launch_dependencies(system: &str, rom_path: &Path, paths: &PathsConfig) -> Result<()> {
+fn ensure_system_launch_dependencies(
+    system: &str,
+    rom_path: &Path,
+    paths: &PathsConfig,
+) -> Result<()> {
     if system.eq_ignore_ascii_case("PCECD") {
         // HuCard-side content does not require a CD system card BIOS.
         if !is_pcecd_disc_content(rom_path) {
@@ -761,8 +765,7 @@ fn ensure_system_launch_dependencies(system: &str, rom_path: &Path, paths: &Path
     }
 
     if system.eq_ignore_ascii_case("SATURN") {
-        if arcade_domain::find_saturn_bios_file(&paths.rom_root, Some(&paths.bios_root)).is_some()
-        {
+        if arcade_domain::find_saturn_bios_file(&paths.rom_root, Some(&paths.bios_root)).is_some() {
             return Ok(());
         }
 
@@ -2014,7 +2017,10 @@ mod tests {
             saved.management.cover_scraping.platform_ids.pcecd,
             vec![4955]
         );
-        assert_eq!(saved.management.cover_scraping.platform_ids.saturn, vec![22]);
+        assert_eq!(
+            saved.management.cover_scraping.platform_ids.saturn,
+            vec![22]
+        );
     }
 
     #[test]
@@ -2411,7 +2417,11 @@ mod tests {
         let tmp = TempDir::new().expect("tempdir");
         let config = make_config(&tmp);
         let db = Database::open(&config).expect("open db");
-        let rom_path = config.paths.rom_root.join("saturn").join("Dracula X (Saturn).chd");
+        let rom_path = config
+            .paths
+            .rom_root
+            .join("saturn")
+            .join("Dracula X (Saturn).chd");
         std::fs::create_dir_all(rom_path.parent().expect("rom parent")).expect("create rom dir");
         std::fs::write(&rom_path, b"saturn-rom").expect("write rom");
         let services = NativeServices::bootstrap(config.clone(), config_path_for(&config), db)
