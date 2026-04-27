@@ -1,6 +1,6 @@
 # Personal Arcade Native
 
-Native desktop app for the Personal Arcade project, built as a Rust workspace around `egui`, SQLite, and libretro.
+macOS native desktop app for the Personal Arcade project, built as a Rust workspace around `egui`, SQLite, and libretro. This is a macOS-only implementation focused on Apple Silicon (M1/M2/M3) performance.
 
 ## Workspace
 
@@ -19,7 +19,7 @@ Native desktop app for the Personal Arcade project, built as a Rust workspace ar
 - Default config resolution prefers `config.toml` next to the executable.
 - Config controls ROM, core, BIOS, DB, and save-state roots plus N64 defaults.
 - SQLite is opened and bootstrapped from the native schema.
-- UI runs through `eframe` with platform-aware renderer selection (`wgpu`/Metal by default on macOS, `glow` by default on Linux/Windows).
+- UI runs through `eframe` with Metal rendering via `wgpu` or optional OpenGL rendering via `glow`.
 - The libretro host loads the selected core dynamically and runs the frame loop.
 - Save states are supported through libretro serialize/unserialize with native size limits.
 
@@ -33,11 +33,10 @@ Native desktop app for the Personal Arcade project, built as a Rust workspace ar
   - managed inventory operations
 - `Settings` owns editable app configuration and TheGamesDB settings.
 
-### Input backends
+### Input handling
 
-- Linux uses `gilrs`.
-- Windows uses SDL `GameController`.
-- Controller mappings can include frontend actions:
+- Native macOS gamepad input via IOKit
+- Controller mappings support frontend actions:
   - `Exit`
   - `Reset`
   - `Quick Save`
@@ -67,11 +66,8 @@ Native desktop app for the Personal Arcade project, built as a Rust workspace ar
 - Enforces native save-state limits:
   - per-slot max: `5 MiB`
   - per-profile max: `25 MiB`
-- Supports keyboard controls and platform-specific gamepad backends by default:
-  - Linux: `gilrs`
-  - Windows: SDL `GameController`
+- Supports keyboard controls and native macOS gamepad input
 - Starts native audio output via `cpal` when built with the audio feature
-- Includes packaging helper scripts for Linux/Windows ZIP artifact builds
 
 ## Theme Asset Overrides
 
@@ -109,13 +105,11 @@ Rendering behavior:
 ## Prerequisites
 
 - Stable Rust toolchain
-- Linux, Windows, or macOS desktop environment with graphics drivers
+- macOS (Apple Silicon M1/M2/M3 or Intel with Rosetta 2)
 - libretro cores in `core_root`:
-  - Linux: `<core_name>_libretro.so`
-  - Windows: `<core_name>_libretro.dll`
-  - macOS: `<core_name>_libretro.dylib`
-- Optional macOS Apple Silicon N64 dynarec lane binary:
-  - `mupen64plus_next_dynarec_arm64_libretro.dylib`
+  - `<core_name>_libretro.dylib`
+- Optional Apple Silicon N64 dynarec lane binary:
+  - `mupen64plus_next_dynarec_arm64_libretro.dylib` (native performance, no Rosetta 2)
 - BIOS/ROM assets you legally own
 
 ## Run
@@ -139,19 +133,13 @@ Default packaged layout:
 Optional config path:
 
 ```bash
-cargo run -p arcade-app -- ~/.config/personal-arcade-native/config.toml
+cargo run -p arcade-app -- /path/to/config.toml
 ```
 
-Windows PowerShell example:
-
-```powershell
-cargo run -p arcade-app -- C:\path\to\config.toml
-```
-
-macOS example:
+Example:
 
 ```bash
-cargo run -p arcade-app -- /Users/you/path/to/config.toml
+cargo run -p arcade-app -- ~/Library/Application\ Support/personal-arcade-native/config.toml
 ```
 
 ## In-app configuration
@@ -187,32 +175,6 @@ cargo run -p arcade-app -- /Users/you/path/to/config.toml
 - Common shared BIOS archives: `neogeo.zip`, `qsound.zip`, `pgm.zip`.
 - For Neo Geo titles on FBNeo, make sure `neogeo.zip` is present in one of the paths above.
 
-## Native Gamepad + Audio
-
-Install Linux development packages first:
-
-```bash
-sudo apt update
-sudo apt install -y libudev-dev pkg-config
-```
-
-Default run includes native gamepad support:
-
-```bash
-cargo run -p arcade-app
-```
-
-Windows builds now use bundled SDL for controller input. Install CMake in addition to Rust + Visual Studio C++ build tools before building on Windows.
-
-Release ZIP scripts build with `--features native-av`, so shipped Linux/Windows artifacts include both gamepad and audio support.
-
-If you also want native audio output, install ALSA headers and enable the audio feature:
-
-```bash
-sudo apt install -y libasound2-dev
-cargo run -p arcade-app --features native-av
-```
-
 ## Default controls
 
 - Arrow keys: D-pad
@@ -243,7 +205,7 @@ Older saved mappings that do not include newer frontend actions are backfilled w
 
 ## Supported core names
 
-Core binary extension is platform-specific (`.so` on Linux, `.dll` on Windows, `.dylib` on macOS).
+Core binaries use the `.dylib` extension on macOS.
 
 See [CORES.md](CORES.md) for the authoritative list of supported cores and system-specific notes.
 
@@ -352,24 +314,15 @@ Apply the file renames and update the native SQLite library at the same time:
 python3 scripts/n64_goodname_renamer.py --canonical --apply
 ```
 
-## Packaging helpers
+## Building and Distribution
 
-- `native/scripts/build-linux-zip.sh`
-- `native/scripts/build-windows-zip.ps1`
-- `native/scripts/build-linux-tar.sh`
-- `native/scripts/build-appimage.sh`
-- `native/scripts/build-deb.sh`
+Build a release binary:
 
-ZIP artifacts are built per-OS and include:
+```bash
+cargo build -p arcade-app --release
+```
 
-- app executable
-- `config.example.toml`
-- `README-native.md`
-- `CORES.md`
-- `public/` theme and image assets
-- empty `cores/` and `bios/` directories
-
-Each ZIP has a matching `.sha256` checksum file.
+The executable is located at `target/release/arcade-app`.
 
 ## Validation
 
@@ -390,6 +343,6 @@ cargo check -p arcade-app
 Still required before final release sign-off:
 
 1. macOS dynarec stability validation across broader game library.
-2. Cross-platform parity testing for newly added systems.
-3. Longer stability pass for the required platform matrix.
-4. Final clean-machine smoke test for macOS application.
+2. Extended gameplay testing for newly added systems.
+3. Longer stability pass across emulation scenarios.
+4. Final clean-machine smoke test on target macOS versions.
