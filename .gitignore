@@ -2,6 +2,7 @@
 /dist/
 /config.toml
 /CONTEXT.md
+/CLAUDE.md
 
 # macOS / editor noise
 .DS_Store
