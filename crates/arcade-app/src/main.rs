@@ -59,7 +59,7 @@ fn init_file_tracing(filter: EnvFilter, log_path: &Path) -> Result<()> {
 }
 
 fn load_app_icon() -> Result<egui::IconData> {
-    let image = image::load_from_memory(include_bytes!("../../../public/icons.png"))
+    let image = image::load_from_memory(include_bytes!("../../../public/icon.png"))
         .context("failed to decode embedded app icon")?
         .into_rgba8();
     let (width, height) = image.dimensions();

@@ -339,7 +339,7 @@ impl NativeArcadeUiApp {
     }
 
     fn resolve_header_title_path(&self) -> Option<PathBuf> {
-        self.resolve_db_asset_path("headerTitle.png")
+        self.resolve_db_asset_path("/system-logos/headerTitle.png")
     }
 
     pub(crate) fn header_title_texture(&mut self, ctx: &egui::Context) -> Option<TextureHandle> {
