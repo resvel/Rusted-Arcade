@@ -7,6 +7,9 @@ use eframe::egui;
 use egui::{Color32, ColorImage, TextureHandle, Vec2};
 
 use crate::app::NativeArcadeUiApp;
+use crate::controller_mapper::{
+    controller_mapper_art_asset, ControllerMapperArt, ControllerMapperView,
+};
 use crate::render::fit_size;
 
 pub(crate) struct AssetCache {
@@ -16,6 +19,7 @@ pub(crate) struct AssetCache {
     pub(crate) repeating_background_textures: HashMap<PathBuf, TextureHandle>,
     pub(crate) system_logo_textures: HashMap<PathBuf, TextureHandle>,
     pub(crate) system_controller_textures: HashMap<PathBuf, TextureHandle>,
+    pub(crate) controller_mapper_textures: HashMap<PathBuf, TextureHandle>,
     pub(crate) themed_art_textures: HashMap<PathBuf, TextureHandle>,
     pub(crate) image_load_failures: HashSet<PathBuf>,
     pub(crate) last_frame_texture: Option<TextureHandle>,
@@ -32,6 +36,7 @@ impl AssetCache {
             repeating_background_textures: HashMap::new(),
             system_logo_textures: HashMap::new(),
             system_controller_textures: HashMap::new(),
+            controller_mapper_textures: HashMap::new(),
             themed_art_textures: HashMap::new(),
             image_load_failures: HashSet::new(),
             last_frame_texture: None,
@@ -637,6 +642,31 @@ impl NativeArcadeUiApp {
             ctx,
             path,
             "system-controller",
+            egui::TextureOptions::LINEAR,
+        )
+    }
+
+    fn resolve_controller_mapper_diagram_path(
+        &self,
+        art: ControllerMapperArt,
+        view: ControllerMapperView,
+    ) -> Option<PathBuf> {
+        self.resolve_db_asset_path(controller_mapper_art_asset(art, view))
+    }
+
+    pub(crate) fn controller_mapper_texture(
+        &mut self,
+        ctx: &egui::Context,
+        art: ControllerMapperArt,
+        view: ControllerMapperView,
+    ) -> Option<TextureHandle> {
+        let path = self.resolve_controller_mapper_diagram_path(art, view)?;
+        Self::load_texture_from_path(
+            &mut self.assets.controller_mapper_textures,
+            &mut self.assets.image_load_failures,
+            ctx,
+            path,
+            "controller-mapper",
             egui::TextureOptions::LINEAR,
         )
     }

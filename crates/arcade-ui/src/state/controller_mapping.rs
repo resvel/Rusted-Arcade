@@ -3,6 +3,8 @@ use std::sync::Arc;
 
 use arcade_domain::{default_gamepad_mapping_for_system, MappingEntry, StoredGamepadMapping};
 
+use crate::controller_mapper::VisualControlId;
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct ControllerMappingCacheKey {
     pub(crate) system: String,
@@ -21,6 +23,7 @@ pub(crate) struct ControllerMappingState {
     pub(crate) loaded_threshold: f32,
     pub(crate) actions: BTreeMap<String, Option<MappingEntry>>,
     pub(crate) threshold: f32,
+    pub(crate) selected_visual_control: Option<VisualControlId>,
     /// The system selected in the Input Settings panel (Settings view).
     pub(crate) input_system: String,
     mapping_cache: HashMap<ControllerMappingCacheKey, Arc<StoredGamepadMapping>>,
@@ -41,6 +44,7 @@ impl Default for ControllerMappingState {
             loaded_threshold: default_mapping.threshold,
             actions: default_mapping.actions,
             threshold: default_mapping.threshold,
+            selected_visual_control: None,
             input_system: String::from("NES"),
             mapping_cache: HashMap::new(),
         }
@@ -66,6 +70,7 @@ impl ControllerMappingState {
         }
         self.selected_device_key = device_key;
         self.loaded_key.clear();
+        self.selected_visual_control = None;
         self.clear_pending_device_switch();
     }
 
@@ -95,6 +100,7 @@ impl ControllerMappingState {
         };
         self.selected_device_key = Some(key);
         self.loaded_key.clear();
+        self.selected_visual_control = None;
         self.pending_device_switch_label = None;
     }
 
@@ -115,12 +121,14 @@ impl ControllerMappingState {
         self.loaded_threshold = normalized_threshold;
         self.actions = mapping.actions;
         self.threshold = normalized_threshold;
+        self.selected_visual_control = None;
     }
 
     pub(crate) fn reset_to_defaults(&mut self, system: &str, normalized_threshold: f32) {
         let mapping = default_gamepad_mapping_for_system(system);
         self.actions = mapping.actions;
         self.threshold = normalized_threshold;
+        self.selected_visual_control = None;
     }
 
     pub(crate) fn mark_saved(&mut self, normalized_threshold: f32) {
@@ -152,8 +160,8 @@ impl ControllerMappingState {
         self.mapping_cache.retain(|key, _| key.system != system);
     }
 
-    pub(crate) fn set_action(&mut self, key: String, selected: Option<MappingEntry>) {
-        self.actions.insert(key, selected);
+    pub(crate) fn select_visual_control(&mut self, control: Option<VisualControlId>) {
+        self.selected_visual_control = control;
     }
 }
 

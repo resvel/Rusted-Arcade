@@ -1,4 +1,9 @@
 use crate::app::NativeArcadeUiApp;
+use crate::controller_mapper::{
+    action_for_visual_control, assign_action_to_visual_control, controller_mapper_art_for_device,
+    controller_mapper_control_label, controller_mapper_hotspots, ControllerHotspot,
+    ControllerMapperArt, ControllerMapperView, HotspotShape,
+};
 use crate::input::ControllerMappingTarget;
 use crate::render::fit_size;
 use crate::state::MenuFocusRegion;
@@ -369,7 +374,7 @@ impl NativeArcadeUiApp {
             }
             ui.label(
                 egui::RichText::new(
-                    "Use mouse or keyboard to edit bindings and save mappings. Controller navigation can browse this panel, but not operate the dropdown editor yet.",
+                    "Click the controller art to map inputs. The top inset handles shoulders and triggers, and the main front view handles face buttons, d-pad, sticks, and center buttons.",
                 )
                 .size(10.8)
                 .color(palette.text_muted),
@@ -398,24 +403,7 @@ impl NativeArcadeUiApp {
                 return;
             }
 
-            if wide_layout {
-                ui.columns(2, |columns| {
-                    draw_controller_preview(
-                        &mut columns[0],
-                        preview_texture.as_ref(),
-                        &palette,
-                        max_image_height,
-                    );
-                    self.draw_mapping_device_tabs_card(
-                        &mut columns[1],
-                        &mapping_targets,
-                        selected_target.as_ref(),
-                    );
-                });
-            } else {
-                draw_controller_preview(ui, preview_texture.as_ref(), &palette, max_image_height);
-                self.draw_mapping_device_tabs_card(ui, &mapping_targets, selected_target.as_ref());
-            }
+            self.draw_mapping_device_tabs_card(ui, &mapping_targets, selected_target.as_ref());
 
             if !has_device {
                 ui.add_space(4.0);
@@ -426,81 +414,16 @@ impl NativeArcadeUiApp {
                 );
                 return;
             }
-
-            let options = self.mapping_entry_options();
-            let grid_spacing = egui::vec2(5.0, 5.0);
-            let target_binding_card_width = 260.0;
-            let mapping_columns = ((ui.available_width() + grid_spacing.x)
-                / (target_binding_card_width + grid_spacing.x))
-                .floor()
-                .max(1.0) as usize;
-            let mapping_columns = mapping_columns.min(action_labels.len().max(1));
-            let cell_width = ((ui.available_width()
-                - grid_spacing.x * (mapping_columns.saturating_sub(1) as f32))
-                / mapping_columns as f32)
-                .max(164.0);
-            let binding_dropdown_width = ((cell_width - 14.0).max(138.0) / 3.0).max(56.0);
-            let binding_label_width = 82.0;
-            let binding_card_width = (binding_label_width + binding_dropdown_width + 18.0).max(132.0);
-            egui::Grid::new(format!("mapping-editor-{active_system}"))
-                .num_columns(mapping_columns)
-                .spacing(grid_spacing)
-                .show(ui, |ui| {
-                    for (index, action) in action_labels.iter().enumerate() {
-                        let key = (*action).to_string();
-                        let mut selected = self
-                            .state
-                            .controller_mapping
-                            .actions
-                            .get(&key)
-                            .cloned()
-                            .unwrap_or(None);
-
-                        egui::Frame::new()
-                            .fill(palette.panel)
-                            .stroke(egui::Stroke::new(1.0, palette.border))
-                            .corner_radius(egui::CornerRadius::same(9))
-                            .inner_margin(egui::Margin::symmetric(5, 3))
-                            .show(ui, |ui| {
-                                ui.set_min_width(binding_card_width);
-                                ui.horizontal(|ui| {
-                                    ui.add_sized(
-                                        [binding_label_width, 18.0],
-                                        egui::Label::new(
-                                            egui::RichText::new(*action)
-                                                .strong()
-                                                .size(11.5)
-                                                .color(palette.accent),
-                                        ),
-                                    );
-                                    egui::ComboBox::from_id_salt(format!(
-                                        "mapping-{active_system}-{action}"
-                                    ))
-                                    .selected_text(
-                                        egui::RichText::new(
-                                            self.mapping_entry_label(selected.as_ref()),
-                                        )
-                                        .size(11.5),
-                                    )
-                                    .width(binding_dropdown_width)
-                                    .show_ui(ui, |ui| {
-                                        for (label, entry) in &options {
-                                            ui.selectable_value(
-                                                &mut selected,
-                                                entry.clone(),
-                                                egui::RichText::new(label).size(11.5),
-                                            );
-                                        }
-                                    });
-                                });
-                            });
-
-                        self.state.controller_mapping.set_action(key, selected);
-                        if (index + 1) % mapping_columns == 0 {
-                            ui.end_row();
-                        }
-                    }
-                });
+            ui.add_space(6.0);
+            if let Some(target) = selected_target.as_ref() {
+                self.draw_visual_controller_mapper(
+                    ui,
+                    ctx,
+                    target,
+                    action_labels,
+                    wide_layout,
+                );
+            }
 
             ui.add_space(4.0);
             let advanced = egui::CollapsingHeader::new(
@@ -632,6 +555,440 @@ impl NativeArcadeUiApp {
                     draw_device_preset_hint(ui, &selected.identity, &palette);
                 }
             });
+    }
+
+    fn draw_visual_controller_mapper(
+        &mut self,
+        ui: &mut egui::Ui,
+        ctx: &egui::Context,
+        target: &ControllerMappingTarget,
+        action_labels: &[&str],
+        wide_layout: bool,
+    ) {
+        let palette = self.palette();
+        let art = controller_mapper_art_for_device(Some(&target.identity));
+        let front_texture = self.controller_mapper_texture(ctx, art, ControllerMapperView::Front);
+        let top_texture = self.controller_mapper_texture(ctx, art, ControllerMapperView::Top);
+
+        egui::Frame::new()
+            .fill(palette.panel)
+            .stroke(egui::Stroke::new(1.0, palette.border))
+            .corner_radius(egui::CornerRadius::same(12))
+            .inner_margin(egui::Margin::same(8))
+            .show(ui, |ui| {
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(
+                        egui::RichText::new("Visual Mapper")
+                            .size(12.0)
+                            .strong()
+                            .color(palette.text),
+                    );
+                    badge_chip(
+                        ui,
+                        "Top inset: shoulders + triggers",
+                        palette.panel_alt,
+                        palette.border,
+                        palette.text_muted,
+                    );
+                });
+                ui.add_space(4.0);
+
+                let mapper_height_hint = if wide_layout { 720.0 } else { 640.0 };
+                if wide_layout {
+                    let spacing = 10.0;
+                    let available_width = ui.available_width();
+                    let art_width = (available_width * 0.56).clamp(420.0, 640.0);
+                    let panel_width = (available_width - art_width - spacing).max(280.0);
+                    ui.horizontal_top(|ui| {
+                        ui.allocate_ui_with_layout(
+                            egui::vec2(art_width, 0.0),
+                            egui::Layout::top_down(egui::Align::Min),
+                            |ui| {
+                                self.draw_visual_mapper_art_column(
+                                    ui,
+                                    &front_texture,
+                                    &top_texture,
+                                    art,
+                                    &palette,
+                                    false,
+                                );
+                            },
+                        );
+                        ui.add_space(spacing);
+                        ui.allocate_ui_with_layout(
+                            egui::vec2(panel_width, 0.0),
+                            egui::Layout::top_down(egui::Align::Min),
+                            |ui| {
+                                self.draw_visual_mapper_action_panel(
+                                    ui,
+                                    art,
+                                    action_labels,
+                                    &palette,
+                                    mapper_height_hint,
+                                );
+                            },
+                        );
+                    });
+                } else {
+                    self.draw_visual_mapper_art_column(
+                        ui,
+                        &front_texture,
+                        &top_texture,
+                        art,
+                        &palette,
+                        true,
+                    );
+                    ui.add_space(8.0);
+                    self.draw_visual_mapper_action_panel(
+                        ui,
+                        art,
+                        action_labels,
+                        &palette,
+                        mapper_height_hint,
+                    );
+                }
+            });
+    }
+
+    fn draw_visual_mapper_art_column(
+        &mut self,
+        ui: &mut egui::Ui,
+        front_texture: &Option<egui::TextureHandle>,
+        top_texture: &Option<egui::TextureHandle>,
+        art: ControllerMapperArt,
+        palette: &ThemePalette,
+        compact: bool,
+    ) {
+        let inset_height = if compact { 180.0 } else { 210.0 };
+        let front_height = if compact { 360.0 } else { 460.0 };
+        let available_width = (ui.available_width() - 22.0).max(180.0);
+        let front_draw_width = front_texture
+            .as_ref()
+            .map(|texture| fit_size(texture.size_vec2(), egui::vec2(available_width, front_height)).x)
+            .unwrap_or(available_width);
+
+        egui::Frame::new()
+            .fill(palette.panel_alt)
+            .stroke(egui::Stroke::new(1.0, palette.border))
+            .corner_radius(egui::CornerRadius::same(10))
+            .inner_margin(egui::Margin::same(10))
+            .show(ui, |ui| {
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(
+                        egui::RichText::new("Shoulders + Triggers")
+                            .size(11.2)
+                            .strong()
+                            .color(palette.text),
+                    );
+                    ui.label(
+                        egui::RichText::new("Use the top inset for L1/L2/R1/R2 or LB/LT/RB/RT.")
+                            .size(10.8)
+                            .color(palette.text_muted),
+                    );
+                });
+                ui.add_space(4.0);
+                self.draw_controller_mapper_image(
+                    ui,
+                    top_texture.as_ref(),
+                    art,
+                    ControllerMapperView::Top,
+                    palette,
+                    inset_height,
+                    Some(front_draw_width),
+                );
+                ui.add_space(6.0);
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(
+                        egui::RichText::new("Front Controls")
+                            .size(11.2)
+                            .strong()
+                            .color(palette.text),
+                    );
+                    ui.label(
+                        egui::RichText::new("Face buttons, d-pad, sticks, and center buttons.")
+                            .size(10.8)
+                            .color(palette.text_muted),
+                    );
+                });
+                ui.add_space(4.0);
+                self.draw_controller_mapper_image(
+                    ui,
+                    front_texture.as_ref(),
+                    art,
+                    ControllerMapperView::Front,
+                    palette,
+                    front_height,
+                    None,
+                );
+            });
+    }
+
+    fn draw_visual_mapper_action_panel(
+        &mut self,
+        ui: &mut egui::Ui,
+        art: ControllerMapperArt,
+        action_labels: &[&str],
+        palette: &ThemePalette,
+        min_height: f32,
+    ) {
+        egui::Frame::new()
+            .fill(palette.panel_alt)
+            .stroke(egui::Stroke::new(1.0, palette.border))
+            .corner_radius(egui::CornerRadius::same(10))
+            .inner_margin(egui::Margin::same(8))
+            .show(ui, |ui| {
+                ui.set_min_height(min_height);
+                let selected = self.state.controller_mapping.selected_visual_control;
+                let current_action = selected.and_then(|control| {
+                    action_for_visual_control(&self.state.controller_mapping.actions, control)
+                        .map(str::to_owned)
+                });
+
+                ui.label(
+                    egui::RichText::new("Assignments")
+                        .size(12.0)
+                        .strong()
+                        .color(palette.text),
+                );
+                ui.add_space(4.0);
+
+                let Some(control) = selected else {
+                    ui.label(
+                        egui::RichText::new(
+                            "Select a hotspot on the controller image to choose which system action it should perform.",
+                        )
+                        .size(11.2)
+                        .color(palette.text_muted),
+                    );
+                    return;
+                };
+
+                let control_label = controller_mapper_control_label(art, control);
+                egui::Frame::new()
+                    .fill(blend_color(palette.panel, palette.accent_soft, 0.22))
+                    .stroke(egui::Stroke::new(1.0, palette.border))
+                    .corner_radius(egui::CornerRadius::same(10))
+                    .inner_margin(egui::Margin::same(8))
+                    .show(ui, |ui| {
+                        ui.label(
+                            egui::RichText::new("Selected Control")
+                                .size(10.8)
+                                .strong()
+                                .color(palette.text_muted),
+                        );
+                        ui.label(
+                            egui::RichText::new(control_label)
+                                .size(15.0)
+                                .strong()
+                                .color(palette.accent),
+                        );
+                        ui.add_space(2.0);
+                        ui.label(
+                            egui::RichText::new(match current_action {
+                                Some(ref action) => format!("Assigned Action: {action}"),
+                                None => String::from("Assigned Action: Unassigned"),
+                            })
+                            .size(12.0)
+                            .color(palette.text),
+                        );
+                    });
+                ui.add_space(6.0);
+
+                let unassign_selected = current_action.is_none();
+                let unassign_button =
+                    egui::Button::new(egui::RichText::new("Unassigned").size(11.5))
+                        .fill(if unassign_selected {
+                            palette.accent_soft
+                        } else {
+                            palette.panel
+                        })
+                        .stroke(egui::Stroke::new(
+                            1.0,
+                            if unassign_selected {
+                                palette.accent
+                            } else {
+                                palette.border
+                            },
+                        ))
+                        .corner_radius(egui::CornerRadius::same(255));
+                if ui.add(unassign_button).clicked() {
+                    crate::controller_mapper::unassign_visual_control(
+                        &mut self.state.controller_mapping.actions,
+                        control,
+                    );
+                }
+
+                ui.add_space(6.0);
+                ui.label(
+                    egui::RichText::new("Choose an action for the selected control")
+                        .size(10.8)
+                        .color(palette.text_muted),
+                );
+                ui.add_space(4.0);
+                let actions_height = (min_height - 190.0).max(320.0);
+                egui::Frame::new()
+                    .fill(blend_color(palette.panel, palette.panel_alt, 0.35))
+                    .stroke(egui::Stroke::new(1.0, palette.border))
+                    .corner_radius(egui::CornerRadius::same(10))
+                    .inner_margin(egui::Margin::same(6))
+                    .show(ui, |ui| {
+                        ui.set_min_height(actions_height);
+                        egui::ScrollArea::vertical()
+                            .id_salt("controller-mapper-actions")
+                            .max_height(actions_height - 8.0)
+                            .show(ui, |ui| {
+                                ui.spacing_mut().item_spacing = egui::vec2(0.0, 6.0);
+                                for action in action_labels {
+                                    let is_selected = current_action.as_deref() == Some(*action);
+                                    let response = egui::Frame::new()
+                                        .fill(if is_selected {
+                                            palette.accent_soft
+                                        } else {
+                                            palette.panel
+                                        })
+                                        .stroke(egui::Stroke::new(
+                                            if is_selected { 1.4 } else { 1.0 },
+                                            if is_selected {
+                                                palette.accent
+                                            } else {
+                                                palette.border
+                                            },
+                                        ))
+                                        .corner_radius(egui::CornerRadius::same(8))
+                                        .inner_margin(egui::Margin::symmetric(10, 7))
+                                        .show(ui, |ui| {
+                                            ui.set_min_width(ui.available_width());
+                                            ui.horizontal(|ui| {
+                                                ui.label(
+                                                    egui::RichText::new(*action)
+                                                        .size(12.0)
+                                                        .strong()
+                                                        .color(if is_selected {
+                                                            palette.text
+                                                        } else {
+                                                            palette.accent
+                                                        }),
+                                                );
+                                                if is_selected {
+                                                    ui.add_space(6.0);
+                                                    ui.label(
+                                                        egui::RichText::new("Current")
+                                                            .size(10.5)
+                                                            .strong()
+                                                            .color(palette.text_muted),
+                                                    );
+                                                }
+                                            });
+                                        })
+                                        .response
+                                        .interact(egui::Sense::click());
+                                    if response.clicked() {
+                                        assign_action_to_visual_control(
+                                            &mut self.state.controller_mapping.actions,
+                                            action,
+                                            control,
+                                        );
+                                    }
+                                }
+                            });
+                    });
+            });
+    }
+
+    fn draw_controller_mapper_image(
+        &mut self,
+        ui: &mut egui::Ui,
+        texture: Option<&egui::TextureHandle>,
+        art: ControllerMapperArt,
+        view: ControllerMapperView,
+        palette: &ThemePalette,
+        max_height: f32,
+        width_override: Option<f32>,
+    ) {
+        let Some(texture) = texture else {
+            ui.label(
+                egui::RichText::new("Controller artwork is missing for this view.")
+                    .size(11.0)
+                    .color(palette.text_muted),
+            );
+            return;
+        };
+
+        let available_width = width_override
+            .unwrap_or_else(|| (ui.available_width() - 2.0).max(180.0))
+            .min((ui.available_width() - 2.0).max(180.0));
+        let uv = controller_mapper_image_uv(view);
+        let draw_size = if view == ControllerMapperView::Top {
+            let top_crop_aspect = (uv.width() * texture.size_vec2().x) / (uv.height() * texture.size_vec2().y);
+            let fitted_height = (available_width / top_crop_aspect).min(max_height);
+            egui::vec2(available_width, fitted_height)
+        } else {
+            fit_size(texture.size_vec2(), egui::vec2(available_width, max_height))
+        };
+        let (rect, response) = ui.allocate_exact_size(draw_size, egui::Sense::click());
+        ui.painter().image(
+            texture.id(),
+            rect,
+            uv,
+            egui::Color32::WHITE,
+        );
+
+        let hovered_hotspot = response.hover_pos().and_then(|pointer_pos| {
+            controller_mapper_hotspots(art, view)
+                .iter()
+                .copied()
+                .find(|hotspot| hotspot.contains(rect, uv, pointer_pos))
+        });
+
+        if hovered_hotspot.is_some() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+        }
+
+        if response.clicked() {
+            if let Some(hotspot) = hovered_hotspot {
+                self.state
+                    .controller_mapping
+                    .select_visual_control(Some(hotspot.control));
+            }
+        }
+
+        let tooltip_text = hovered_hotspot.map(|hotspot| {
+            let mapped_action =
+                action_for_visual_control(&self.state.controller_mapping.actions, hotspot.control)
+                    .unwrap_or("Unassigned");
+            format!("{}: {mapped_action}", hotspot.label)
+        });
+        if let Some(text) = tooltip_text {
+            response.on_hover_text(text);
+        }
+
+        let selected = self.state.controller_mapping.selected_visual_control;
+        let overlay_hotspot = hovered_hotspot.or_else(|| {
+            selected.and_then(|control| {
+                controller_mapper_hotspots(art, view)
+                    .iter()
+                    .copied()
+                    .find(|hotspot| hotspot.control == control)
+            })
+        });
+        for hotspot in controller_mapper_hotspots(art, view).iter().copied() {
+            let is_selected = selected == Some(hotspot.control);
+            let is_hovered =
+                hovered_hotspot.is_some_and(|hovered| hovered.control == hotspot.control);
+            if is_selected || is_hovered {
+                paint_controller_hotspot(ui, rect, uv, hotspot, palette, is_selected, is_hovered);
+            }
+        }
+        if let Some(hotspot) = overlay_hotspot {
+            paint_controller_hotspot_overlay(
+                ui,
+                rect,
+                uv,
+                hotspot,
+                palette,
+                action_for_visual_control(&self.state.controller_mapping.actions, hotspot.control),
+            );
+        }
     }
 
     pub(crate) fn draw_alpha_toolbar(&mut self, ui: &mut egui::Ui, show_manage: bool) -> bool {
@@ -879,6 +1236,133 @@ fn draw_controller_preview(
                 }
             });
         });
+}
+
+fn paint_controller_hotspot(
+    ui: &egui::Ui,
+    image_rect: egui::Rect,
+    uv_rect: egui::Rect,
+    hotspot: ControllerHotspot,
+    palette: &ThemePalette,
+    is_selected: bool,
+    is_hovered: bool,
+) {
+    let fill_alpha = if is_selected {
+        78
+    } else if is_hovered {
+        42
+    } else {
+        14
+    };
+    let stroke_width = if is_selected {
+        2.0
+    } else if is_hovered {
+        1.3
+    } else {
+        1.0
+    };
+    let stroke_color = if is_selected {
+        palette.accent
+    } else if is_hovered {
+        blend_color(palette.accent, palette.text, 0.35)
+    } else {
+        blend_color(palette.accent, palette.border, 0.35)
+    };
+    let fill_color = egui::Color32::from_rgba_premultiplied(
+        palette.accent.r(),
+        palette.accent.g(),
+        palette.accent.b(),
+        fill_alpha,
+    );
+    let painter = ui.painter();
+
+    match hotspot.shape {
+        HotspotShape::Circle { .. } => {
+            let rect = hotspot.paint_rect(image_rect, uv_rect);
+            let radius = rect.width().min(rect.height()) * 0.5;
+            painter.circle_filled(rect.center(), radius, fill_color);
+            painter.circle_stroke(rect.center(), radius, egui::Stroke::new(stroke_width, stroke_color));
+        }
+        HotspotShape::Rect { .. } => {
+            let rect = hotspot.paint_rect(image_rect, uv_rect);
+            painter.rect_filled(rect, egui::CornerRadius::same(8), fill_color);
+            painter.rect_stroke(
+                rect,
+                egui::CornerRadius::same(8),
+                egui::Stroke::new(stroke_width, stroke_color),
+                egui::StrokeKind::Outside,
+            );
+        }
+    }
+}
+
+fn paint_controller_hotspot_overlay(
+    ui: &egui::Ui,
+    image_rect: egui::Rect,
+    uv_rect: egui::Rect,
+    hotspot: ControllerHotspot,
+    palette: &ThemePalette,
+    mapped_action: Option<&str>,
+) {
+    let overlay_width = (image_rect.width() * 0.54).clamp(150.0, 260.0);
+    let overlay_height = 42.0;
+    let overlay_rect = egui::Rect::from_min_size(
+        egui::pos2(image_rect.left() + 10.0, image_rect.bottom() - overlay_height - 10.0),
+        egui::vec2(overlay_width, overlay_height),
+    );
+    let fill = egui::Color32::from_rgba_premultiplied(
+        palette.panel.r(),
+        palette.panel.g(),
+        palette.panel.b(),
+        224,
+    );
+    ui.painter()
+        .rect_filled(overlay_rect, egui::CornerRadius::same(10), fill);
+    ui.painter().rect_stroke(
+        overlay_rect,
+        egui::CornerRadius::same(10),
+        egui::Stroke::new(1.0, blend_color(palette.border, palette.accent, 0.45)),
+        egui::StrokeKind::Outside,
+    );
+
+    let hotspot_center = hotspot.paint_rect(image_rect, uv_rect).center();
+    ui.painter().line_segment(
+        [
+            hotspot_center,
+            egui::pos2(overlay_rect.left() + 18.0, overlay_rect.top() + 18.0),
+        ],
+        egui::Stroke::new(1.2, blend_color(palette.accent, palette.text, 0.2)),
+    );
+
+    let text_rect = overlay_rect.shrink2(egui::vec2(10.0, 6.0));
+    let title = hotspot.label;
+    let subtitle = match mapped_action {
+        Some(action) => format!("Assigned to {action}"),
+        None => String::from("Unassigned"),
+    };
+    ui.painter().text(
+        text_rect.left_top(),
+        egui::Align2::LEFT_TOP,
+        title,
+        egui::FontId::proportional(12.5),
+        palette.text,
+    );
+    ui.painter().text(
+        egui::pos2(text_rect.left(), text_rect.top() + 16.0),
+        egui::Align2::LEFT_TOP,
+        subtitle,
+        egui::FontId::proportional(11.0),
+        palette.accent,
+    );
+}
+
+fn controller_mapper_image_uv(view: ControllerMapperView) -> egui::Rect {
+    match view {
+        ControllerMapperView::Front => {
+            egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0))
+        }
+        ControllerMapperView::Top => egui::Rect::from_min_max(egui::pos2(0.04, 0.18), egui::pos2(0.96, 0.72)),
+    }
 }
 
 fn blend_color(from: egui::Color32, to: egui::Color32, t: f32) -> egui::Color32 {
