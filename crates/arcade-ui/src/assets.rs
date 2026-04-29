@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use arcade_domain::RomCard;
 use eframe::egui;
@@ -8,9 +9,17 @@ use egui::{Color32, ColorImage, TextureHandle, Vec2};
 
 use crate::app::NativeArcadeUiApp;
 use crate::controller_mapper::{
-    controller_mapper_art_asset, ControllerMapperArt, ControllerMapperView,
+    parse_system_hotspot_overlay, system_controller_hotspot_overlay_asset,
+    system_controller_mapper_art_asset, SystemControllerLayout, SystemOverlayHotspot,
 };
 use crate::render::fit_size;
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) struct SizedTextureKey {
+    pub(crate) path: PathBuf,
+    pub(crate) width: u32,
+    pub(crate) height: u32,
+}
 
 pub(crate) struct AssetCache {
     pub(crate) asset_roots: Vec<PathBuf>,
@@ -19,9 +28,11 @@ pub(crate) struct AssetCache {
     pub(crate) repeating_background_textures: HashMap<PathBuf, TextureHandle>,
     pub(crate) system_logo_textures: HashMap<PathBuf, TextureHandle>,
     pub(crate) system_controller_textures: HashMap<PathBuf, TextureHandle>,
-    pub(crate) controller_mapper_textures: HashMap<PathBuf, TextureHandle>,
+    pub(crate) controller_mapper_textures: HashMap<SizedTextureKey, TextureHandle>,
+    pub(crate) controller_mapper_hotspot_overlays: HashMap<PathBuf, Arc<Vec<SystemOverlayHotspot>>>,
     pub(crate) themed_art_textures: HashMap<PathBuf, TextureHandle>,
     pub(crate) image_load_failures: HashSet<PathBuf>,
+    pub(crate) controller_mapper_overlay_failures: HashSet<PathBuf>,
     pub(crate) last_frame_texture: Option<TextureHandle>,
     pub(crate) play_frame_rgba: Vec<u8>,
     pub(crate) cover_load_budget: usize,
@@ -37,8 +48,10 @@ impl AssetCache {
             system_logo_textures: HashMap::new(),
             system_controller_textures: HashMap::new(),
             controller_mapper_textures: HashMap::new(),
+            controller_mapper_hotspot_overlays: HashMap::new(),
             themed_art_textures: HashMap::new(),
             image_load_failures: HashSet::new(),
+            controller_mapper_overlay_failures: HashSet::new(),
             last_frame_texture: None,
             play_frame_rgba: Vec::new(),
             cover_load_budget: 0,
@@ -646,29 +659,165 @@ impl NativeArcadeUiApp {
         )
     }
 
-    fn resolve_controller_mapper_diagram_path(
+    fn resolve_system_mapper_diagram_path(
         &self,
-        art: ControllerMapperArt,
-        view: ControllerMapperView,
+        layout: SystemControllerLayout,
     ) -> Option<PathBuf> {
-        self.resolve_db_asset_path(controller_mapper_art_asset(art, view))
+        self.resolve_db_asset_path(system_controller_mapper_art_asset(layout))
     }
 
-    pub(crate) fn controller_mapper_texture(
+    fn resolve_system_mapper_hotspot_path(
+        &self,
+        layout: SystemControllerLayout,
+    ) -> Option<PathBuf> {
+        self.resolve_db_asset_path(system_controller_hotspot_overlay_asset(layout))
+    }
+
+    pub(crate) fn system_mapper_art_available(&self, layout: SystemControllerLayout) -> bool {
+        self.resolve_system_mapper_diagram_path(layout).is_some()
+    }
+
+    pub(crate) fn system_mapper_hotspots(
+        &mut self,
+        layout: SystemControllerLayout,
+    ) -> Option<Arc<Vec<SystemOverlayHotspot>>> {
+        let path = self.resolve_system_mapper_hotspot_path(layout)?;
+        if self.assets.controller_mapper_overlay_failures.contains(&path) {
+            return None;
+        }
+        if let Some(hotspots) = self.assets.controller_mapper_hotspot_overlays.get(&path) {
+            return Some(hotspots.clone());
+        }
+
+        let svg_data = match fs::read_to_string(&path) {
+            Ok(data) => data,
+            Err(_) => {
+                self.assets.controller_mapper_overlay_failures.insert(path);
+                return None;
+            }
+        };
+        let hotspots = match parse_system_hotspot_overlay(layout, &svg_data) {
+            Ok(hotspots) => Arc::new(hotspots),
+            Err(_) => {
+                self.assets.controller_mapper_overlay_failures.insert(path);
+                return None;
+            }
+        };
+        self.assets
+            .controller_mapper_hotspot_overlays
+            .insert(path, hotspots.clone());
+        Some(hotspots)
+    }
+
+    pub(crate) fn system_mapper_texture(
         &mut self,
         ctx: &egui::Context,
-        art: ControllerMapperArt,
-        view: ControllerMapperView,
+        layout: SystemControllerLayout,
+        target_size: Vec2,
     ) -> Option<TextureHandle> {
-        let path = self.resolve_controller_mapper_diagram_path(art, view)?;
-        Self::load_texture_from_path(
+        let path = self.resolve_system_mapper_diagram_path(layout)?;
+        let scale_factor = (ctx.pixels_per_point() * 1.5).max(1.0);
+        let raster_width = (target_size.x.max(1.0) * scale_factor).ceil() as u32;
+        let raster_height = (target_size.y.max(1.0) * scale_factor).ceil() as u32;
+        let cache_key = SizedTextureKey {
+            path: path.clone(),
+            width: raster_width.max(1),
+            height: raster_height.max(1),
+        };
+        Self::load_sized_texture_from_path(
             &mut self.assets.controller_mapper_textures,
             &mut self.assets.image_load_failures,
             ctx,
-            path,
+            cache_key,
             "controller-mapper",
             egui::TextureOptions::LINEAR,
         )
+    }
+
+    fn load_sized_texture_from_path(
+        cache: &mut HashMap<SizedTextureKey, TextureHandle>,
+        failures: &mut HashSet<PathBuf>,
+        ctx: &egui::Context,
+        cache_key: SizedTextureKey,
+        key_prefix: &str,
+        options: egui::TextureOptions,
+    ) -> Option<TextureHandle> {
+        if failures.contains(&cache_key.path) {
+            return None;
+        }
+        if let Some(texture) = cache.get(&cache_key) {
+            return Some(texture.clone());
+        }
+
+        let extension = cache_key
+            .path
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .map(|ext| ext.to_ascii_lowercase());
+
+        let (size, pixels): ([usize; 2], Vec<u8>) = if extension.as_deref() == Some("svg") {
+            let data = match fs::read(&cache_key.path) {
+                Ok(data) => data,
+                Err(_) => {
+                    failures.insert(cache_key.path.clone());
+                    return None;
+                }
+            };
+            if looks_like_svg_markup(&data) {
+                match rasterize_svg_data_to_size(&data, [cache_key.width, cache_key.height]) {
+                    Some((size, pixels)) => (size, pixels),
+                    None => {
+                        failures.insert(cache_key.path.clone());
+                        return None;
+                    }
+                }
+            } else {
+                match image::load_from_memory(&data) {
+                    Ok(image) => {
+                        let rgba = image.to_rgba8();
+                        (
+                            [rgba.width() as usize, rgba.height() as usize],
+                            rgba.into_raw(),
+                        )
+                    }
+                    Err(_) => {
+                        failures.insert(cache_key.path.clone());
+                        return None;
+                    }
+                }
+            }
+        } else {
+            let image = match image::open(&cache_key.path) {
+                Ok(image) => image,
+                Err(_) => {
+                    failures.insert(cache_key.path.clone());
+                    return None;
+                }
+            };
+            let rgba = image.to_rgba8();
+            (
+                [rgba.width() as usize, rgba.height() as usize],
+                rgba.into_raw(),
+            )
+        };
+
+        if size[0] == 0 || size[1] == 0 {
+            failures.insert(cache_key.path.clone());
+            return None;
+        }
+
+        let texture = ctx.load_texture(
+            format!(
+                "{key_prefix}:{}:{}x{}",
+                cache_key.path.display(),
+                cache_key.width,
+                cache_key.height
+            ),
+            ColorImage::from_rgba_unmultiplied(size, &pixels),
+            options,
+        );
+        cache.insert(cache_key, texture.clone());
+        Some(texture)
     }
 }
 
@@ -693,6 +842,48 @@ fn rasterize_svg_data(data: &[u8]) -> Option<([usize; 2], Vec<u8>)> {
     Some(([width as usize, height as usize], pixmap.data().to_vec()))
 }
 
+fn rasterize_svg_data_to_size(
+    data: &[u8],
+    target_size: [u32; 2],
+) -> Option<([usize; 2], Vec<u8>)> {
+    let options = resvg::usvg::Options::default();
+    let tree = resvg::usvg::Tree::from_data(data, &options).ok()?;
+    let svg_size = tree.size().to_int_size();
+    let raster_size =
+        scaled_svg_raster_size([svg_size.width(), svg_size.height()], target_size)?;
+    let width = raster_size[0] as u32;
+    let height = raster_size[1] as u32;
+    let mut pixmap = resvg::tiny_skia::Pixmap::new(width, height)?;
+    let scale_x = width as f32 / tree.size().width();
+    let scale_y = height as f32 / tree.size().height();
+    let mut pixmap_mut = pixmap.as_mut();
+    resvg::render(
+        &tree,
+        resvg::tiny_skia::Transform::from_scale(scale_x, scale_y),
+        &mut pixmap_mut,
+    );
+
+    Some((raster_size, pixmap.data().to_vec()))
+}
+
+fn scaled_svg_raster_size(
+    source_size: [u32; 2],
+    target_size: [u32; 2],
+) -> Option<[usize; 2]> {
+    let [source_width, source_height] = source_size;
+    let [target_width, target_height] = target_size;
+    if source_width == 0 || source_height == 0 || target_width == 0 || target_height == 0 {
+        return None;
+    }
+
+    let width_scale = target_width as f32 / source_width as f32;
+    let height_scale = target_height as f32 / source_height as f32;
+    let scale = width_scale.min(height_scale);
+    let width = (source_width as f32 * scale).round().max(1.0) as usize;
+    let height = (source_height as f32 * scale).round().max(1.0) as usize;
+    Some([width, height])
+}
+
 fn looks_like_svg_markup(data: &[u8]) -> bool {
     let data = data.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(data);
     let mut trimmed = data.iter().skip_while(|byte| byte.is_ascii_whitespace());
@@ -704,4 +895,38 @@ fn to_optimized_cover_path(raw_path: &str) -> Option<String> {
     let relative = normalized.strip_prefix("/covers/")?;
     let (base, _) = relative.rsplit_once('.')?;
     Some(format!("/covers-web/{base}.w320.webp"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{scaled_svg_raster_size, SizedTextureKey};
+    use std::path::PathBuf;
+
+    #[test]
+    fn scaled_svg_raster_size_preserves_aspect_ratio() {
+        let size = scaled_svg_raster_size([64, 64], [900, 540]).unwrap();
+        assert_eq!(size, [540, 540]);
+    }
+
+    #[test]
+    fn scaled_svg_raster_size_scales_to_target_bounds() {
+        let size = scaled_svg_raster_size([64, 32], [900, 540]).unwrap();
+        assert_eq!(size, [900, 450]);
+    }
+
+    #[test]
+    fn sized_texture_key_distinguishes_raster_sizes() {
+        let path = PathBuf::from("controller.svg");
+        let small = SizedTextureKey {
+            path: path.clone(),
+            width: 540,
+            height: 540,
+        };
+        let large = SizedTextureKey {
+            path,
+            width: 1080,
+            height: 1080,
+        };
+        assert_ne!(small, large);
+    }
 }

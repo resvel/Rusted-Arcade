@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <circle id="genesis-up" data-action="Up" data-label="Up" cx="15.68" cy="28.80" r="2.30" />
+  <circle id="genesis-down" data-action="Down" data-label="Down" cx="15.68" cy="40.00" r="2.30" />
+  <circle id="genesis-left" data-action="Left" data-label="Left" cx="10.37" cy="34.43" r="2.30" />
+  <circle id="genesis-right" data-action="Right" data-label="Right" cx="20.99" cy="34.43" r="2.30" />
+  <circle id="genesis-a" data-action="A" data-label="A" cx="42.56" cy="36.80" r="2.43" />
+  <circle id="genesis-b" data-action="B" data-label="B" cx="48.64" cy="33.28" r="2.43" />
+  <circle id="genesis-c" data-action="C" data-label="C" cx="54.72" cy="30.08" r="2.43" />
+  <rect id="genesis-start" data-action="Start" data-label="Start" x="29.44" y="45.50" width="7.68" height="3.07" />
+</svg>

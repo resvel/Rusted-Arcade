@@ -16,6 +16,7 @@ tracing.workspace = true
 serde_json.workspace = true
 image.workspace = true
 resvg.workspace = true
+roxmltree.workspace = true
 raw-window-handle.workspace = true
 rfd.workspace = true
 arcade-domain = { path = "../arcade-domain" }

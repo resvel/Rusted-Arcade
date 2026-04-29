@@ -1,7 +1,8 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 
 use arcade_domain::{CanonicalAxis, CanonicalButton, DetectedPadIdentity, MappingEntry};
 use egui::{pos2, vec2, Pos2, Rect};
+use roxmltree::Document;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ControllerMapperArt {
@@ -10,6 +11,18 @@ pub(crate) enum ControllerMapperArt {
     Ps5,
     Xbox,
     Generic,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SystemControllerLayout {
+    Nes,
+    Snes,
+    Genesis,
+    N64,
+    Psx,
+    Ps2,
+    Dreamcast,
+    Saturn,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -44,6 +57,36 @@ pub(crate) struct ControllerHotspot {
     pub(crate) control: VisualControlId,
     pub(crate) label: &'static str,
     pub(crate) shape: HotspotShape,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct SystemActionHotspot {
+    pub(crate) action: &'static str,
+    pub(crate) label: &'static str,
+    pub(crate) shape: HotspotShape,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum OverlayHotspotShape {
+    Circle {
+        center: [f32; 2],
+        radius: f32,
+    },
+    Rect {
+        center: [f32; 2],
+        size: [f32; 2],
+    },
+    Polygon {
+        points: Vec<[f32; 2]>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct SystemOverlayHotspot {
+    pub(crate) id: String,
+    pub(crate) action: String,
+    pub(crate) label: String,
+    pub(crate) shape: OverlayHotspotShape,
 }
 
 const PS3_FRONT_HOTSPOTS: [ControllerHotspot; 21] = [
@@ -351,6 +394,142 @@ const GENERIC_TOP_HOTSPOTS: [ControllerHotspot; 4] = [
     ),
 ];
 
+const NES_SYSTEM_HOTSPOTS: [SystemActionHotspot; 8] = [
+    system_circle("Up", "Up", 0.235, 0.435, 0.040),
+    system_circle("Down", "Down", 0.235, 0.625, 0.040),
+    system_circle("Left", "Left", 0.145, 0.530, 0.040),
+    system_circle("Right", "Right", 0.325, 0.530, 0.040),
+    system_circle("A", "A", 0.775, 0.470, 0.040),
+    system_circle("B", "B", 0.690, 0.555, 0.040),
+    system_rect("Select", "Select", 0.445, 0.705, 0.090, 0.048),
+    system_rect("Start", "Start", 0.565, 0.705, 0.090, 0.048),
+];
+
+const SNES_SYSTEM_HOTSPOTS: [SystemActionHotspot; 12] = [
+    system_circle("Up", "Up", 0.238, 0.452, 0.034),
+    system_circle("Down", "Down", 0.238, 0.620, 0.034),
+    system_circle("Left", "Left", 0.158, 0.536, 0.034),
+    system_circle("Right", "Right", 0.318, 0.536, 0.034),
+    system_circle("X", "X", 0.760, 0.430, 0.035),
+    system_circle("Y", "Y", 0.685, 0.505, 0.035),
+    system_circle("A", "A", 0.835, 0.505, 0.035),
+    system_circle("B", "B", 0.760, 0.580, 0.035),
+    system_rect("L", "L", 0.170, 0.190, 0.120, 0.052),
+    system_rect("R", "R", 0.830, 0.190, 0.120, 0.052),
+    system_rect("Select", "Select", 0.455, 0.705, 0.080, 0.042),
+    system_rect("Start", "Start", 0.550, 0.705, 0.080, 0.042),
+];
+
+const GENESIS_SYSTEM_HOTSPOTS: [SystemActionHotspot; 8] = [
+    system_circle("Up", "Up", 0.245, 0.450, 0.036),
+    system_circle("Down", "Down", 0.245, 0.625, 0.036),
+    system_circle("Left", "Left", 0.162, 0.538, 0.036),
+    system_circle("Right", "Right", 0.328, 0.538, 0.036),
+    system_circle("A", "A", 0.665, 0.575, 0.038),
+    system_circle("B", "B", 0.760, 0.520, 0.038),
+    system_circle("C", "C", 0.855, 0.470, 0.038),
+    system_rect("Start", "Start", 0.520, 0.735, 0.120, 0.048),
+];
+
+const N64_SYSTEM_HOTSPOTS: [SystemActionHotspot; 14] = [
+    system_circle("Up", "Up", 0.190, 0.430, 0.030),
+    system_circle("Down", "Down", 0.190, 0.575, 0.030),
+    system_circle("Left", "Left", 0.120, 0.502, 0.030),
+    system_circle("Right", "Right", 0.260, 0.502, 0.030),
+    system_rect("Stick Up", "Stick Up", 0.500, 0.355, 0.055, 0.035),
+    system_rect("Stick Down", "Stick Down", 0.500, 0.535, 0.055, 0.035),
+    system_rect("Stick Left", "Stick Left", 0.435, 0.445, 0.035, 0.055),
+    system_rect("Stick Right", "Stick Right", 0.565, 0.445, 0.035, 0.055),
+    system_circle("A", "A", 0.770, 0.510, 0.038),
+    system_circle("B", "B", 0.700, 0.585, 0.034),
+    system_rect("L", "L", 0.255, 0.145, 0.115, 0.048),
+    system_rect("R", "R", 0.745, 0.145, 0.115, 0.048),
+    system_circle("Z", "Z", 0.500, 0.800, 0.040),
+    system_circle("Start", "Start", 0.500, 0.645, 0.030),
+];
+
+const N64_SYSTEM_HOTSPOTS_C: [SystemActionHotspot; 4] = [
+    system_circle("C-Up", "C-Up", 0.865, 0.360, 0.026),
+    system_circle("C-Down", "C-Down", 0.865, 0.510, 0.026),
+    system_circle("C-Left", "C-Left", 0.795, 0.435, 0.026),
+    system_circle("C-Right", "C-Right", 0.935, 0.435, 0.026),
+];
+
+const PSX_SYSTEM_HOTSPOTS: [SystemActionHotspot; 14] = [
+    system_circle("Up", "Up", 0.200, 0.345, 0.030),
+    system_circle("Down", "Down", 0.200, 0.490, 0.030),
+    system_circle("Left", "Left", 0.132, 0.418, 0.030),
+    system_circle("Right", "Right", 0.268, 0.418, 0.030),
+    system_circle("Triangle", "Triangle", 0.800, 0.330, 0.030),
+    system_circle("Square", "Square", 0.730, 0.415, 0.030),
+    system_circle("Circle", "Circle", 0.870, 0.415, 0.030),
+    system_circle("Cross", "Cross", 0.800, 0.500, 0.030),
+    system_rect("L1", "L1", 0.215, 0.165, 0.100, 0.040),
+    system_rect("R1", "R1", 0.785, 0.165, 0.100, 0.040),
+    system_rect("L2", "L2", 0.215, 0.105, 0.090, 0.034),
+    system_rect("R2", "R2", 0.785, 0.105, 0.090, 0.034),
+    system_rect("Select", "Select", 0.430, 0.575, 0.080, 0.040),
+    system_rect("Start", "Start", 0.570, 0.575, 0.080, 0.040),
+];
+
+const PS2_SYSTEM_HOTSPOTS: [SystemActionHotspot; 22] = [
+    system_circle("Up", "Up", 0.200, 0.345, 0.028),
+    system_circle("Down", "Down", 0.200, 0.490, 0.028),
+    system_circle("Left", "Left", 0.132, 0.418, 0.028),
+    system_circle("Right", "Right", 0.268, 0.418, 0.028),
+    system_circle("Triangle", "Triangle", 0.800, 0.330, 0.028),
+    system_circle("Square", "Square", 0.730, 0.415, 0.028),
+    system_circle("Circle", "Circle", 0.870, 0.415, 0.028),
+    system_circle("Cross", "Cross", 0.800, 0.500, 0.028),
+    system_rect("L1", "L1", 0.215, 0.165, 0.100, 0.040),
+    system_rect("R1", "R1", 0.785, 0.165, 0.100, 0.040),
+    system_rect("L2", "L2", 0.215, 0.105, 0.090, 0.034),
+    system_rect("R2", "R2", 0.785, 0.105, 0.090, 0.034),
+    system_circle("L3", "L3", 0.365, 0.585, 0.048),
+    system_circle("R3", "R3", 0.635, 0.585, 0.048),
+    system_rect("Left Stick Up", "Left Stick Up", 0.365, 0.530, 0.042, 0.020),
+    system_rect("Left Stick Down", "Left Stick Down", 0.365, 0.640, 0.042, 0.020),
+    system_rect("Left Stick Left", "Left Stick Left", 0.310, 0.585, 0.020, 0.042),
+    system_rect("Left Stick Right", "Left Stick Right", 0.420, 0.585, 0.020, 0.042),
+    system_rect("Right Stick Up", "Right Stick Up", 0.635, 0.530, 0.042, 0.020),
+    system_rect("Right Stick Down", "Right Stick Down", 0.635, 0.640, 0.042, 0.020),
+    system_rect("Right Stick Left", "Right Stick Left", 0.580, 0.585, 0.020, 0.042),
+    system_rect("Right Stick Right", "Right Stick Right", 0.690, 0.585, 0.020, 0.042),
+];
+
+const PS2_SYSTEM_HOTSPOTS_CENTER: [SystemActionHotspot; 2] = [
+    system_rect("Select", "Select", 0.430, 0.475, 0.080, 0.040),
+    system_rect("Start", "Start", 0.570, 0.475, 0.080, 0.040),
+];
+
+const DREAMCAST_SYSTEM_HOTSPOTS: [SystemActionHotspot; 9] = [
+    system_circle("Up", "Up", 0.285, 0.395, 0.032),
+    system_circle("Down", "Down", 0.285, 0.560, 0.032),
+    system_circle("Left", "Left", 0.205, 0.478, 0.032),
+    system_circle("Right", "Right", 0.365, 0.478, 0.032),
+    system_circle("Y", "Y", 0.760, 0.355, 0.034),
+    system_circle("X", "X", 0.690, 0.440, 0.034),
+    system_circle("B", "B", 0.830, 0.440, 0.034),
+    system_circle("A", "A", 0.760, 0.525, 0.034),
+    system_rect("Start", "Start", 0.525, 0.630, 0.110, 0.046),
+];
+
+const SATURN_SYSTEM_HOTSPOTS: [SystemActionHotspot; 13] = [
+    system_circle("Up", "Up", 0.205, 0.420, 0.032),
+    system_circle("Down", "Down", 0.205, 0.575, 0.032),
+    system_circle("Left", "Left", 0.130, 0.498, 0.032),
+    system_circle("Right", "Right", 0.280, 0.498, 0.032),
+    system_circle("X", "X", 0.670, 0.360, 0.030),
+    system_circle("Y", "Y", 0.760, 0.360, 0.030),
+    system_circle("Z", "Z", 0.850, 0.360, 0.030),
+    system_circle("A", "A", 0.670, 0.525, 0.030),
+    system_circle("B", "B", 0.760, 0.525, 0.030),
+    system_circle("C", "C", 0.850, 0.525, 0.030),
+    system_rect("L", "L", 0.165, 0.170, 0.110, 0.046),
+    system_rect("R", "R", 0.835, 0.170, 0.110, 0.046),
+    system_rect("Start", "Start", 0.515, 0.690, 0.120, 0.046),
+];
+
 pub(crate) fn controller_mapper_art_for_device(
     device: Option<&DetectedPadIdentity>,
 ) -> ControllerMapperArt {
@@ -388,42 +567,177 @@ pub(crate) fn controller_mapper_art_for_device(
     ControllerMapperArt::Generic
 }
 
-pub(crate) fn controller_mapper_art_asset(
-    art: ControllerMapperArt,
-    view: ControllerMapperView,
-) -> &'static str {
-    match (art, view) {
-        (ControllerMapperArt::Ps3, ControllerMapperView::Front) => {
-            "/controller-mapper/ps3-controller.png"
-        }
-        (ControllerMapperArt::Ps3, ControllerMapperView::Top) => {
-            "/controller-mapper/ps3-controller-top.png"
-        }
-        (ControllerMapperArt::Ps4, ControllerMapperView::Front) => {
-            "/controller-mapper/ps4-controller.png"
-        }
-        (ControllerMapperArt::Ps4, ControllerMapperView::Top) => {
-            "/controller-mapper/ps4-controller-top.png"
-        }
-        (ControllerMapperArt::Ps5, ControllerMapperView::Front) => {
-            "/controller-mapper/ps5-controller.png"
-        }
-        (ControllerMapperArt::Ps5, ControllerMapperView::Top) => {
-            "/controller-mapper/ps5-controller-top.png"
-        }
-        (ControllerMapperArt::Xbox, ControllerMapperView::Front) => {
-            "/controller-mapper/xbox-controller.png"
-        }
-        (ControllerMapperArt::Xbox, ControllerMapperView::Top) => {
-            "/controller-mapper/xbox-controller-top.png"
-        }
-        (ControllerMapperArt::Generic, ControllerMapperView::Front) => {
-            "/controller-mapper/generic-controller.png"
-        }
-        (ControllerMapperArt::Generic, ControllerMapperView::Top) => {
-            "/controller-mapper/generic-controller-top.png"
-        }
+pub(crate) fn system_controller_layout_for_system(system: &str) -> Option<SystemControllerLayout> {
+    match system.trim().to_ascii_uppercase().as_str() {
+        "NES" => Some(SystemControllerLayout::Nes),
+        "SNES" => Some(SystemControllerLayout::Snes),
+        "GENESIS" => Some(SystemControllerLayout::Genesis),
+        "N64" => Some(SystemControllerLayout::N64),
+        "PSX" => Some(SystemControllerLayout::Psx),
+        "PS2" => Some(SystemControllerLayout::Ps2),
+        "DREAMCAST" => Some(SystemControllerLayout::Dreamcast),
+        "SATURN" => Some(SystemControllerLayout::Saturn),
+        _ => None,
     }
+}
+
+pub(crate) fn system_controller_mapper_art_asset(layout: SystemControllerLayout) -> &'static str {
+    match layout {
+        SystemControllerLayout::Nes => "/gamepads/controllercons.2.1/svg/outline/nes.svg",
+        SystemControllerLayout::Snes => "/gamepads/controllercons.2.1/svg/outline/snes.svg",
+        SystemControllerLayout::Genesis => "/gamepads/controllercons.2.1/svg/outline/mega-drive.svg",
+        SystemControllerLayout::N64 => "/gamepads/controllercons.2.1/svg/outline/n64.svg",
+        SystemControllerLayout::Psx => "/gamepads/controllercons.2.1/svg/outline/ps1.svg",
+        SystemControllerLayout::Ps2 => "/gamepads/controllercons.2.1/svg/outline/ps2.svg",
+        SystemControllerLayout::Dreamcast => "/gamepads/controllercons.2.1/svg/outline/dreamcast.svg",
+        SystemControllerLayout::Saturn => "/gamepads/controllercons.2.1/svg/outline/sega-saturn.svg",
+    }
+}
+
+pub(crate) fn system_controller_hotspot_overlay_asset(
+    layout: SystemControllerLayout,
+) -> &'static str {
+    match layout {
+        SystemControllerLayout::Nes => "/gamepads/hotspots/outline/nes.hotspots.svg",
+        SystemControllerLayout::Snes => "/gamepads/hotspots/outline/snes.hotspots.svg",
+        SystemControllerLayout::Genesis => "/gamepads/hotspots/outline/genesis.hotspots.svg",
+        SystemControllerLayout::N64 => "/gamepads/hotspots/outline/n64.hotspots.svg",
+        SystemControllerLayout::Psx => "/gamepads/hotspots/outline/psx.hotspots.svg",
+        SystemControllerLayout::Ps2 => "/gamepads/hotspots/outline/ps2.hotspots.svg",
+        SystemControllerLayout::Dreamcast => "/gamepads/hotspots/outline/dreamcast.hotspots.svg",
+        SystemControllerLayout::Saturn => "/gamepads/hotspots/outline/saturn.hotspots.svg",
+    }
+}
+
+pub(crate) fn system_controller_hotspots(
+    layout: SystemControllerLayout,
+) -> &'static [SystemActionHotspot] {
+    match layout {
+        SystemControllerLayout::Nes => &NES_SYSTEM_HOTSPOTS,
+        SystemControllerLayout::Snes => &SNES_SYSTEM_HOTSPOTS,
+        SystemControllerLayout::Genesis => &GENESIS_SYSTEM_HOTSPOTS,
+        SystemControllerLayout::N64 => &N64_SYSTEM_HOTSPOTS,
+        SystemControllerLayout::Psx => &PSX_SYSTEM_HOTSPOTS,
+        SystemControllerLayout::Ps2 => &PS2_SYSTEM_HOTSPOTS,
+        SystemControllerLayout::Dreamcast => &DREAMCAST_SYSTEM_HOTSPOTS,
+        SystemControllerLayout::Saturn => &SATURN_SYSTEM_HOTSPOTS,
+    }
+}
+
+pub(crate) fn system_controller_additional_hotspots(
+    layout: SystemControllerLayout,
+) -> &'static [SystemActionHotspot] {
+    match layout {
+        SystemControllerLayout::N64 => &N64_SYSTEM_HOTSPOTS_C,
+        SystemControllerLayout::Ps2 => &PS2_SYSTEM_HOTSPOTS_CENTER,
+        _ => &[],
+    }
+}
+
+pub(crate) fn system_action_label(
+    layout: SystemControllerLayout,
+    action: &str,
+) -> Option<&'static str> {
+    system_controller_hotspots(layout)
+        .iter()
+        .chain(system_controller_additional_hotspots(layout).iter())
+        .find_map(|hotspot| (hotspot.action == action).then_some(hotspot.label))
+}
+
+pub(crate) fn system_action_is_native(system: &str, action: &str) -> bool {
+    system_controller_layout_for_system(system)
+        .and_then(|layout| system_action_label(layout, action))
+        .is_some()
+}
+
+pub(crate) fn parse_system_hotspot_overlay(
+    layout: SystemControllerLayout,
+    svg_data: &str,
+) -> Result<Vec<SystemOverlayHotspot>, String> {
+    let document = Document::parse(svg_data).map_err(|err| err.to_string())?;
+    let root = document.root_element();
+    let view_box = parse_view_box(root.attribute("viewBox"))
+        .ok_or_else(|| String::from("hotspot overlay is missing a valid viewBox"))?;
+    if view_box[2] <= 0.0 || view_box[3] <= 0.0 {
+        return Err(String::from("hotspot overlay viewBox must have positive width and height"));
+    }
+
+    let mut hotspots = Vec::new();
+    let mut ids = HashSet::new();
+    let mut actions = HashSet::new();
+
+    for node in root.descendants().filter(|node| node.is_element()) {
+        let tag = node.tag_name().name();
+        if !matches!(tag, "circle" | "rect" | "polygon") {
+            continue;
+        }
+
+        let id = node
+            .attribute("id")
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| format!("{tag} hotspot is missing an id"))?;
+        if !ids.insert(id.to_string()) {
+            return Err(format!("duplicate hotspot id: {id}"));
+        }
+
+        let action = node
+            .attribute("data-action")
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| format!("hotspot {id} is missing data-action"))?;
+        if system_action_label(layout, action).is_none() {
+            return Err(format!("hotspot {id} uses unknown action {action}"));
+        }
+        if !actions.insert(action.to_string()) {
+            return Err(format!("duplicate hotspot action: {action}"));
+        }
+
+        let label = node
+            .attribute("data-label")
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+            .unwrap_or_else(|| {
+                system_action_label(layout, action)
+                    .unwrap_or(action)
+                    .to_string()
+            });
+
+        let shape = parse_overlay_hotspot_shape(tag, &node, view_box)
+            .map_err(|err| format!("hotspot {id}: {err}"))?;
+
+        hotspots.push(SystemOverlayHotspot {
+            id: id.to_string(),
+            action: action.to_string(),
+            label,
+            shape,
+        });
+    }
+
+    if hotspots.is_empty() {
+        return Err(String::from("hotspot overlay does not define any supported shapes"));
+    }
+
+    validate_system_overlay_actions(layout, &hotspots)?;
+    Ok(hotspots)
+}
+
+pub(crate) fn physical_input_controls(art: ControllerMapperArt) -> Vec<ControllerHotspot> {
+    let mut controls = Vec::new();
+    for hotspot in controller_mapper_hotspots(art, ControllerMapperView::Front)
+        .iter()
+        .chain(controller_mapper_hotspots(art, ControllerMapperView::Top).iter())
+    {
+        if controls
+            .iter()
+            .any(|existing: &ControllerHotspot| existing.control == hotspot.control)
+        {
+            continue;
+        }
+        controls.push(*hotspot);
+    }
+    controls
 }
 
 pub(crate) fn controller_mapper_hotspots(
@@ -472,6 +786,16 @@ pub(crate) fn visual_control_from_mapping_entry(entry: &MappingEntry) -> Option<
     }
 }
 
+pub(crate) fn physical_input_for_action(
+    actions: &BTreeMap<String, Option<MappingEntry>>,
+    action: &str,
+) -> Option<VisualControlId> {
+    actions
+        .get(action)
+        .and_then(|entry| entry.as_ref())
+        .and_then(visual_control_from_mapping_entry)
+}
+
 pub(crate) fn action_for_visual_control<'a>(
     actions: &'a BTreeMap<String, Option<MappingEntry>>,
     control: VisualControlId,
@@ -502,6 +826,14 @@ pub(crate) fn assign_action_to_visual_control(
     actions.insert(action.to_string(), Some(mapped_entry));
 }
 
+pub(crate) fn assign_physical_input_to_action(
+    actions: &mut BTreeMap<String, Option<MappingEntry>>,
+    action: &str,
+    control: VisualControlId,
+) {
+    assign_action_to_visual_control(actions, action, control);
+}
+
 pub(crate) fn unassign_visual_control(
     actions: &mut BTreeMap<String, Option<MappingEntry>>,
     control: VisualControlId,
@@ -514,43 +846,25 @@ pub(crate) fn unassign_visual_control(
     }
 }
 
+pub(crate) fn unassign_action(actions: &mut BTreeMap<String, Option<MappingEntry>>, action: &str) {
+    if let Some(entry) = actions.get_mut(action) {
+        *entry = None;
+    }
+}
+
 impl ControllerHotspot {
-    pub(crate) fn contains(self, image_rect: Rect, uv_rect: Rect, pointer_pos: Pos2) -> bool {
-        match self.shape {
-            HotspotShape::Circle { center, radius } => {
-                let center = hotspot_pos(image_rect, uv_rect, center);
-                pointer_pos.distance(center)
-                    <= radius * image_rect.width().min(image_rect.height()) / uv_rect.width()
-            }
-            HotspotShape::Rect { center, size } => {
-                let center = hotspot_pos(image_rect, uv_rect, center);
-                let size = vec2(
-                    size[0] * image_rect.width() / uv_rect.width(),
-                    size[1] * image_rect.height() / uv_rect.height(),
-                );
-                Rect::from_center_size(center, size).contains(pointer_pos)
-            }
-        }
+    pub(crate) fn paint_rect(self, image_rect: Rect, uv_rect: Rect) -> Rect {
+        hotspot_shape_rect_with_uv(self.shape, image_rect, uv_rect)
+    }
+}
+
+impl SystemOverlayHotspot {
+    pub(crate) fn contains(&self, image_rect: Rect, pointer_pos: Pos2) -> bool {
+        overlay_hotspot_shape_contains(&self.shape, image_rect, pointer_pos)
     }
 
-    pub(crate) fn paint_rect(self, image_rect: Rect, uv_rect: Rect) -> Rect {
-        match self.shape {
-            HotspotShape::Circle { center, radius } => {
-                let center = hotspot_pos(image_rect, uv_rect, center);
-                let radius = radius * image_rect.width().min(image_rect.height()) / uv_rect.width();
-                Rect::from_center_size(center, vec2(radius * 2.0, radius * 2.0))
-            }
-            HotspotShape::Rect { center, size } => {
-                let center = hotspot_pos(image_rect, uv_rect, center);
-                Rect::from_center_size(
-                    center,
-                    vec2(
-                        size[0] * image_rect.width() / uv_rect.width(),
-                        size[1] * image_rect.height() / uv_rect.height(),
-                    ),
-                )
-            }
-        }
+    pub(crate) fn paint_rect(&self, image_rect: Rect) -> Rect {
+        overlay_hotspot_shape_rect(&self.shape, image_rect)
     }
 }
 
@@ -594,6 +908,234 @@ fn hotspot_pos(image_rect: Rect, uv_rect: Rect, normalized_center: [f32; 2]) -> 
         image_rect.left() + ((normalized_center[0] - uv_rect.left()) / uv_rect.width()) * image_rect.width(),
         image_rect.top() + ((normalized_center[1] - uv_rect.top()) / uv_rect.height()) * image_rect.height(),
     )
+}
+
+fn hotspot_shape_rect_with_uv(shape: HotspotShape, image_rect: Rect, uv_rect: Rect) -> Rect {
+    match shape {
+        HotspotShape::Circle { center, radius } => {
+            let center = hotspot_pos(image_rect, uv_rect, center);
+            let radius = radius * image_rect.width().min(image_rect.height()) / uv_rect.width();
+            Rect::from_center_size(center, vec2(radius * 2.0, radius * 2.0))
+        }
+        HotspotShape::Rect { center, size } => {
+            let center = hotspot_pos(image_rect, uv_rect, center);
+            Rect::from_center_size(
+                center,
+                vec2(
+                    size[0] * image_rect.width() / uv_rect.width(),
+                    size[1] * image_rect.height() / uv_rect.height(),
+                ),
+            )
+        }
+    }
+}
+
+fn overlay_hotspot_shape_contains(
+    shape: &OverlayHotspotShape,
+    image_rect: Rect,
+    pointer_pos: Pos2,
+) -> bool {
+    if !image_rect.contains(pointer_pos) {
+        return false;
+    }
+    let normalized_point = [
+        ((pointer_pos.x - image_rect.left()) / image_rect.width()).clamp(0.0, 1.0),
+        ((pointer_pos.y - image_rect.top()) / image_rect.height()).clamp(0.0, 1.0),
+    ];
+    match shape {
+        OverlayHotspotShape::Circle { center, radius } => {
+            let dx = normalized_point[0] - center[0];
+            let dy = normalized_point[1] - center[1];
+            dx * dx + dy * dy <= radius * radius
+        }
+        OverlayHotspotShape::Rect { center, size } => {
+            let half_width = size[0] * 0.5;
+            let half_height = size[1] * 0.5;
+            normalized_point[0] >= center[0] - half_width
+                && normalized_point[0] <= center[0] + half_width
+                && normalized_point[1] >= center[1] - half_height
+                && normalized_point[1] <= center[1] + half_height
+        }
+        OverlayHotspotShape::Polygon { points } => point_in_polygon(normalized_point, points),
+    }
+}
+
+fn overlay_hotspot_shape_rect(shape: &OverlayHotspotShape, image_rect: Rect) -> Rect {
+    match shape {
+        OverlayHotspotShape::Circle { center, radius } => Rect::from_center_size(
+            hotspot_pos(
+                image_rect,
+                Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0)),
+                *center,
+            ),
+            vec2(
+                radius * image_rect.width() * 2.0,
+                radius * image_rect.height() * 2.0,
+            ),
+        ),
+        OverlayHotspotShape::Rect { center, size } => Rect::from_center_size(
+            hotspot_pos(
+                image_rect,
+                Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0)),
+                *center,
+            ),
+            vec2(size[0] * image_rect.width(), size[1] * image_rect.height()),
+        ),
+        OverlayHotspotShape::Polygon { points } => polygon_bounding_rect(points, image_rect),
+    }
+}
+
+fn polygon_bounding_rect(points: &[[f32; 2]], image_rect: Rect) -> Rect {
+    let mut min_x = f32::INFINITY;
+    let mut min_y = f32::INFINITY;
+    let mut max_x = f32::NEG_INFINITY;
+    let mut max_y = f32::NEG_INFINITY;
+    for point in points {
+        min_x = min_x.min(point[0]);
+        min_y = min_y.min(point[1]);
+        max_x = max_x.max(point[0]);
+        max_y = max_y.max(point[1]);
+    }
+    Rect::from_min_max(
+        pos2(
+            image_rect.left() + min_x * image_rect.width(),
+            image_rect.top() + min_y * image_rect.height(),
+        ),
+        pos2(
+            image_rect.left() + max_x * image_rect.width(),
+            image_rect.top() + max_y * image_rect.height(),
+        ),
+    )
+}
+
+fn point_in_polygon(point: [f32; 2], polygon: &[[f32; 2]]) -> bool {
+    if polygon.len() < 3 {
+        return false;
+    }
+    let mut inside = false;
+    let mut previous = polygon.last().copied().unwrap_or([0.0, 0.0]);
+    for current in polygon {
+        let intersects = ((current[1] > point[1]) != (previous[1] > point[1]))
+            && (point[0]
+                < (previous[0] - current[0]) * (point[1] - current[1])
+                    / (previous[1] - current[1])
+                    + current[0]);
+        if intersects {
+            inside = !inside;
+        }
+        previous = *current;
+    }
+    inside
+}
+
+fn required_system_actions(layout: SystemControllerLayout) -> Vec<&'static str> {
+    system_controller_hotspots(layout)
+        .iter()
+        .chain(system_controller_additional_hotspots(layout).iter())
+        .map(|hotspot| hotspot.action)
+        .collect()
+}
+
+fn validate_system_overlay_actions(
+    layout: SystemControllerLayout,
+    hotspots: &[SystemOverlayHotspot],
+) -> Result<(), String> {
+    let required = required_system_actions(layout);
+    for action in &required {
+        if !hotspots.iter().any(|hotspot| hotspot.action == *action) {
+            return Err(format!("hotspot overlay is missing required action {action}"));
+        }
+    }
+    Ok(())
+}
+
+fn parse_overlay_hotspot_shape(
+    tag: &str,
+    node: &roxmltree::Node<'_, '_>,
+    view_box: [f32; 4],
+) -> Result<OverlayHotspotShape, String> {
+    match tag {
+        "circle" => {
+            let cx = parse_required_attr(node, "cx")?;
+            let cy = parse_required_attr(node, "cy")?;
+            let radius = parse_required_attr(node, "r")?;
+            Ok(OverlayHotspotShape::Circle {
+                center: normalize_point([cx, cy], view_box),
+                radius: radius / view_box[2],
+            })
+        }
+        "rect" => {
+            let x = parse_required_attr(node, "x")?;
+            let y = parse_required_attr(node, "y")?;
+            let width = parse_required_attr(node, "width")?;
+            let height = parse_required_attr(node, "height")?;
+            Ok(OverlayHotspotShape::Rect {
+                center: normalize_point([x + width * 0.5, y + height * 0.5], view_box),
+                size: [width / view_box[2], height / view_box[3]],
+            })
+        }
+        "polygon" => {
+            let points_attr = node
+                .attribute("points")
+                .ok_or_else(|| String::from("polygon is missing points"))?;
+            let raw_points = parse_polygon_points(points_attr)?;
+            Ok(OverlayHotspotShape::Polygon {
+                points: raw_points
+                    .into_iter()
+                    .map(|point| normalize_point(point, view_box))
+                    .collect(),
+            })
+        }
+        _ => Err(format!("unsupported hotspot shape {tag}")),
+    }
+}
+
+fn parse_required_attr(node: &roxmltree::Node<'_, '_>, name: &str) -> Result<f32, String> {
+    node.attribute(name)
+        .ok_or_else(|| format!("missing {name}"))
+        .and_then(|value| {
+            value
+                .trim()
+                .parse::<f32>()
+                .map_err(|_| format!("invalid {name}: {value}"))
+        })
+}
+
+fn parse_view_box(raw: Option<&str>) -> Option<[f32; 4]> {
+    let values: Vec<f32> = raw?
+        .split(|ch: char| ch.is_ascii_whitespace() || ch == ',')
+        .filter(|part| !part.is_empty())
+        .map(|part| part.parse::<f32>().ok())
+        .collect::<Option<Vec<_>>>()?;
+    if values.len() != 4 {
+        return None;
+    }
+    Some([values[0], values[1], values[2], values[3]])
+}
+
+fn parse_polygon_points(raw: &str) -> Result<Vec<[f32; 2]>, String> {
+    let values: Vec<f32> = raw
+        .split(|ch: char| ch.is_ascii_whitespace() || ch == ',')
+        .filter(|part| !part.is_empty())
+        .map(|part| {
+            part.parse::<f32>()
+                .map_err(|_| format!("invalid polygon point value: {part}"))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    if values.len() < 6 || values.len() % 2 != 0 {
+        return Err(String::from("polygon must contain at least three points"));
+    }
+    Ok(values
+        .chunks_exact(2)
+        .map(|chunk| [chunk[0], chunk[1]])
+        .collect())
+}
+
+fn normalize_point(point: [f32; 2], view_box: [f32; 4]) -> [f32; 2] {
+    [
+        (point[0] - view_box[0]) / view_box[2],
+        (point[1] - view_box[1]) / view_box[3],
+    ]
 }
 
 const fn circle_button(
@@ -642,6 +1184,41 @@ const fn rect_axis(
 ) -> ControllerHotspot {
     ControllerHotspot {
         control: VisualControlId::Axis { axis, direction },
+        label,
+        shape: HotspotShape::Rect {
+            center: [x, y],
+            size: [width, height],
+        },
+    }
+}
+
+const fn system_circle(
+    action: &'static str,
+    label: &'static str,
+    x: f32,
+    y: f32,
+    radius: f32,
+) -> SystemActionHotspot {
+    SystemActionHotspot {
+        action,
+        label,
+        shape: HotspotShape::Circle {
+            center: [x, y],
+            radius,
+        },
+    }
+}
+
+const fn system_rect(
+    action: &'static str,
+    label: &'static str,
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+) -> SystemActionHotspot {
+    SystemActionHotspot {
+        action,
         label,
         shape: HotspotShape::Rect {
             center: [x, y],
@@ -973,6 +1550,164 @@ mod tests {
     }
 
     #[test]
+    fn supported_systems_resolve_to_system_controller_layouts() {
+        assert_eq!(
+            system_controller_layout_for_system("NES"),
+            Some(SystemControllerLayout::Nes)
+        );
+        assert_eq!(
+            system_controller_layout_for_system("GENESIS"),
+            Some(SystemControllerLayout::Genesis)
+        );
+        assert_eq!(
+            system_controller_layout_for_system("PSX"),
+            Some(SystemControllerLayout::Psx)
+        );
+        assert_eq!(
+            system_controller_layout_for_system("SATURN"),
+            Some(SystemControllerLayout::Saturn)
+        );
+        assert_eq!(system_controller_layout_for_system("GBA"), None);
+        assert_eq!(system_controller_layout_for_system("DOS"), None);
+    }
+
+    #[test]
+    fn system_native_action_detection_matches_supported_visual_layouts() {
+        assert!(system_action_is_native("NES", "A"));
+        assert!(system_action_is_native("SNES", "L"));
+        assert!(system_action_is_native("PS2", "Right Stick Left"));
+        assert!(system_action_is_native("N64", "C-Up"));
+        assert!(!system_action_is_native("NES", "Quick Save"));
+        assert!(!system_action_is_native("DOS", "A"));
+    }
+
+    #[test]
+    fn parser_reads_circle_rect_and_polygon_hotspots() {
+        let svg = r#"
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+              <circle id="up" data-action="Up" cx="12" cy="24" r="2" />
+              <rect id="select" data-action="Select" x="24" y="40" width="6" height="3" />
+              <polygon id="a" data-action="A" points="48,28 52,32 48,36 44,32" />
+              <circle id="down" data-action="Down" cx="12" cy="40" r="2" />
+              <circle id="left" data-action="Left" cx="8" cy="32" r="2" />
+              <circle id="right" data-action="Right" cx="16" cy="32" r="2" />
+              <circle id="b" data-action="B" cx="44" cy="36" r="2" />
+              <rect id="start" data-action="Start" x="34" y="40" width="6" height="3" />
+            </svg>
+        "#;
+        let hotspots = parse_system_hotspot_overlay(SystemControllerLayout::Nes, svg).unwrap();
+
+        assert_eq!(hotspots.len(), 8);
+        assert!(matches!(
+            hotspots.iter().find(|hotspot| hotspot.id == "up").unwrap().shape,
+            OverlayHotspotShape::Circle { .. }
+        ));
+        assert!(matches!(
+            hotspots
+                .iter()
+                .find(|hotspot| hotspot.id == "select")
+                .unwrap()
+                .shape,
+            OverlayHotspotShape::Rect { .. }
+        ));
+        assert!(matches!(
+            hotspots.iter().find(|hotspot| hotspot.id == "a").unwrap().shape,
+            OverlayHotspotShape::Polygon { .. }
+        ));
+    }
+
+    #[test]
+    fn parser_rejects_hotspots_without_action() {
+        let svg = r#"
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+              <circle id="up" cx="12" cy="24" r="2" />
+            </svg>
+        "#;
+        let error = parse_system_hotspot_overlay(SystemControllerLayout::Nes, svg).unwrap_err();
+        assert!(error.contains("data-action"));
+    }
+
+    #[test]
+    fn parser_rejects_duplicate_hotspot_ids() {
+        let svg = r#"
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+              <circle id="dup" data-action="Up" cx="12" cy="24" r="2" />
+              <circle id="dup" data-action="Down" cx="12" cy="40" r="2" />
+              <circle id="left" data-action="Left" cx="8" cy="32" r="2" />
+              <circle id="right" data-action="Right" cx="16" cy="32" r="2" />
+              <circle id="a" data-action="A" cx="48" cy="28" r="2" />
+              <circle id="b" data-action="B" cx="44" cy="36" r="2" />
+              <rect id="select" data-action="Select" x="24" y="40" width="6" height="3" />
+              <rect id="start" data-action="Start" x="34" y="40" width="6" height="3" />
+            </svg>
+        "#;
+        let error = parse_system_hotspot_overlay(SystemControllerLayout::Nes, svg).unwrap_err();
+        assert!(error.contains("duplicate hotspot id"));
+    }
+
+    #[test]
+    fn overlay_files_cover_required_actions_for_supported_systems() {
+        let cases = [
+            (
+                SystemControllerLayout::Nes,
+                include_str!("../../../public/gamepads/hotspots/outline/nes.hotspots.svg"),
+            ),
+            (
+                SystemControllerLayout::Snes,
+                include_str!("../../../public/gamepads/hotspots/outline/snes.hotspots.svg"),
+            ),
+            (
+                SystemControllerLayout::Genesis,
+                include_str!("../../../public/gamepads/hotspots/outline/genesis.hotspots.svg"),
+            ),
+            (
+                SystemControllerLayout::N64,
+                include_str!("../../../public/gamepads/hotspots/outline/n64.hotspots.svg"),
+            ),
+            (
+                SystemControllerLayout::Psx,
+                include_str!("../../../public/gamepads/hotspots/outline/psx.hotspots.svg"),
+            ),
+            (
+                SystemControllerLayout::Ps2,
+                include_str!("../../../public/gamepads/hotspots/outline/ps2.hotspots.svg"),
+            ),
+            (
+                SystemControllerLayout::Dreamcast,
+                include_str!("../../../public/gamepads/hotspots/outline/dreamcast.hotspots.svg"),
+            ),
+            (
+                SystemControllerLayout::Saturn,
+                include_str!("../../../public/gamepads/hotspots/outline/saturn.hotspots.svg"),
+            ),
+        ];
+
+        for (layout, svg) in cases {
+            let hotspots = parse_system_hotspot_overlay(layout, svg).unwrap();
+            assert!(validate_system_overlay_actions(layout, &hotspots).is_ok());
+        }
+    }
+
+    #[test]
+    fn polygon_hit_testing_is_stable_across_sizes() {
+        let hotspot = SystemOverlayHotspot {
+            id: String::from("poly"),
+            action: String::from("Up"),
+            label: String::from("Up"),
+            shape: OverlayHotspotShape::Polygon {
+                points: vec![[0.25, 0.20], [0.45, 0.20], [0.35, 0.40]],
+            },
+        };
+        let small_rect = Rect::from_min_max(Pos2::ZERO, pos2(200.0, 200.0));
+        let large_rect = Rect::from_min_max(Pos2::ZERO, pos2(600.0, 600.0));
+
+        assert!(hotspot.contains(small_rect, pos2(70.0, 55.0)));
+        assert!(hotspot.contains(large_rect, pos2(210.0, 165.0)));
+        assert!(!hotspot.contains(small_rect, pos2(20.0, 20.0)));
+        assert!(!hotspot.contains(large_rect, pos2(60.0, 60.0)));
+    }
+
+    #[test]
     fn assign_action_moves_existing_action_and_control() {
         let mut actions = BTreeMap::from([
             (
@@ -1005,6 +1740,36 @@ mod tests {
     }
 
     #[test]
+    fn assign_physical_input_rebinds_actions_one_to_one() {
+        let mut actions = BTreeMap::from([
+            (
+                String::from("A"),
+                Some(MappingEntry::Button {
+                    button: CanonicalButton::South,
+                }),
+            ),
+            (
+                String::from("B"),
+                Some(MappingEntry::Button {
+                    button: CanonicalButton::East,
+                }),
+            ),
+        ]);
+
+        assign_physical_input_to_action(
+            &mut actions,
+            "B",
+            VisualControlId::Button(CanonicalButton::South),
+        );
+
+        assert_eq!(physical_input_for_action(&actions, "A"), None);
+        assert_eq!(
+            physical_input_for_action(&actions, "B"),
+            Some(VisualControlId::Button(CanonicalButton::South))
+        );
+    }
+
+    #[test]
     fn unassign_visual_control_clears_matching_action() {
         let mut actions = BTreeMap::from([(
             String::from("L2"),
@@ -1023,6 +1788,20 @@ mod tests {
         );
 
         assert_eq!(actions.get("L2"), Some(&None));
+    }
+
+    #[test]
+    fn unassign_action_clears_selected_binding() {
+        let mut actions = BTreeMap::from([(
+            String::from("Start"),
+            Some(MappingEntry::Button {
+                button: CanonicalButton::Start,
+            }),
+        )]);
+
+        unassign_action(&mut actions, "Start");
+
+        assert_eq!(physical_input_for_action(&actions, "Start"), None);
     }
 
     #[test]

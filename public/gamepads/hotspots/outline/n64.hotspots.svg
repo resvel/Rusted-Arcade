@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <circle id="n64-up" data-action="Up" data-label="Up" cx="12.16" cy="27.52" r="1.92" />
+  <circle id="n64-down" data-action="Down" data-label="Down" cx="12.16" cy="36.80" r="1.92" />
+  <circle id="n64-left" data-action="Left" data-label="Left" cx="7.68" cy="32.13" r="1.92" />
+  <circle id="n64-right" data-action="Right" data-label="Right" cx="16.64" cy="32.13" r="1.92" />
+  <rect id="n64-stick-up" data-action="Stick Up" data-label="Stick Up" x="30.24" y="21.60" width="3.52" height="2.24" />
+  <rect id="n64-stick-down" data-action="Stick Down" data-label="Stick Down" x="30.24" y="33.12" width="3.52" height="2.24" />
+  <rect id="n64-stick-left" data-action="Stick Left" data-label="Stick Left" x="26.72" y="26.72" width="2.24" height="3.52" />
+  <rect id="n64-stick-right" data-action="Stick Right" data-label="Stick Right" x="35.04" y="26.72" width="2.24" height="3.52" />
+  <circle id="n64-a" data-action="A" data-label="A" cx="49.28" cy="32.64" r="2.43" />
+  <circle id="n64-b" data-action="B" data-label="B" cx="44.80" cy="37.44" r="2.18" />
+  <rect id="n64-l" data-action="L" data-label="L" x="12.64" y="7.74" width="7.36" height="3.07" />
+  <rect id="n64-r" data-action="R" data-label="R" x="44.00" y="7.74" width="7.36" height="3.07" />
+  <circle id="n64-z" data-action="Z" data-label="Z" cx="32.00" cy="51.20" r="2.56" />
+  <circle id="n64-start" data-action="Start" data-label="Start" cx="32.00" cy="41.28" r="1.92" />
+  <circle id="n64-c-up" data-action="C-Up" data-label="C-Up" cx="55.36" cy="23.04" r="1.66" />
+  <circle id="n64-c-down" data-action="C-Down" data-label="C-Down" cx="55.36" cy="32.64" r="1.66" />
+  <circle id="n64-c-left" data-action="C-Left" data-label="C-Left" cx="50.88" cy="27.84" r="1.66" />
+  <circle id="n64-c-right" data-action="C-Right" data-label="C-Right" cx="59.84" cy="27.84" r="1.66" />
+</svg>

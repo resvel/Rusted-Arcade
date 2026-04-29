@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <circle id="ps2-up" data-action="Up" data-label="Up" cx="12.80" cy="22.08" r="1.79" />
+  <circle id="ps2-down" data-action="Down" data-label="Down" cx="12.80" cy="31.36" r="1.79" />
+  <circle id="ps2-left" data-action="Left" data-label="Left" cx="8.45" cy="26.75" r="1.79" />
+  <circle id="ps2-right" data-action="Right" data-label="Right" cx="17.15" cy="26.75" r="1.79" />
+  <circle id="ps2-triangle" data-action="Triangle" data-label="Triangle" cx="51.20" cy="21.12" r="1.79" />
+  <circle id="ps2-square" data-action="Square" data-label="Square" cx="46.72" cy="26.56" r="1.79" />
+  <circle id="ps2-circle" data-action="Circle" data-label="Circle" cx="55.68" cy="26.56" r="1.79" />
+  <circle id="ps2-cross" data-action="Cross" data-label="Cross" cx="51.20" cy="32.00" r="1.79" />
+  <rect id="ps2-l1" data-action="L1" data-label="L1" x="10.56" y="9.28" width="6.40" height="2.56" />
+  <rect id="ps2-r1" data-action="R1" data-label="R1" x="47.04" y="9.28" width="6.40" height="2.56" />
+  <rect id="ps2-l2" data-action="L2" data-label="L2" x="10.88" y="5.63" width="5.76" height="2.18" />
+  <rect id="ps2-r2" data-action="R2" data-label="R2" x="47.36" y="5.63" width="5.76" height="2.18" />
+  <circle id="ps2-l3" data-action="L3" data-label="L3" cx="23.36" cy="37.44" r="3.07" />
+  <circle id="ps2-r3" data-action="R3" data-label="R3" cx="40.64" cy="37.44" r="3.07" />
+  <rect id="ps2-left-stick-up" data-action="Left Stick Up" data-label="Left Stick Up" x="22.02" y="33.28" width="2.69" height="1.28" />
+  <rect id="ps2-left-stick-down" data-action="Left Stick Down" data-label="Left Stick Down" x="22.02" y="40.00" width="2.69" height="1.28" />
+  <rect id="ps2-left-stick-left" data-action="Left Stick Left" data-label="Left Stick Left" x="19.20" y="36.10" width="1.28" height="2.69" />
+  <rect id="ps2-left-stick-right" data-action="Left Stick Right" data-label="Left Stick Right" x="26.24" y="36.10" width="1.28" height="2.69" />
+  <rect id="ps2-right-stick-up" data-action="Right Stick Up" data-label="Right Stick Up" x="39.30" y="33.28" width="2.69" height="1.28" />
+  <rect id="ps2-right-stick-down" data-action="Right Stick Down" data-label="Right Stick Down" x="39.30" y="40.00" width="2.69" height="1.28" />
+  <rect id="ps2-right-stick-left" data-action="Right Stick Left" data-label="Right Stick Left" x="36.48" y="36.10" width="1.28" height="2.69" />
+  <rect id="ps2-right-stick-right" data-action="Right Stick Right" data-label="Right Stick Right" x="43.52" y="36.10" width="1.28" height="2.69" />
+  <rect id="ps2-select" data-action="Select" data-label="Select" x="24.96" y="29.12" width="5.12" height="2.56" />
+  <rect id="ps2-start" data-action="Start" data-label="Start" x="33.92" y="29.12" width="5.12" height="2.56" />
+</svg>

@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <circle id="nes-up" data-action="Up" data-label="Up" cx="15.04" cy="27.84" r="2.56" />
+  <circle id="nes-down" data-action="Down" data-label="Down" cx="15.04" cy="40.00" r="2.56" />
+  <circle id="nes-left" data-action="Left" data-label="Left" cx="9.28" cy="33.92" r="2.56" />
+  <circle id="nes-right" data-action="Right" data-label="Right" cx="20.80" cy="33.92" r="2.56" />
+  <circle id="nes-a" data-action="A" data-label="A" cx="49.60" cy="30.08" r="2.56" />
+  <circle id="nes-b" data-action="B" data-label="B" cx="44.16" cy="35.52" r="2.56" />
+  <rect id="nes-select" data-action="Select" data-label="Select" x="25.60" y="43.58" width="5.76" height="3.07" />
+  <rect id="nes-start" data-action="Start" data-label="Start" x="33.28" y="43.58" width="5.76" height="3.07" />
+</svg>

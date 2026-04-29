@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <circle id="dreamcast-up" data-action="Up" data-label="Up" cx="18.24" cy="25.28" r="2.05" />
+  <circle id="dreamcast-down" data-action="Down" data-label="Down" cx="18.24" cy="35.84" r="2.05" />
+  <circle id="dreamcast-left" data-action="Left" data-label="Left" cx="13.12" cy="30.59" r="2.05" />
+  <circle id="dreamcast-right" data-action="Right" data-label="Right" cx="23.36" cy="30.59" r="2.05" />
+  <circle id="dreamcast-y" data-action="Y" data-label="Y" cx="48.64" cy="22.72" r="2.18" />
+  <circle id="dreamcast-x" data-action="X" data-label="X" cx="44.16" cy="28.16" r="2.18" />
+  <circle id="dreamcast-b" data-action="B" data-label="B" cx="53.12" cy="28.16" r="2.18" />
+  <circle id="dreamcast-a" data-action="A" data-label="A" cx="48.64" cy="33.60" r="2.18" />
+  <rect id="dreamcast-start" data-action="Start" data-label="Start" x="30.08" y="38.85" width="7.04" height="2.94" />
+</svg>
