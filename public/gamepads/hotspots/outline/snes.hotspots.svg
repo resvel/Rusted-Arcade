@@ -1,14 +1,14 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
-  <circle id="snes-up" data-action="Up" data-label="Up" cx="13.15" cy="27.95" r="1.85" />
-  <circle id="snes-down" data-action="Down" data-label="Down" cx="13.15" cy="37.10" r="1.85" />
-  <circle id="snes-left" data-action="Left" data-label="Left" cx="9.15" cy="32.50" r="1.85" />
-  <circle id="snes-right" data-action="Right" data-label="Right" cx="17.15" cy="32.50" r="1.85" />
-  <circle id="snes-x" data-action="X" data-label="X" cx="51.15" cy="26.15" r="1.90" />
-  <circle id="snes-y" data-action="Y" data-label="Y" cx="45.75" cy="31.55" r="1.90" />
-  <circle id="snes-a" data-action="A" data-label="A" cx="56.55" cy="31.55" r="1.90" />
-  <circle id="snes-b" data-action="B" data-label="B" cx="51.15" cy="36.95" r="1.90" />
-  <rect id="snes-l" data-action="L" data-label="L" x="8.95" y="17.90" width="5.20" height="2.20" />
-  <rect id="snes-r" data-action="R" data-label="R" x="49.85" y="17.90" width="5.20" height="2.20" />
+  <rect id="snes-up"    data-action="Up"     data-label="Up"     x="12.08" y="26.64" width="3.98" height="3.54" />
+  <rect id="snes-down"  data-action="Down"   data-label="Down"   x="12.08" y="34.96" width="3.98" height="3.54" />
+  <rect id="snes-left"  data-action="Left"   data-label="Left"   x="7.74"  y="30.18" width="4.34" height="4.78" />
+  <rect id="snes-right" data-action="Right"  data-label="Right"  x="16.06" y="30.18" width="4.34" height="4.78" />
+  <circle id="snes-x" data-action="X" data-label="X" cx="50.58" cy="27.57" r="1.90" />
+  <circle id="snes-y" data-action="Y" data-label="Y" cx="44.43" cy="32.40" r="1.90" />
+  <circle id="snes-a" data-action="A" data-label="A" cx="56.90" cy="32.35" r="1.90" />
+  <circle id="snes-b" data-action="B" data-label="B" cx="50.75" cy="37.50" r="1.90" />
+  <rect id="snes-l"      data-action="L"      data-label="L"      x="8.95"  y="17.90" width="12.50" height="2.20" />
+  <rect id="snes-r"      data-action="R"      data-label="R"      x="42.55" y="17.90" width="12.50" height="2.20" />
   <rect id="snes-select" data-action="Select" data-label="Select" x="24.35" y="34.55" width="3.70" height="1.90" />
-  <rect id="snes-start" data-action="Start" data-label="Start" x="30.05" y="34.55" width="3.70" height="1.90" />
+  <rect id="snes-start"  data-action="Start"  data-label="Start"  x="30.05" y="34.55" width="3.70" height="1.90" />
 </svg>

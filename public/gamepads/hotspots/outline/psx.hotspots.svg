@@ -1,16 +1,16 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
-  <circle id="psx-up" data-action="Up" data-label="Up" cx="12.80" cy="22.08" r="1.92" />
-  <circle id="psx-down" data-action="Down" data-label="Down" cx="12.80" cy="31.36" r="1.92" />
-  <circle id="psx-left" data-action="Left" data-label="Left" cx="8.45" cy="26.75" r="1.92" />
-  <circle id="psx-right" data-action="Right" data-label="Right" cx="17.15" cy="26.75" r="1.92" />
-  <circle id="psx-triangle" data-action="Triangle" data-label="Triangle" cx="51.20" cy="21.12" r="1.92" />
-  <circle id="psx-square" data-action="Square" data-label="Square" cx="46.72" cy="26.56" r="1.92" />
-  <circle id="psx-circle" data-action="Circle" data-label="Circle" cx="55.68" cy="26.56" r="1.92" />
-  <circle id="psx-cross" data-action="Cross" data-label="Cross" cx="51.20" cy="32.00" r="1.92" />
+  <circle id="psx-up"    data-action="Up"    data-label="Up"    cx="13.62" cy="23.15" r="1.80" />
+  <circle id="psx-down"  data-action="Down"  data-label="Down"  cx="13.62" cy="29.73" r="1.80" />
+  <circle id="psx-left"  data-action="Left"  data-label="Left"  cx="10.33" cy="26.44" r="1.80" />
+  <circle id="psx-right" data-action="Right" data-label="Right" cx="16.91" cy="26.44" r="1.80" />
+  <circle id="psx-triangle" data-action="Triangle" data-label="Triangle" cx="50.57" cy="21.55" r="2.40" />
+  <circle id="psx-square"   data-action="Square"   data-label="Square"   cx="44.73" cy="26.89" r="2.40" />
+  <circle id="psx-circle"   data-action="Circle"   data-label="Circle"   cx="56.44" cy="26.89" r="2.40" />
+  <circle id="psx-cross"    data-action="Cross"    data-label="Cross"    cx="50.57" cy="32.24" r="2.40" />
   <rect id="psx-l1" data-action="L1" data-label="L1" x="10.56" y="9.28" width="6.40" height="2.56" />
   <rect id="psx-r1" data-action="R1" data-label="R1" x="47.04" y="9.28" width="6.40" height="2.56" />
   <rect id="psx-l2" data-action="L2" data-label="L2" x="10.88" y="5.63" width="5.76" height="2.18" />
   <rect id="psx-r2" data-action="R2" data-label="R2" x="47.36" y="5.63" width="5.76" height="2.18" />
-  <rect id="psx-select" data-action="Select" data-label="Select" x="24.96" y="35.52" width="5.12" height="2.56" />
-  <rect id="psx-start" data-action="Start" data-label="Start" x="33.92" y="35.52" width="5.12" height="2.56" />
+  <rect id="psx-select" data-action="Select" data-label="Select" x="26.28" y="29.86" width="3.72" height="2.48" />
+  <rect id="psx-start"  data-action="Start"  data-label="Start"  x="34.20" y="29.74" width="3.58" height="2.71" />
 </svg>
