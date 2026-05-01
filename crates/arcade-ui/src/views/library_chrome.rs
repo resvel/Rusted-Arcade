@@ -1,10 +1,9 @@
 use crate::app::NativeArcadeUiApp;
 use crate::controller_mapper::{
-    action_for_visual_control, assign_physical_input_to_action, controller_mapper_art_for_device,
-    controller_mapper_control_label, physical_input_controls, physical_input_for_action,
-    system_action_is_native, system_action_label, system_controller_layout_for_system,
-    unassign_action, ControllerMapperArt, OverlayHotspotShape, SystemControllerLayout,
-    SystemOverlayHotspot,
+    action_for_visual_control, controller_mapper_art_for_device, controller_mapper_control_label,
+    physical_input_controls, physical_input_for_action, system_action_is_native,
+    system_action_label, system_controller_layout_for_system, ControllerMapperArt,
+    OverlayHotspotShape, SystemControllerLayout, SystemOverlayHotspot,
 };
 use crate::input::ControllerMappingTarget;
 use crate::render::{fit_size, fit_size_to_aspect};
@@ -573,6 +572,11 @@ impl NativeArcadeUiApp {
         let palette = self.palette();
         let system = self.state.controller_mapping.input_system.clone();
         let physical_art = controller_mapper_art_for_device(Some(&target.identity));
+        if ctx.input(|i| i.key_pressed(egui::Key::Escape))
+            && self.state.controller_mapping.is_listening()
+        {
+            self.cancel_controller_mapping_input_listening(true);
+        }
         let layout = system_controller_layout_for_system(&system);
         let system_hotspots = layout.and_then(|value| self.system_mapper_hotspots(value));
         let extra_actions: Vec<&str> = action_labels
@@ -602,7 +606,13 @@ impl NativeArcadeUiApp {
                     } else {
                         "Text fallback"
                     };
-                    badge_chip(ui, chip_label, palette.panel_alt, palette.border, palette.text_muted);
+                    badge_chip(
+                        ui,
+                        chip_label,
+                        palette.panel_alt,
+                        palette.border,
+                        palette.text_muted,
+                    );
                 });
                 ui.add_space(4.0);
 
@@ -624,6 +634,7 @@ impl NativeArcadeUiApp {
                                     self.draw_system_visual_mapper_column(
                                         ui,
                                         ctx,
+                                        &target.identity,
                                         layout,
                                         hotspots,
                                         physical_art,
@@ -634,6 +645,7 @@ impl NativeArcadeUiApp {
                                 } else {
                                     self.draw_text_mapper_column(
                                         ui,
+                                        &target.identity,
                                         layout,
                                         physical_art,
                                         action_labels,
@@ -650,6 +662,7 @@ impl NativeArcadeUiApp {
                             |ui| {
                                 self.draw_physical_input_assignment_panel(
                                     ui,
+                                    &target.identity,
                                     physical_art,
                                     layout,
                                     &palette,
@@ -666,6 +679,7 @@ impl NativeArcadeUiApp {
                         self.draw_system_visual_mapper_column(
                             ui,
                             ctx,
+                            &target.identity,
                             layout,
                             hotspots,
                             physical_art,
@@ -676,6 +690,7 @@ impl NativeArcadeUiApp {
                     } else {
                         self.draw_text_mapper_column(
                             ui,
+                            &target.identity,
                             layout,
                             physical_art,
                             action_labels,
@@ -686,6 +701,7 @@ impl NativeArcadeUiApp {
                     ui.add_space(8.0);
                     self.draw_physical_input_assignment_panel(
                         ui,
+                        &target.identity,
                         physical_art,
                         layout,
                         &palette,
@@ -699,6 +715,7 @@ impl NativeArcadeUiApp {
         &mut self,
         ui: &mut egui::Ui,
         ctx: &egui::Context,
+        device: &DetectedPadIdentity,
         layout: SystemControllerLayout,
         hotspots: &[SystemOverlayHotspot],
         physical_art: ControllerMapperArt,
@@ -765,6 +782,7 @@ impl NativeArcadeUiApp {
                 self.draw_system_controller_mapper_image(
                     ui,
                     ctx,
+                    device,
                     layout,
                     hotspots,
                     physical_art,
@@ -774,11 +792,12 @@ impl NativeArcadeUiApp {
 
                 if !extra_actions.is_empty() {
                     ui.add_space(8.0);
-                    self.draw_mapping_action_list(
-                        ui,
-                        "Extra Inputs + Shortcuts",
-                        Some(
-                            "Map modern-only controls and frontend shortcuts outside the original controller layout.",
+                        self.draw_mapping_action_list(
+                            ui,
+                            device,
+                            "Extra Inputs + Shortcuts",
+                            Some(
+                                "Map modern-only controls and frontend shortcuts outside the original controller layout.",
                         ),
                         physical_art,
                         extra_actions,
@@ -792,6 +811,7 @@ impl NativeArcadeUiApp {
     fn draw_text_mapper_column(
         &mut self,
         ui: &mut egui::Ui,
+        device: &DetectedPadIdentity,
         layout: Option<SystemControllerLayout>,
         physical_art: ControllerMapperArt,
         action_labels: &[&str],
@@ -824,6 +844,7 @@ impl NativeArcadeUiApp {
                 ui.add_space(6.0);
                 self.draw_mapping_action_list(
                     ui,
+                    device,
                     "All Bindings",
                     None,
                     physical_art,
@@ -837,6 +858,7 @@ impl NativeArcadeUiApp {
     fn draw_physical_input_assignment_panel(
         &mut self,
         ui: &mut egui::Ui,
+        device: &DetectedPadIdentity,
         art: ControllerMapperArt,
         layout: Option<SystemControllerLayout>,
         palette: &ThemePalette,
@@ -878,6 +900,11 @@ impl NativeArcadeUiApp {
                 let current_input_label = current_control
                     .map(|control| controller_mapper_control_label(art, control))
                     .unwrap_or("Unassigned");
+                let listening = self.state.controller_mapping.is_listening()
+                    && self.state.controller_mapping.listening_action()
+                        == Some(selected_action.as_str())
+                    && self.state.controller_mapping.listening_device_key()
+                        == Some(device.device_key.as_str());
 
                 egui::Frame::new()
                     .fill(blend_color(palette.panel, palette.accent_soft, 0.22))
@@ -906,6 +933,53 @@ impl NativeArcadeUiApp {
                     });
                 ui.add_space(6.0);
 
+                if listening {
+                    egui::Frame::new()
+                        .fill(blend_color(palette.panel, palette.accent_soft, 0.28))
+                        .stroke(egui::Stroke::new(1.0, palette.accent))
+                        .corner_radius(egui::CornerRadius::same(10))
+                        .inner_margin(egui::Margin::same(8))
+                        .show(ui, |ui| {
+                            ui.label(
+                                egui::RichText::new(format!(
+                                    "Listening for next input on {}",
+                                    device.name.as_str()
+                                ))
+                                .size(12.0)
+                                .strong()
+                                .color(palette.accent),
+                            );
+                            ui.add_space(2.0);
+                            ui.label(
+                                egui::RichText::new(format!("Action: {action_label}"))
+                                    .size(11.2)
+                                    .color(palette.text),
+                            );
+                            ui.label(
+                                egui::RichText::new(
+                                    "Press any button, trigger, or stick direction.",
+                                )
+                                .size(10.8)
+                                .color(palette.text_muted),
+                            );
+                            ui.add_space(4.0);
+                            if ui
+                                .add(
+                                    egui::Button::new(
+                                        egui::RichText::new("Cancel").size(10.8).strong(),
+                                    )
+                                    .fill(palette.panel)
+                                    .stroke(egui::Stroke::new(1.0, palette.border))
+                                    .corner_radius(egui::CornerRadius::same(255)),
+                                )
+                                .clicked()
+                            {
+                                self.cancel_controller_mapping_input_listening(true);
+                            }
+                        });
+                    ui.add_space(6.0);
+                }
+
                 let unassign_selected = current_control.is_none();
                 let unassign_button =
                     egui::Button::new(egui::RichText::new("Unassigned").size(11.5))
@@ -924,7 +998,7 @@ impl NativeArcadeUiApp {
                         ))
                         .corner_radius(egui::CornerRadius::same(255));
                 if ui.add(unassign_button).clicked() {
-                    unassign_action(&mut self.state.controller_mapping.actions, &selected_action);
+                    self.unassign_selected_mapping_action(&selected_action);
                 }
 
                 ui.add_space(6.0);
@@ -1006,8 +1080,7 @@ impl NativeArcadeUiApp {
                                         .response
                                         .interact(egui::Sense::click());
                                     if response.clicked() {
-                                        assign_physical_input_to_action(
-                                            &mut self.state.controller_mapping.actions,
+                                        self.assign_selected_mapping_action_to_control(
                                             &selected_action,
                                             hotspot.control,
                                         );
@@ -1021,6 +1094,7 @@ impl NativeArcadeUiApp {
     fn draw_mapping_action_list(
         &mut self,
         ui: &mut egui::Ui,
+        device: &DetectedPadIdentity,
         title: &str,
         subtitle: Option<&str>,
         physical_art: ControllerMapperArt,
@@ -1088,14 +1162,13 @@ impl NativeArcadeUiApp {
                                     ui.set_min_width(ui.available_width());
                                     ui.horizontal(|ui| {
                                         ui.label(
-                                            egui::RichText::new(*action)
-                                                .size(11.8)
-                                                .strong()
-                                                .color(if selected {
+                                            egui::RichText::new(*action).size(11.8).strong().color(
+                                                if selected {
                                                     palette.text
                                                 } else {
                                                     palette.accent
-                                                }),
+                                                },
+                                            ),
                                         );
                                         ui.with_layout(
                                             egui::Layout::right_to_left(egui::Align::Center),
@@ -1112,9 +1185,10 @@ impl NativeArcadeUiApp {
                                 .response
                                 .interact(egui::Sense::click());
                             if response.clicked() {
-                                self.state
-                                    .controller_mapping
-                                    .select_mapping_action(Some((*action).to_string()));
+                                self.begin_controller_mapping_input_listening(
+                                    (*action).to_string(),
+                                    Some(device),
+                                );
                             }
                         }
                     });
@@ -1125,6 +1199,7 @@ impl NativeArcadeUiApp {
         &mut self,
         ui: &mut egui::Ui,
         ctx: &egui::Context,
+        device: &DetectedPadIdentity,
         layout: SystemControllerLayout,
         hotspots: &[SystemOverlayHotspot],
         physical_art: ControllerMapperArt,
@@ -1150,9 +1225,11 @@ impl NativeArcadeUiApp {
         ui.painter()
             .image(texture.id(), rect, uv, egui::Color32::WHITE);
 
-        let hovered_hotspot = response
-            .hover_pos()
-            .and_then(|pointer_pos| hotspots.iter().find(|hotspot| hotspot.contains(rect, pointer_pos)));
+        let hovered_hotspot = response.hover_pos().and_then(|pointer_pos| {
+            hotspots
+                .iter()
+                .find(|hotspot| hotspot.contains(rect, pointer_pos))
+        });
 
         if hovered_hotspot.is_some() {
             ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
@@ -1160,35 +1237,35 @@ impl NativeArcadeUiApp {
 
         if response.clicked() {
             if let Some(hotspot) = hovered_hotspot {
-                self.state
-                    .controller_mapping
-                    .select_mapping_action(Some(hotspot.action.clone()));
+                self.begin_controller_mapping_input_listening(hotspot.action.clone(), Some(device));
             }
         }
 
         let tooltip_text = hovered_hotspot.map(|hotspot| {
-            let mapped_input = physical_input_for_action(
-                &self.state.controller_mapping.actions,
-                &hotspot.action,
-            )
-            .map(|control| controller_mapper_control_label(physical_art, control))
-            .unwrap_or("Unassigned");
+            let mapped_input =
+                physical_input_for_action(&self.state.controller_mapping.actions, &hotspot.action)
+                    .map(|control| controller_mapper_control_label(physical_art, control))
+                    .unwrap_or("Unassigned");
             format!("{}: {mapped_input}", hotspot.label)
         });
         if let Some(text) = tooltip_text {
             response.on_hover_text(text);
         }
 
-        let selected_action = self.state.controller_mapping.selected_mapping_action.as_deref();
+        let selected_action = self
+            .state
+            .controller_mapping
+            .selected_mapping_action
+            .as_deref();
         let overlay_hotspot = hovered_hotspot.or_else(|| {
-            selected_action.and_then(|selected| hotspots.iter().find(|hotspot| hotspot.action == selected))
+            selected_action
+                .and_then(|selected| hotspots.iter().find(|hotspot| hotspot.action == selected))
         });
 
         let show_debug = self.state.controller_mapping.show_system_hotspot_debug;
         for hotspot in hotspots {
             let is_selected = selected_action == Some(hotspot.action.as_str());
-            let is_hovered =
-                hovered_hotspot.is_some_and(|hovered| hovered.id == hotspot.id);
+            let is_hovered = hovered_hotspot.is_some_and(|hovered| hovered.id == hotspot.id);
             if show_debug || is_selected || is_hovered {
                 paint_system_action_hotspot(ui, rect, hotspot, palette, is_selected, is_hovered);
                 if show_debug {
@@ -1198,11 +1275,9 @@ impl NativeArcadeUiApp {
         }
 
         if let Some(hotspot) = overlay_hotspot {
-            let mapped_input = physical_input_for_action(
-                &self.state.controller_mapping.actions,
-                &hotspot.action,
-            )
-            .map(|control| controller_mapper_control_label(physical_art, control));
+            let mapped_input =
+                physical_input_for_action(&self.state.controller_mapping.actions, &hotspot.action)
+                    .map(|control| controller_mapper_control_label(physical_art, control));
             paint_system_action_hotspot_overlay(ui, rect, hotspot, palette, mapped_input);
         }
     }
@@ -1496,7 +1571,11 @@ fn paint_system_action_hotspot(
             let rect = hotspot.paint_rect(image_rect);
             let radius = rect.width().min(rect.height()) * 0.5;
             painter.circle_filled(rect.center(), radius, fill_color);
-            painter.circle_stroke(rect.center(), radius, egui::Stroke::new(stroke_width, stroke_color));
+            painter.circle_stroke(
+                rect.center(),
+                radius,
+                egui::Stroke::new(stroke_width, stroke_color),
+            );
         }
         OverlayHotspotShape::Rect { .. } => {
             let rect = hotspot.paint_rect(image_rect);
@@ -1541,7 +1620,10 @@ fn paint_system_action_hotspot_overlay(
     let overlay_width = (image_rect.width() * 0.54).clamp(150.0, 260.0);
     let overlay_height = 42.0;
     let overlay_rect = egui::Rect::from_min_size(
-        egui::pos2(image_rect.left() + 10.0, image_rect.bottom() - overlay_height - 10.0),
+        egui::pos2(
+            image_rect.left() + 10.0,
+            image_rect.bottom() - overlay_height - 10.0,
+        ),
         egui::vec2(overlay_width, overlay_height),
     );
     let fill = egui::Color32::from_rgba_premultiplied(
@@ -1597,7 +1679,10 @@ fn paint_system_action_hotspot_debug_label(
     palette: &ThemePalette,
 ) {
     let rect = hotspot.paint_rect(image_rect);
-    let anchor = egui::pos2(rect.center().x, (rect.top() - 3.0).max(image_rect.top() + 6.0));
+    let anchor = egui::pos2(
+        rect.center().x,
+        (rect.top() - 3.0).max(image_rect.top() + 6.0),
+    );
     ui.painter().text(
         anchor,
         egui::Align2::CENTER_BOTTOM,

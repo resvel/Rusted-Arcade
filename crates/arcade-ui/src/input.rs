@@ -16,11 +16,17 @@ use arcade_domain::{
 };
 
 #[cfg(feature = "gamepad")]
+use crate::controller_mapper::{
+    controller_mapper_art_for_device, controller_mapper_control_label, physical_input_controls,
+    visual_control_to_mapping_entry, ControllerMapperArt,
+};
+#[cfg(feature = "gamepad")]
 use crate::state::{
     ControllerAssignmentSource, ControllerInputButtonDebug, ControllerInputDebugSnapshot,
 };
 use crate::{
     app::NativeArcadeUiApp,
+    controller_mapper::{assign_physical_input_to_action, VisualControlId},
     state::{ControllerMappingCacheKey, MenuFocusRegion, MenuNavDirection},
 };
 #[cfg(feature = "gamepad")]
@@ -370,6 +376,13 @@ impl NativeArcadeUiApp {
         let input = self.capture_frontend_nav_input(ctx);
         let now = Instant::now();
 
+        if matches!(self.state.current_view, crate::app::AppView::Settings)
+            && self.state.controller_mapping.is_listening()
+        {
+            ctx.request_repaint_after(Duration::from_millis(50));
+            return;
+        }
+
         if !self.state.manage.open
             && !matches!(self.state.current_view, crate::app::AppView::Settings)
             && consume_rising_edge(
@@ -532,6 +545,7 @@ impl NativeArcadeUiApp {
     pub(crate) fn confirm_pending_controller_mapping_target_switch(&mut self) {}
 
     pub(crate) fn save_controller_mapping_from_editor(&mut self) {
+        self.state.controller_mapping.cancel_listening();
         let system = self.state.controller_mapping.input_system.clone();
         if system == "ALL" || system.is_empty() {
             self.state.status =
@@ -806,6 +820,59 @@ impl NativeArcadeUiApp {
         input
     }
 
+    pub(crate) fn begin_controller_mapping_input_listening(
+        &mut self,
+        action: String,
+        _device: Option<&DetectedPadIdentity>,
+    ) {
+        self.state
+            .controller_mapping
+            .select_mapping_action(Some(action.clone()));
+
+        #[cfg(feature = "gamepad")]
+        if let Some(device) = _device {
+            self.state
+                .controller_mapping
+                .start_listening(action, device.device_key.clone());
+            return;
+        }
+
+        self.state.controller_mapping.cancel_listening();
+        self.state.status = String::from("No controller connected for input capture.");
+    }
+
+    pub(crate) fn cancel_controller_mapping_input_listening(&mut self, announce: bool) {
+        let action = self
+            .state
+            .controller_mapping
+            .listening_action()
+            .map(str::to_string);
+        self.state.controller_mapping.cancel_listening();
+        if announce {
+            if let Some(action) = action {
+                self.state.status = format!("Canceled input listening for {action}.");
+            }
+        }
+    }
+
+    pub(crate) fn assign_selected_mapping_action_to_control(
+        &mut self,
+        action: &str,
+        control: VisualControlId,
+    ) {
+        assign_physical_input_to_action(
+            &mut self.state.controller_mapping.actions,
+            action,
+            control,
+        );
+        self.state.controller_mapping.cancel_listening();
+    }
+
+    pub(crate) fn unassign_selected_mapping_action(&mut self, action: &str) {
+        clear_mapping_action(&mut self.state.controller_mapping.actions, action);
+        self.state.controller_mapping.cancel_listening();
+    }
+
     fn capture_keyboard_state(&self, ctx: &egui::Context) -> CanonicalPadState {
         CanonicalPadState {
             dpad_up: ctx.input(|i| i.key_down(egui::Key::ArrowUp)),
@@ -910,148 +977,198 @@ impl NativeArcadeUiApp {
             }
         });
 
-        let Some(gilrs) = self.gilrs.as_ref() else {
-            self.state.input_debug.clear();
-            self.state.controller_input_debug.snapshots.clear();
-            self.state.controller_input_debug.connected_total = 0;
-            self.state.controller_input_debug.assigned_playable_total = 0;
-            self.state.controller_input_debug.unassigned_total = 0;
-            return Vec::new();
-        };
-
         let assigned_playable_total = self.gamepad_slot_assignments.len();
         let mut captures = Vec::with_capacity(assigned_playable_total);
         let mut debug_snapshots = Vec::with_capacity(connected.len());
         let mut input_debug = String::new();
         let input_debug_enabled = std::env::var_os("ARCADE_INPUT_DEBUG").is_some();
-        let identity_cache = &mut self.gamepad_identity_cache;
         for (id_usize, id, is_playable) in connected {
-            let gamepad = gilrs.gamepad(id);
-            let raw_dpad = self
-                .raw_dpad_state_cache
-                .get(&id_usize)
-                .copied()
-                .unwrap_or_default();
-            let invert_vertical = should_invert_vertical_axis(gamepad.vendor_id(), gamepad.name());
-            let has_dpad_buttons = gamepad_has_dpad_buttons(&gamepad);
-            let has_mapped_dpad_axes = gamepad.axis_code(Axis::DPadX).is_some()
-                || gamepad.axis_code(Axis::DPadY).is_some();
-            let has_raw_dpad_state = raw_dpad.up
-                || raw_dpad.down
-                || raw_dpad.left
-                || raw_dpad.right
-                || raw_dpad.axis_x.abs() >= DIGITAL_FALLBACK_THRESHOLD
-                || raw_dpad.axis_y.abs() >= DIGITAL_FALLBACK_THRESHOLD;
-            let has_explicit_dpad_input =
-                has_dpad_buttons || has_mapped_dpad_axes || has_raw_dpad_state;
-            let raw_dpad_x = gamepad.value(Axis::DPadX);
-            let raw_dpad_y = gamepad.value(Axis::DPadY);
-            let effective_raw_dpad_x = merge_dpad_axis_value(raw_dpad_x, raw_dpad.axis_x);
-            let effective_raw_dpad_y = merge_dpad_axis_value(raw_dpad_y, raw_dpad.axis_y);
-            let raw_left_x = gamepad.value(Axis::LeftStickX);
-            let raw_left_y = gamepad.value(Axis::LeftStickY);
-            let raw_right_x = gamepad.value(Axis::RightStickX);
-            let raw_right_y = gamepad.value(Axis::RightStickY);
-            let dpad_up_debug = button_debug_data(&gamepad, Button::DPadUp);
-            let dpad_down_debug = button_debug_data(&gamepad, Button::DPadDown);
-            let dpad_left_debug = button_debug_data(&gamepad, Button::DPadLeft);
-            let dpad_right_debug = button_debug_data(&gamepad, Button::DPadRight);
-            let mut guide_debug = button_debug_data(&gamepad, Button::Mode);
-            let mut right_thumb_debug = button_debug_data(&gamepad, Button::RightThumb);
-            let dpad_up_pressed = (has_dpad_buttons && dpad_up_debug.is_pressed) || raw_dpad.up;
-            let dpad_down_pressed =
-                (has_dpad_buttons && dpad_down_debug.is_pressed) || raw_dpad.down;
-            let dpad_left_pressed =
-                (has_dpad_buttons && dpad_left_debug.is_pressed) || raw_dpad.left;
-            let dpad_right_pressed =
-                (has_dpad_buttons && dpad_right_debug.is_pressed) || raw_dpad.right;
-            let dpad_debugs = [
-                &dpad_up_debug,
-                &dpad_down_debug,
-                &dpad_left_debug,
-                &dpad_right_debug,
-            ];
-            let dpad_x = effective_raw_dpad_x;
-            // gilrs already normalizes DPadY with platform reversal rules; applying
-            // our Sony stick inversion here would double-invert on macOS.
-            let dpad_y = normalize_dpad_vertical_axis(effective_raw_dpad_y);
-            let left_x = raw_left_x;
-            let left_y = normalize_vertical_axis(raw_left_y, invert_vertical);
-            let right_y = normalize_vertical_axis(raw_right_y, invert_vertical);
-            let dpad_fallback_x = if has_explicit_dpad_input { 0.0 } else { left_x };
-            let dpad_fallback_y = if has_explicit_dpad_input { 0.0 } else { left_y };
-            let explicit_dpad_up_active =
-                explicit_dpad_direction_active(dpad_up_pressed, dpad_y, false);
-            let explicit_dpad_down_active =
-                explicit_dpad_direction_active(dpad_down_pressed, dpad_y, true);
-            let explicit_dpad_left_active =
-                explicit_dpad_direction_active(dpad_left_pressed, dpad_x, false);
-            let explicit_dpad_right_active =
-                explicit_dpad_direction_active(dpad_right_pressed, dpad_x, true);
-            let explicit_dpad_active = explicit_dpad_up_active
-                || explicit_dpad_down_active
-                || explicit_dpad_left_active
-                || explicit_dpad_right_active;
-            guide_debug.effective_is_pressed = strict_safety_effective_non_dpad_button(
-                &guide_debug,
-                &dpad_debugs,
-                explicit_dpad_active,
-            );
-            right_thumb_debug.effective_is_pressed = strict_safety_effective_non_dpad_button(
-                &right_thumb_debug,
-                &dpad_debugs,
-                explicit_dpad_active,
-            );
-            let dpad_up_active = direction_active(dpad_up_pressed, dpad_y, dpad_fallback_y, false);
-            let dpad_down_active =
-                direction_active(dpad_down_pressed, dpad_y, dpad_fallback_y, true);
-            let dpad_left_active =
-                direction_active(dpad_left_pressed, dpad_x, dpad_fallback_x, false);
-            let dpad_right_active =
-                direction_active(dpad_right_pressed, dpad_x, dpad_fallback_x, true);
-            let state = CanonicalPadState {
-                dpad_up: dpad_up_active,
-                dpad_down: dpad_down_active,
-                dpad_left: dpad_left_active,
-                dpad_right: dpad_right_active,
-                south: button_pressed_digital(&gamepad, Button::South),
-                east: button_pressed_digital(&gamepad, Button::East),
-                north: button_pressed_digital(&gamepad, Button::North),
-                west: button_pressed_digital(&gamepad, Button::West),
-                left_shoulder: button_pressed_digital(&gamepad, Button::LeftTrigger),
-                right_shoulder: button_pressed_digital(&gamepad, Button::RightTrigger),
-                guide: guide_debug.effective_is_pressed,
-                left_trigger: trigger_axis_value(&gamepad, Axis::LeftZ, Button::LeftTrigger2),
-                right_trigger: trigger_axis_value(&gamepad, Axis::RightZ, Button::RightTrigger2),
-                select: button_pressed_digital(&gamepad, Button::Select),
-                start: button_pressed_digital(&gamepad, Button::Start),
-                left_thumb: button_pressed_digital(&gamepad, Button::LeftThumb),
-                right_thumb: right_thumb_debug.effective_is_pressed,
-                left_x,
-                left_y,
-                right_x: raw_right_x,
-                right_y,
-            };
-
-            debug_gamepad_capture(
-                &gamepad,
-                has_dpad_buttons,
+            let (
                 effective_raw_dpad_x,
                 effective_raw_dpad_y,
                 raw_left_x,
                 raw_left_y,
                 raw_right_x,
                 raw_right_y,
-                &state,
-            );
-            let cache_key = id_usize;
-            let identity = if let Some(existing) = identity_cache.get(&cache_key) {
-                existing.clone()
-            } else {
-                let built = build_detected_pad_identity(id, &gamepad);
-                identity_cache.insert(cache_key, built.clone());
-                built
+                state,
+                identity,
+                dpad_up_debug,
+                dpad_down_debug,
+                guide_debug,
+                right_thumb_debug,
+                input_debug_line,
+            ) = {
+                let Some(gilrs) = self.gilrs.as_ref() else {
+                    self.state.input_debug.clear();
+                    self.state.controller_input_debug.snapshots.clear();
+                    self.state.controller_input_debug.connected_total = 0;
+                    self.state.controller_input_debug.assigned_playable_total = 0;
+                    self.state.controller_input_debug.unassigned_total = 0;
+                    return Vec::new();
+                };
+                let gamepad = gilrs.gamepad(id);
+                let raw_dpad = self
+                    .raw_dpad_state_cache
+                    .get(&id_usize)
+                    .copied()
+                    .unwrap_or_default();
+                let invert_vertical =
+                    should_invert_vertical_axis(gamepad.vendor_id(), gamepad.name());
+                let has_dpad_buttons = gamepad_has_dpad_buttons(&gamepad);
+                let has_mapped_dpad_axes = gamepad.axis_code(Axis::DPadX).is_some()
+                    || gamepad.axis_code(Axis::DPadY).is_some();
+                let has_raw_dpad_state = raw_dpad.up
+                    || raw_dpad.down
+                    || raw_dpad.left
+                    || raw_dpad.right
+                    || raw_dpad.axis_x.abs() >= DIGITAL_FALLBACK_THRESHOLD
+                    || raw_dpad.axis_y.abs() >= DIGITAL_FALLBACK_THRESHOLD;
+                let has_explicit_dpad_input =
+                    has_dpad_buttons || has_mapped_dpad_axes || has_raw_dpad_state;
+                let raw_dpad_x = gamepad.value(Axis::DPadX);
+                let raw_dpad_y = gamepad.value(Axis::DPadY);
+                let effective_raw_dpad_x = merge_dpad_axis_value(raw_dpad_x, raw_dpad.axis_x);
+                let effective_raw_dpad_y = merge_dpad_axis_value(raw_dpad_y, raw_dpad.axis_y);
+                let raw_left_x = gamepad.value(Axis::LeftStickX);
+                let raw_left_y = gamepad.value(Axis::LeftStickY);
+                let raw_right_x = gamepad.value(Axis::RightStickX);
+                let raw_right_y = gamepad.value(Axis::RightStickY);
+                let dpad_up_debug = button_debug_data(&gamepad, Button::DPadUp);
+                let dpad_down_debug = button_debug_data(&gamepad, Button::DPadDown);
+                let dpad_left_debug = button_debug_data(&gamepad, Button::DPadLeft);
+                let dpad_right_debug = button_debug_data(&gamepad, Button::DPadRight);
+                let mut guide_debug = button_debug_data(&gamepad, Button::Mode);
+                let mut right_thumb_debug = button_debug_data(&gamepad, Button::RightThumb);
+                let dpad_up_pressed =
+                    (has_dpad_buttons && dpad_up_debug.is_pressed) || raw_dpad.up;
+                let dpad_down_pressed =
+                    (has_dpad_buttons && dpad_down_debug.is_pressed) || raw_dpad.down;
+                let dpad_left_pressed =
+                    (has_dpad_buttons && dpad_left_debug.is_pressed) || raw_dpad.left;
+                let dpad_right_pressed =
+                    (has_dpad_buttons && dpad_right_debug.is_pressed) || raw_dpad.right;
+                let dpad_debugs = [
+                    &dpad_up_debug,
+                    &dpad_down_debug,
+                    &dpad_left_debug,
+                    &dpad_right_debug,
+                ];
+                let dpad_x = effective_raw_dpad_x;
+                // gilrs already normalizes DPadY with platform reversal rules; applying
+                // our Sony stick inversion here would double-invert on macOS.
+                let dpad_y = normalize_dpad_vertical_axis(effective_raw_dpad_y);
+                let left_x = raw_left_x;
+                let left_y = normalize_vertical_axis(raw_left_y, invert_vertical);
+                let right_y = normalize_vertical_axis(raw_right_y, invert_vertical);
+                let dpad_fallback_x = if has_explicit_dpad_input { 0.0 } else { left_x };
+                let dpad_fallback_y = if has_explicit_dpad_input { 0.0 } else { left_y };
+                let explicit_dpad_up_active =
+                    explicit_dpad_direction_active(dpad_up_pressed, dpad_y, false);
+                let explicit_dpad_down_active =
+                    explicit_dpad_direction_active(dpad_down_pressed, dpad_y, true);
+                let explicit_dpad_left_active =
+                    explicit_dpad_direction_active(dpad_left_pressed, dpad_x, false);
+                let explicit_dpad_right_active =
+                    explicit_dpad_direction_active(dpad_right_pressed, dpad_x, true);
+                let explicit_dpad_active = explicit_dpad_up_active
+                    || explicit_dpad_down_active
+                    || explicit_dpad_left_active
+                    || explicit_dpad_right_active;
+                guide_debug.effective_is_pressed = strict_safety_effective_non_dpad_button(
+                    &guide_debug,
+                    &dpad_debugs,
+                    explicit_dpad_active,
+                );
+                right_thumb_debug.effective_is_pressed = strict_safety_effective_non_dpad_button(
+                    &right_thumb_debug,
+                    &dpad_debugs,
+                    explicit_dpad_active,
+                );
+                let dpad_up_active =
+                    direction_active(dpad_up_pressed, dpad_y, dpad_fallback_y, false);
+                let dpad_down_active =
+                    direction_active(dpad_down_pressed, dpad_y, dpad_fallback_y, true);
+                let dpad_left_active =
+                    direction_active(dpad_left_pressed, dpad_x, dpad_fallback_x, false);
+                let dpad_right_active =
+                    direction_active(dpad_right_pressed, dpad_x, dpad_fallback_x, true);
+                let state = CanonicalPadState {
+                    dpad_up: dpad_up_active,
+                    dpad_down: dpad_down_active,
+                    dpad_left: dpad_left_active,
+                    dpad_right: dpad_right_active,
+                    south: button_pressed_digital(&gamepad, Button::South),
+                    east: button_pressed_digital(&gamepad, Button::East),
+                    north: button_pressed_digital(&gamepad, Button::North),
+                    west: button_pressed_digital(&gamepad, Button::West),
+                    left_shoulder: button_pressed_digital(&gamepad, Button::LeftTrigger),
+                    right_shoulder: button_pressed_digital(&gamepad, Button::RightTrigger),
+                    guide: guide_debug.effective_is_pressed,
+                    left_trigger: trigger_axis_value(&gamepad, Axis::LeftZ, Button::LeftTrigger2),
+                    right_trigger: trigger_axis_value(&gamepad, Axis::RightZ, Button::RightTrigger2),
+                    select: button_pressed_digital(&gamepad, Button::Select),
+                    start: button_pressed_digital(&gamepad, Button::Start),
+                    left_thumb: button_pressed_digital(&gamepad, Button::LeftThumb),
+                    right_thumb: right_thumb_debug.effective_is_pressed,
+                    left_x,
+                    left_y,
+                    right_x: raw_right_x,
+                    right_y,
+                };
+
+                debug_gamepad_capture(
+                    &gamepad,
+                    has_dpad_buttons,
+                    effective_raw_dpad_x,
+                    effective_raw_dpad_y,
+                    raw_left_x,
+                    raw_left_y,
+                    raw_right_x,
+                    raw_right_y,
+                    &state,
+                );
+                let identity = if let Some(existing) = self.gamepad_identity_cache.get(&id_usize) {
+                    existing.clone()
+                } else {
+                    build_detected_pad_identity(id, &gamepad)
+                };
+                let input_debug_line = if input_debug_enabled && assigned_playable_total > 0 {
+                    Some(format_gamepad_capture_debug_line(
+                        &gamepad,
+                        has_dpad_buttons,
+                        effective_raw_dpad_x,
+                        effective_raw_dpad_y,
+                        raw_left_x,
+                        raw_left_y,
+                        raw_right_x,
+                        raw_right_y,
+                        &state,
+                    ))
+                } else {
+                    None
+                };
+
+                (
+                    effective_raw_dpad_x,
+                    effective_raw_dpad_y,
+                    raw_left_x,
+                    raw_left_y,
+                    raw_right_x,
+                    raw_right_y,
+                    state,
+                    identity,
+                    dpad_up_debug,
+                    dpad_down_debug,
+                    guide_debug,
+                    right_thumb_debug,
+                    input_debug_line,
+                )
             };
+            let cache_key = id_usize;
+            self.gamepad_identity_cache
+                .entry(cache_key)
+                .or_insert_with(|| identity.clone());
+            self.capture_controller_mapping_input_if_listening(&identity, &state);
             let runtime_profile = if debug_open {
                 Some(resolve_runtime_mapping_profile_from_keys(
                     &normalized_runtime_system,
@@ -1074,18 +1191,10 @@ impl NativeArcadeUiApp {
                 .get(&cache_key)
                 .copied()
                 .unwrap_or(u64::MAX);
-            if input_debug_enabled && input_debug.is_empty() && assigned_slot.is_some() {
-                input_debug = format_gamepad_capture_debug_line(
-                    &gamepad,
-                    has_dpad_buttons,
-                    effective_raw_dpad_x,
-                    effective_raw_dpad_y,
-                    raw_left_x,
-                    raw_left_y,
-                    raw_right_x,
-                    raw_right_y,
-                    &state,
-                );
+            if input_debug.is_empty() && assigned_slot.is_some() {
+                if let Some(line) = input_debug_line {
+                    input_debug = line;
+                }
             }
 
             debug_snapshots.push(ControllerInputDebugSnapshot {
@@ -1156,6 +1265,25 @@ impl NativeArcadeUiApp {
         self.state.controller_input_debug.unassigned_total =
             connected_total.saturating_sub(assigned_playable_total);
         captures
+    }
+
+    #[cfg(feature = "gamepad")]
+    fn capture_controller_mapping_input_if_listening(
+        &mut self,
+        identity: &DetectedPadIdentity,
+        state: &CanonicalPadState,
+    ) {
+        if !matches!(self.state.current_view, crate::app::AppView::Settings) {
+            return;
+        }
+
+        if let Some((action, label)) = capture_controller_mapping_listen_input(
+            &mut self.state.controller_mapping,
+            identity,
+            state,
+        ) {
+            self.state.status = format!("Mapped {action} to {label}.");
+        }
     }
 
     fn resolved_mapping_for(
@@ -2151,6 +2279,71 @@ fn clear_mapping_actions(
     for action in supported_actions {
         actions.insert((*action).to_string(), None);
     }
+}
+
+fn clear_mapping_action(actions: &mut BTreeMap<String, Option<MappingEntry>>, action: &str) {
+    if let Some(entry) = actions.get_mut(action) {
+        *entry = None;
+    }
+}
+
+#[cfg(feature = "gamepad")]
+fn capture_controller_mapping_listen_input(
+    mapping_state: &mut crate::state::ControllerMappingState,
+    identity: &DetectedPadIdentity,
+    pad_state: &CanonicalPadState,
+) -> Option<(String, &'static str)> {
+    if !mapping_state.is_listening() {
+        return None;
+    }
+    if mapping_state.listening_device_key() != Some(identity.device_key.as_str()) {
+        return None;
+    }
+
+    let art = controller_mapper_art_for_device(Some(identity));
+    let active_controls = active_visual_controls_for_state(
+        pad_state,
+        art,
+        normalize_mapping_threshold(mapping_state.threshold),
+    );
+
+    if mapping_state.listening_needs_baseline() {
+        mapping_state.set_listening_baseline(active_controls.iter().copied());
+        return None;
+    }
+
+    let candidate = active_controls
+        .iter()
+        .copied()
+        .find(|control| !mapping_state.listening_control_is_held(*control));
+    mapping_state.update_listening_held_controls(active_controls.iter().copied());
+
+    let Some(control) = candidate else {
+        return None;
+    };
+    let action = mapping_state
+        .listening_action()
+        .map(str::to_string)
+        .expect("listening action should exist when listening is active");
+    assign_physical_input_to_action(&mut mapping_state.actions, &action, control);
+    mapping_state.cancel_listening();
+
+    Some((action, controller_mapper_control_label(art, control)))
+}
+
+#[cfg(feature = "gamepad")]
+fn active_visual_controls_for_state(
+    state: &CanonicalPadState,
+    art: ControllerMapperArt,
+    threshold: f32,
+) -> Vec<VisualControlId> {
+    physical_input_controls(art)
+        .into_iter()
+        .filter_map(|hotspot| {
+            let entry = visual_control_to_mapping_entry(hotspot.control);
+            mapping_entry_is_active(state, &entry, threshold).then_some(hotspot.control)
+        })
+        .collect()
 }
 
 fn n64_control_stick_mapping_enabled(mapping: &StoredGamepadMapping) -> bool {
@@ -3935,6 +4128,149 @@ mod tests {
                 button: CanonicalButton::Guide,
             }))
         );
+    }
+
+    #[test]
+    fn clear_mapping_action_unassigns_only_requested_action() {
+        let mut actions = BTreeMap::from([
+            (
+                String::from("A"),
+                Some(MappingEntry::Button {
+                    button: CanonicalButton::South,
+                }),
+            ),
+            (
+                String::from("B"),
+                Some(MappingEntry::Button {
+                    button: CanonicalButton::East,
+                }),
+            ),
+        ]);
+
+        clear_mapping_action(&mut actions, "A");
+
+        assert_eq!(actions.get("A"), Some(&None));
+        assert_eq!(
+            actions.get("B"),
+            Some(&Some(MappingEntry::Button {
+                button: CanonicalButton::East,
+            }))
+        );
+    }
+
+    #[cfg(feature = "gamepad")]
+    fn test_detected_pad_identity() -> DetectedPadIdentity {
+        DetectedPadIdentity {
+            device_key: String::from("054c:0ce6:DualSense"),
+            name: String::from("DualSense"),
+            vendor_id: Some(String::from("054c")),
+            product_id: Some(String::from("0ce6")),
+            mapping_name: Some(String::from("SdlMappings")),
+        }
+    }
+
+    #[cfg(feature = "gamepad")]
+    #[test]
+    fn active_visual_controls_detect_buttons_guide_triggers_and_sticks() {
+        let state = CanonicalPadState {
+            south: true,
+            guide: true,
+            left_trigger: 0.85,
+            right_x: 0.92,
+            ..Default::default()
+        };
+
+        let controls = active_visual_controls_for_state(&state, ControllerMapperArt::Ps5, 0.6);
+
+        assert!(controls.contains(&VisualControlId::Button(CanonicalButton::South)));
+        assert!(controls.contains(&VisualControlId::Button(CanonicalButton::Guide)));
+        assert!(controls.contains(&VisualControlId::Axis {
+            axis: CanonicalAxis::LeftTrigger,
+            direction: 1,
+        }));
+        assert!(controls.contains(&VisualControlId::Axis {
+            axis: CanonicalAxis::RightStickX,
+            direction: 1,
+        }));
+    }
+
+    #[cfg(feature = "gamepad")]
+    #[test]
+    fn capture_listening_ignores_held_controls_until_repressed() {
+        let identity = test_detected_pad_identity();
+        let mut mapping_state = crate::state::ControllerMappingState::default();
+        mapping_state.start_listening(String::from("A"), identity.device_key.clone());
+
+        let held_state = CanonicalPadState {
+            south: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            capture_controller_mapping_listen_input(&mut mapping_state, &identity, &held_state),
+            None
+        );
+        assert!(mapping_state.is_listening());
+
+        let released_state = CanonicalPadState::default();
+        assert_eq!(
+            capture_controller_mapping_listen_input(&mut mapping_state, &identity, &released_state),
+            None
+        );
+        assert!(mapping_state.is_listening());
+
+        let repressed =
+            capture_controller_mapping_listen_input(&mut mapping_state, &identity, &held_state);
+        assert_eq!(repressed, Some((String::from("A"), "Cross / South")));
+        assert_eq!(
+            mapping_state.actions.get("A"),
+            Some(&Some(MappingEntry::Button {
+                button: CanonicalButton::South,
+            }))
+        );
+        assert!(!mapping_state.is_listening());
+    }
+
+    #[cfg(feature = "gamepad")]
+    #[test]
+    fn capture_listening_moves_existing_binding_and_uses_deterministic_order() {
+        let identity = test_detected_pad_identity();
+        let mut mapping_state = crate::state::ControllerMappingState::default();
+        mapping_state.actions.insert(
+            String::from("B"),
+            Some(MappingEntry::Button {
+                button: CanonicalButton::South,
+            }),
+        );
+        mapping_state.start_listening(String::from("A"), identity.device_key.clone());
+
+        assert_eq!(
+            capture_controller_mapping_listen_input(
+                &mut mapping_state,
+                &identity,
+                &CanonicalPadState::default(),
+            ),
+            None
+        );
+
+        let simultaneous_state = CanonicalPadState {
+            south: true,
+            east: true,
+            ..Default::default()
+        };
+        let captured = capture_controller_mapping_listen_input(
+            &mut mapping_state,
+            &identity,
+            &simultaneous_state,
+        );
+
+        assert_eq!(captured, Some((String::from("A"), "Cross / South")));
+        assert_eq!(
+            mapping_state.actions.get("A"),
+            Some(&Some(MappingEntry::Button {
+                button: CanonicalButton::South,
+            }))
+        );
+        assert_eq!(mapping_state.actions.get("B"), Some(&None));
     }
 
     #[cfg(feature = "gamepad")]

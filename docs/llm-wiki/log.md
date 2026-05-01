@@ -1,5 +1,33 @@
 # Session Log
 
+## 2026-05-01 - Direct press-to-bind controller mapping
+
+### Goal
+
+Replace the system-mapper “select action, then choose from a list” flow with a direct listening mode so clicking a system action captures the next controller input for the selected device.
+
+### Findings
+
+- The visual mapper already had the right abstraction boundary for one-to-one rebinding: `assign_physical_input_to_action()` clears the old action and reassigns the control, so listen-mode can reuse the same conflict policy as manual list binding.
+- `capture_gamepad_state()` computes canonical input state for every connected playable controller before filtering down to assigned player slots. That makes it the right place to detect mapper captures, including controllers that are connected but not currently assigned to a gameplay slot.
+- The main UX hazard is frontend navigation stealing the same controller input used for mapping. Suppressing gamepad-driven menu navigation while the mapper is listening avoids accidental activation while preserving the existing manual fallback list.
+- A baseline pass is required when listening starts so buttons already held down do not bind until they are released and pressed again.
+
+### Changes
+
+- `crates/arcade-ui/src/state/controller_mapping.rs`: added transient listening state, baseline tracking, and automatic cancellation on system/device/load/reset/save transitions.
+- `crates/arcade-ui/src/input.rs`: added direct press-to-bind start/cancel helpers, per-frame capture logic for the selected controller, deterministic control detection based on the existing physical hotspot order, and focused listen-mode tests.
+- `crates/arcade-ui/src/views/library_chrome.rs`: clicking a hotspot or action row now starts listening immediately; the assignment panel shows an active listening card with a cancel button; manual assign/unassign still works and cancels listening.
+- `crates/arcade-ui/src/views/settings.rs`: system changes now go through controller-mapping state so listening is canceled cleanly when the edited system changes.
+
+### Tests
+
+- `cargo test -p arcade-ui` — passed.
+
+### Next Steps
+
+- Manually verify the settings-screen mapper with a connected controller: hotspot click, text-fallback action click, cancel via Escape, trigger/stick-direction capture, and no accidental menu navigation while listening.
+
 ## 2026-05-01 - SVG hotspot overlay refinement (Saturn)
 
 ### Goal

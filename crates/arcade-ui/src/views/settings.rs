@@ -169,8 +169,9 @@ impl NativeArcadeUiApp {
                                 ))
                                 .corner_radius(egui::CornerRadius::same(255));
                         if ui.add(button).clicked() {
-                            self.state.controller_mapping.input_system = system.to_string();
-                            self.state.controller_mapping.loaded_key.clear();
+                            self.state
+                                .controller_mapping
+                                .set_input_system(system.to_string());
                         }
                     }
                 });
