@@ -502,11 +502,15 @@ const PS2_SYSTEM_HOTSPOTS_CENTER: [SystemActionHotspot; 2] = [
     system_rect("Start", "Start", 0.570, 0.475, 0.080, 0.040),
 ];
 
-const DREAMCAST_SYSTEM_HOTSPOTS: [SystemActionHotspot; 9] = [
+const DREAMCAST_SYSTEM_HOTSPOTS: [SystemActionHotspot; 13] = [
     system_circle("Up", "Up", 0.285, 0.395, 0.032),
     system_circle("Down", "Down", 0.285, 0.560, 0.032),
     system_circle("Left", "Left", 0.205, 0.478, 0.032),
     system_circle("Right", "Right", 0.365, 0.478, 0.032),
+    system_rect("Stick Up", "Stick Up", 0.184, 0.445, 0.031, 0.019),
+    system_rect("Stick Down", "Stick Down", 0.184, 0.631, 0.031, 0.019),
+    system_rect("Stick Left", "Stick Left", 0.102, 0.528, 0.019, 0.031),
+    system_rect("Stick Right", "Stick Right", 0.288, 0.528, 0.019, 0.031),
     system_circle("Y", "Y", 0.760, 0.355, 0.034),
     system_circle("X", "X", 0.690, 0.440, 0.034),
     system_circle("B", "B", 0.830, 0.440, 0.034),
@@ -515,19 +519,19 @@ const DREAMCAST_SYSTEM_HOTSPOTS: [SystemActionHotspot; 9] = [
 ];
 
 const SATURN_SYSTEM_HOTSPOTS: [SystemActionHotspot; 13] = [
-    system_circle("Up", "Up", 0.205, 0.420, 0.032),
-    system_circle("Down", "Down", 0.205, 0.575, 0.032),
-    system_circle("Left", "Left", 0.130, 0.498, 0.032),
-    system_circle("Right", "Right", 0.280, 0.498, 0.032),
-    system_circle("X", "X", 0.670, 0.360, 0.030),
-    system_circle("Y", "Y", 0.760, 0.360, 0.030),
-    system_circle("Z", "Z", 0.850, 0.360, 0.030),
-    system_circle("A", "A", 0.670, 0.525, 0.030),
-    system_circle("B", "B", 0.760, 0.525, 0.030),
-    system_circle("C", "C", 0.850, 0.525, 0.030),
+    system_circle("Up", "Up", 0.217, 0.411, 0.031),
+    system_circle("Down", "Down", 0.217, 0.547, 0.031),
+    system_circle("Left", "Left", 0.150, 0.479, 0.031),
+    system_circle("Right", "Right", 0.285, 0.476, 0.031),
+    system_circle("X", "X", 0.665, 0.466, 0.038),
+    system_circle("Y", "Y", 0.746, 0.416, 0.038),
+    system_circle("Z", "Z", 0.834, 0.393, 0.038),
+    system_circle("A", "A", 0.689, 0.587, 0.050),
+    system_circle("B", "B", 0.787, 0.529, 0.050),
+    system_circle("C", "C", 0.897, 0.498, 0.050),
     system_rect("L", "L", 0.165, 0.170, 0.110, 0.046),
     system_rect("R", "R", 0.835, 0.170, 0.110, 0.046),
-    system_rect("Start", "Start", 0.515, 0.690, 0.120, 0.046),
+    system_rect("Start", "Start", 0.498, 0.514, 0.090, 0.043),
 ];
 
 pub(crate) fn controller_mapper_art_for_device(

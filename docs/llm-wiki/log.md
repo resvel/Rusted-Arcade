@@ -1,5 +1,51 @@
 # Session Log
 
+## 2026-05-01 - SVG hotspot overlay refinement (Saturn)
+
+### Goal
+
+Finish the remaining Saturn system overlay so the visual mapper targets the actual button art instead of the placeholder grid.
+
+### Findings
+
+- Saturn uses six distinct face-button centers arranged in two slanted rows, not a flat 3x2 grid. The top row is `X (42.53,29.84)`, `Y (47.74,26.64)`, `Z (53.38,25.14)`. The bottom row is `A (44.11,37.57)`, `B (50.35,33.85)`, `C (57.43,31.89)`.
+- The top row circles are the smaller `r≈2.43` buttons; the lower row uses larger `r≈3.22` buttons with inner cutouts.
+- Saturn Start is the rounded rectangle centered near `(31.90,32.87)`. The previous hotspot at `y≈42.69` sat on the shell below the real button.
+- Saturn D-pad arm centers are `Up (13.89,26.27)`, `Down (13.90,34.98)`, `Left (9.57,30.65)`, and `Right (18.24,30.46)`.
+
+### Changes
+
+- `public/gamepads/hotspots/outline/saturn.hotspots.svg`: rewrote Saturn hotspot positions to the slanted six-button layout, corrected D-pad arm centers, and moved Start up to the actual center button.
+- `crates/arcade-ui/src/controller_mapper.rs`: updated `SATURN_SYSTEM_HOTSPOTS` fallback geometry to match the corrected overlay.
+- `docs/llm-wiki/debugging/svg-hotspot-overlays.md`: added durable notes on Saturn geometry and overlay-analysis rules.
+- `docs/llm-wiki/index.md`: linked the new debugging note.
+
+### Tests
+
+- `cargo test -p arcade-ui overlay_files_cover_required_actions_for_supported_systems` — passed.
+
+### Next Steps
+
+- Visually verify the Saturn overlay in-app against the slanted six-button layout and the higher Start button.
+
+## 2026-05-01 - SVG hotspot overlay refinement (PS2, Dreamcast)
+
+### Findings
+- PS2 sub-path bounding boxes (from Z-delimited segments) give reliable D-pad arm centers; arc endpoint math gives reliable circle centers. Always use cursor-tracking arc parser (not naive bbox) for circles — the bbox only captures arc endpoints, not the full arc extent.
+- PS2 Select and Start are at different Y levels (Select y≈26.5, Start y≈32.3); the original hotspot had both at y=29.12.
+- PS2 Start button was originally placed on the analog LED indicator (path 14 at center 37.65, 26.42); the real Start is path 12 (center 30.34–33.67, y=31.06–33.56). Path 14 is the LED.
+- Dreamcast SVG has the analog stick as a round disc (sub1/2, center 9.22, 20.22, r=4.94) in the upper-left and the D-pad as a cross/plus shape (sub3/4, center 12.79, 34.77) in the lower-left — opposite of what the element shapes suggest visually.
+- Dreamcast `DREAMCAST_SYSTEM_HOTSPOTS` in `controller_mapper.rs` had only 9 entries with no stick actions, causing the overlay to reject any SVG containing `Stick Up/Down/Left/Right` and fall back to text rendering.
+- Dreamcast Start button is the triangle shape at sub5–8, center (32.00, 46.52), not the element at y≈40.
+
+### Changes
+- `public/gamepads/hotspots/outline/ps2.hotspots.svg`: full rewrite — D-pad arms from bbox centers, face buttons from arc endpoints, analog stick centers from cursor-tracking arc parser (L3: 22.58,35.82; R3: 41.09,35.82), Select/Start from path bboxes, stick directional rects at outer circle edges.
+- `public/gamepads/hotspots/outline/dreamcast.hotspots.svg`: full rewrite — D-pad on cross shape (12.79,34.77), analog stick rects on disc edges (9.22,20.22), face buttons Y/X/A/B from arc analysis, Start moved to triangle shape (32.00,46.52).
+- `crates/arcade-ui/src/controller_mapper.rs`: `DREAMCAST_SYSTEM_HOTSPOTS` expanded from 9 to 13 entries to include Stick Up/Down/Left/Right.
+
+### Next Steps
+- Saturn hotspot work remaining.
+
 ## 2026-05-01 - SVG hotspot overlay refinement (N64, PSX)
 
 ### Findings

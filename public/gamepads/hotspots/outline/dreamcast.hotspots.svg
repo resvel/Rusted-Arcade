@@ -1,11 +1,15 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
-  <circle id="dreamcast-up" data-action="Up" data-label="Up" cx="18.24" cy="25.28" r="2.05" />
-  <circle id="dreamcast-down" data-action="Down" data-label="Down" cx="18.24" cy="35.84" r="2.05" />
-  <circle id="dreamcast-left" data-action="Left" data-label="Left" cx="13.12" cy="30.59" r="2.05" />
-  <circle id="dreamcast-right" data-action="Right" data-label="Right" cx="23.36" cy="30.59" r="2.05" />
-  <circle id="dreamcast-y" data-action="Y" data-label="Y" cx="48.64" cy="22.72" r="2.18" />
-  <circle id="dreamcast-x" data-action="X" data-label="X" cx="44.16" cy="28.16" r="2.18" />
-  <circle id="dreamcast-b" data-action="B" data-label="B" cx="53.12" cy="28.16" r="2.18" />
-  <circle id="dreamcast-a" data-action="A" data-label="A" cx="48.64" cy="33.60" r="2.18" />
-  <rect id="dreamcast-start" data-action="Start" data-label="Start" x="30.08" y="38.85" width="7.04" height="2.94" />
+  <circle id="dreamcast-up"    data-action="Up"    data-label="Up"    cx="12.79" cy="31.38" r="2.20" />
+  <circle id="dreamcast-down"  data-action="Down"  data-label="Down"  cx="12.79" cy="38.16" r="2.20" />
+  <circle id="dreamcast-left"  data-action="Left"  data-label="Left"  cx="9.10"  cy="34.77" r="2.20" />
+  <circle id="dreamcast-right" data-action="Right" data-label="Right" cx="16.47" cy="34.77" r="2.20" />
+  <rect id="dreamcast-stick-up"    data-action="Stick Up"    data-label="Stick Up"    x="8.22" y="14.68" width="2.00" height="1.20" />
+  <rect id="dreamcast-stick-down"  data-action="Stick Down"  data-label="Stick Down"  x="8.22" y="25.17" width="2.00" height="1.20" />
+  <rect id="dreamcast-stick-left"  data-action="Stick Left"  data-label="Stick Left"  x="3.68" y="19.22" width="1.20" height="2.00" />
+  <rect id="dreamcast-stick-right" data-action="Stick Right" data-label="Stick Right" x="14.16" y="19.22" width="1.20" height="2.00" />
+  <circle id="dreamcast-y" data-action="Y" data-label="Y" cx="52.27" cy="20.65" r="2.50" />
+  <circle id="dreamcast-x" data-action="X" data-label="X" cx="46.78" cy="25.99" r="2.50" />
+  <circle id="dreamcast-b" data-action="B" data-label="B" cx="57.75" cy="25.99" r="2.50" />
+  <circle id="dreamcast-a" data-action="A" data-label="A" cx="52.27" cy="31.32" r="2.50" />
+  <circle id="dreamcast-start" data-action="Start" data-label="Start" cx="32.00" cy="46.52" r="2.80" />
 </svg>

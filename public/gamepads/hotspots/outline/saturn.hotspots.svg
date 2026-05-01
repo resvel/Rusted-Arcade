@@ -1,15 +1,15 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
-  <circle id="saturn-up" data-action="Up" data-label="Up" cx="13.12" cy="26.88" r="2.05" />
-  <circle id="saturn-down" data-action="Down" data-label="Down" cx="13.12" cy="36.80" r="2.05" />
-  <circle id="saturn-left" data-action="Left" data-label="Left" cx="8.32" cy="31.87" r="2.05" />
-  <circle id="saturn-right" data-action="Right" data-label="Right" cx="17.92" cy="31.87" r="2.05" />
-  <circle id="saturn-x" data-action="X" data-label="X" cx="42.88" cy="23.04" r="1.92" />
-  <circle id="saturn-y" data-action="Y" data-label="Y" cx="48.64" cy="23.04" r="1.92" />
-  <circle id="saturn-z" data-action="Z" data-label="Z" cx="54.40" cy="23.04" r="1.92" />
-  <circle id="saturn-a" data-action="A" data-label="A" cx="42.88" cy="33.60" r="1.92" />
-  <circle id="saturn-b" data-action="B" data-label="B" cx="48.64" cy="33.60" r="1.92" />
-  <circle id="saturn-c" data-action="C" data-label="C" cx="54.40" cy="33.60" r="1.92" />
+  <circle id="saturn-up"    data-action="Up"    data-label="Up"    cx="13.89" cy="26.27" r="2.00" />
+  <circle id="saturn-down"  data-action="Down"  data-label="Down"  cx="13.90" cy="34.98" r="2.00" />
+  <circle id="saturn-left"  data-action="Left"  data-label="Left"  cx="9.57"  cy="30.65" r="2.00" />
+  <circle id="saturn-right" data-action="Right" data-label="Right" cx="18.24" cy="30.46" r="2.00" />
+  <circle id="saturn-x" data-action="X" data-label="X" cx="42.53" cy="29.84" r="2.40" />
+  <circle id="saturn-y" data-action="Y" data-label="Y" cx="47.74" cy="26.64" r="2.40" />
+  <circle id="saturn-z" data-action="Z" data-label="Z" cx="53.38" cy="25.14" r="2.40" />
+  <circle id="saturn-a" data-action="A" data-label="A" cx="44.11" cy="37.57" r="3.20" />
+  <circle id="saturn-b" data-action="B" data-label="B" cx="50.35" cy="33.85" r="3.20" />
+  <circle id="saturn-c" data-action="C" data-label="C" cx="57.43" cy="31.89" r="3.20" />
   <rect id="saturn-l" data-action="L" data-label="L" x="7.04" y="9.41" width="7.04" height="2.94" />
   <rect id="saturn-r" data-action="R" data-label="R" x="49.92" y="9.41" width="7.04" height="2.94" />
-  <rect id="saturn-start" data-action="Start" data-label="Start" x="29.12" y="42.69" width="7.68" height="2.94" />
+  <rect id="saturn-start" data-action="Start" data-label="Start" x="29.01" y="31.49" width="5.78" height="2.77" />
 </svg>

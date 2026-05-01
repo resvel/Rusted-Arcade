@@ -28,6 +28,7 @@ The actual source code is the source of truth. These notes are a compressed work
 
 - [LLDB Recipes](debugging/lldb-recipes.md)
 - [Useful Commands](debugging/useful-commands.md)
+- [SVG Hotspot Overlays](debugging/svg-hotspot-overlays.md)
 
 ## Decisions
 
