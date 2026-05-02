@@ -9,6 +9,7 @@ The actual source code is the source of truth. These notes are a compressed work
 - [Repo Overview](repo-overview.md)
 - [Build and Run](build-and-run.md)
 - [Session Log](log.md)
+- [Commit Reference](commit-reference.md)
 
 ## Architecture
 

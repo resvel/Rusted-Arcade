@@ -1,5 +1,31 @@
 # Session Log
 
+## 2026-05-02 - Add wiki commit reference page
+
+### Goal
+
+Create a durable wiki page that references the repository commit history with hashes and descriptions so future sessions can quickly cross-reference past work.
+
+### Findings
+
+- The repository history currently contains `83` commits through `61e6c25`.
+- The most stable compact representation for the wiki is the chronological git subject line: `short-hash | date | commit subject`.
+- The source command for regenerating the page is `git log --reverse --date=short --pretty=format:'%h|%ad|%s'`.
+
+### Changes
+
+- `docs/llm-wiki/commit-reference.md`: added a new commit-reference page containing the full chronological commit list with dates and subjects.
+- `docs/llm-wiki/index.md`: linked the new commit-reference page from the Start Here section.
+
+### Tests
+
+- `git rev-list --count HEAD` — reported `83`.
+- `git log --reverse --date=short --pretty=format:'%h|%ad|%s'` — used to generate and verify the commit-reference contents.
+
+### Next Steps
+
+- Refresh `docs/llm-wiki/commit-reference.md` whenever new commits land so the wiki remains a faithful reference to repository history.
+
 ## 2026-05-01 - Direct press-to-bind controller mapping
 
 ### Goal
