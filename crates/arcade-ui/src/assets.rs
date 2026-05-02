@@ -682,7 +682,11 @@ impl NativeArcadeUiApp {
         layout: SystemControllerLayout,
     ) -> Option<Arc<Vec<SystemOverlayHotspot>>> {
         let path = self.resolve_system_mapper_hotspot_path(layout)?;
-        if self.assets.controller_mapper_overlay_failures.contains(&path) {
+        if self
+            .assets
+            .controller_mapper_overlay_failures
+            .contains(&path)
+        {
             return None;
         }
         if let Some(hotspots) = self.assets.controller_mapper_hotspot_overlays.get(&path) {
@@ -842,15 +846,11 @@ fn rasterize_svg_data(data: &[u8]) -> Option<([usize; 2], Vec<u8>)> {
     Some(([width as usize, height as usize], pixmap.data().to_vec()))
 }
 
-fn rasterize_svg_data_to_size(
-    data: &[u8],
-    target_size: [u32; 2],
-) -> Option<([usize; 2], Vec<u8>)> {
+fn rasterize_svg_data_to_size(data: &[u8], target_size: [u32; 2]) -> Option<([usize; 2], Vec<u8>)> {
     let options = resvg::usvg::Options::default();
     let tree = resvg::usvg::Tree::from_data(data, &options).ok()?;
     let svg_size = tree.size().to_int_size();
-    let raster_size =
-        scaled_svg_raster_size([svg_size.width(), svg_size.height()], target_size)?;
+    let raster_size = scaled_svg_raster_size([svg_size.width(), svg_size.height()], target_size)?;
     let width = raster_size[0] as u32;
     let height = raster_size[1] as u32;
     let mut pixmap = resvg::tiny_skia::Pixmap::new(width, height)?;
@@ -866,10 +866,7 @@ fn rasterize_svg_data_to_size(
     Some((raster_size, pixmap.data().to_vec()))
 }
 
-fn scaled_svg_raster_size(
-    source_size: [u32; 2],
-    target_size: [u32; 2],
-) -> Option<[usize; 2]> {
+fn scaled_svg_raster_size(source_size: [u32; 2], target_size: [u32; 2]) -> Option<[usize; 2]> {
     let [source_width, source_height] = source_size;
     let [target_width, target_height] = target_size;
     if source_width == 0 || source_height == 0 || target_width == 0 || target_height == 0 {
