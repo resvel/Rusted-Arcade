@@ -34,22 +34,13 @@ pub(crate) enum ControllerMapperView {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum VisualControlId {
     Button(CanonicalButton),
-    Axis {
-        axis: CanonicalAxis,
-        direction: i8,
-    },
+    Axis { axis: CanonicalAxis, direction: i8 },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) enum HotspotShape {
-    Circle {
-        center: [f32; 2],
-        radius: f32,
-    },
-    Rect {
-        center: [f32; 2],
-        size: [f32; 2],
-    },
+    Circle { center: [f32; 2], radius: f32 },
+    Rect { center: [f32; 2], size: [f32; 2] },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -68,17 +59,9 @@ pub(crate) struct SystemActionHotspot {
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum OverlayHotspotShape {
-    Circle {
-        center: [f32; 2],
-        radius: f32,
-    },
-    Rect {
-        center: [f32; 2],
-        size: [f32; 2],
-    },
-    Polygon {
-        points: Vec<[f32; 2]>,
-    },
+    Circle { center: [f32; 2], radius: f32 },
+    Rect { center: [f32; 2], size: [f32; 2] },
+    Polygon { points: Vec<[f32; 2]> },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -98,19 +81,101 @@ const PS3_FRONT_HOTSPOTS: [ControllerHotspot; 21] = [
     circle_button(CanonicalButton::DPadLeft, "D-Pad Left", 0.13, 0.41, 0.028),
     circle_button(CanonicalButton::DPadRight, "D-Pad Right", 0.27, 0.41, 0.028),
     circle_button(CanonicalButton::West, "Square / West", 0.75, 0.42, 0.030),
-    circle_button(CanonicalButton::North, "Triangle / North", 0.81, 0.33, 0.030),
+    circle_button(
+        CanonicalButton::North,
+        "Triangle / North",
+        0.81,
+        0.33,
+        0.030,
+    ),
     circle_button(CanonicalButton::East, "Circle / East", 0.88, 0.42, 0.030),
     circle_button(CanonicalButton::South, "Cross / South", 0.81, 0.51, 0.030),
-    circle_button(CanonicalButton::LeftThumb, "L3 / Left Stick Click", 0.36, 0.55, 0.052),
-    circle_button(CanonicalButton::RightThumb, "R3 / Right Stick Click", 0.64, 0.55, 0.052),
-    rect_axis(CanonicalAxis::LeftStickY, -1, "Left Stick Up", 0.36, 0.47, 0.070, 0.040),
-    rect_axis(CanonicalAxis::LeftStickY, 1, "Left Stick Down", 0.36, 0.63, 0.070, 0.040),
-    rect_axis(CanonicalAxis::LeftStickX, -1, "Left Stick Left", 0.28, 0.55, 0.040, 0.070),
-    rect_axis(CanonicalAxis::LeftStickX, 1, "Left Stick Right", 0.44, 0.55, 0.040, 0.070),
-    rect_axis(CanonicalAxis::RightStickY, -1, "Right Stick Up", 0.64, 0.47, 0.070, 0.040),
-    rect_axis(CanonicalAxis::RightStickY, 1, "Right Stick Down", 0.64, 0.63, 0.070, 0.040),
-    rect_axis(CanonicalAxis::RightStickX, -1, "Right Stick Left", 0.56, 0.55, 0.040, 0.070),
-    rect_axis(CanonicalAxis::RightStickX, 1, "Right Stick Right", 0.72, 0.55, 0.040, 0.070),
+    circle_button(
+        CanonicalButton::LeftThumb,
+        "L3 / Left Stick Click",
+        0.36,
+        0.55,
+        0.052,
+    ),
+    circle_button(
+        CanonicalButton::RightThumb,
+        "R3 / Right Stick Click",
+        0.64,
+        0.55,
+        0.052,
+    ),
+    rect_axis(
+        CanonicalAxis::LeftStickY,
+        -1,
+        "Left Stick Up",
+        0.36,
+        0.47,
+        0.070,
+        0.040,
+    ),
+    rect_axis(
+        CanonicalAxis::LeftStickY,
+        1,
+        "Left Stick Down",
+        0.36,
+        0.63,
+        0.070,
+        0.040,
+    ),
+    rect_axis(
+        CanonicalAxis::LeftStickX,
+        -1,
+        "Left Stick Left",
+        0.28,
+        0.55,
+        0.040,
+        0.070,
+    ),
+    rect_axis(
+        CanonicalAxis::LeftStickX,
+        1,
+        "Left Stick Right",
+        0.44,
+        0.55,
+        0.040,
+        0.070,
+    ),
+    rect_axis(
+        CanonicalAxis::RightStickY,
+        -1,
+        "Right Stick Up",
+        0.64,
+        0.47,
+        0.070,
+        0.040,
+    ),
+    rect_axis(
+        CanonicalAxis::RightStickY,
+        1,
+        "Right Stick Down",
+        0.64,
+        0.63,
+        0.070,
+        0.040,
+    ),
+    rect_axis(
+        CanonicalAxis::RightStickX,
+        -1,
+        "Right Stick Left",
+        0.56,
+        0.55,
+        0.040,
+        0.070,
+    ),
+    rect_axis(
+        CanonicalAxis::RightStickX,
+        1,
+        "Right Stick Right",
+        0.72,
+        0.55,
+        0.040,
+        0.070,
+    ),
 ];
 
 const PS3_TOP_HOTSPOTS: [ControllerHotspot; 4] = [
@@ -159,19 +224,101 @@ const PS4_FRONT_HOTSPOTS: [ControllerHotspot; 21] = [
     circle_button(CanonicalButton::DPadLeft, "D-Pad Left", 0.13, 0.38, 0.028),
     circle_button(CanonicalButton::DPadRight, "D-Pad Right", 0.27, 0.38, 0.028),
     circle_button(CanonicalButton::West, "Square / West", 0.75, 0.37, 0.030),
-    circle_button(CanonicalButton::North, "Triangle / North", 0.82, 0.29, 0.030),
+    circle_button(
+        CanonicalButton::North,
+        "Triangle / North",
+        0.82,
+        0.29,
+        0.030,
+    ),
     circle_button(CanonicalButton::East, "Circle / East", 0.89, 0.37, 0.030),
     circle_button(CanonicalButton::South, "Cross / South", 0.82, 0.47, 0.030),
-    circle_button(CanonicalButton::LeftThumb, "L3 / Left Stick Click", 0.36, 0.57, 0.052),
-    circle_button(CanonicalButton::RightThumb, "R3 / Right Stick Click", 0.64, 0.57, 0.052),
-    rect_axis(CanonicalAxis::LeftStickY, -1, "Left Stick Up", 0.36, 0.49, 0.070, 0.040),
-    rect_axis(CanonicalAxis::LeftStickY, 1, "Left Stick Down", 0.36, 0.65, 0.070, 0.040),
-    rect_axis(CanonicalAxis::LeftStickX, -1, "Left Stick Left", 0.28, 0.57, 0.040, 0.070),
-    rect_axis(CanonicalAxis::LeftStickX, 1, "Left Stick Right", 0.44, 0.57, 0.040, 0.070),
-    rect_axis(CanonicalAxis::RightStickY, -1, "Right Stick Up", 0.64, 0.49, 0.070, 0.040),
-    rect_axis(CanonicalAxis::RightStickY, 1, "Right Stick Down", 0.64, 0.65, 0.070, 0.040),
-    rect_axis(CanonicalAxis::RightStickX, -1, "Right Stick Left", 0.56, 0.57, 0.040, 0.070),
-    rect_axis(CanonicalAxis::RightStickX, 1, "Right Stick Right", 0.72, 0.57, 0.040, 0.070),
+    circle_button(
+        CanonicalButton::LeftThumb,
+        "L3 / Left Stick Click",
+        0.36,
+        0.57,
+        0.052,
+    ),
+    circle_button(
+        CanonicalButton::RightThumb,
+        "R3 / Right Stick Click",
+        0.64,
+        0.57,
+        0.052,
+    ),
+    rect_axis(
+        CanonicalAxis::LeftStickY,
+        -1,
+        "Left Stick Up",
+        0.36,
+        0.49,
+        0.070,
+        0.040,
+    ),
+    rect_axis(
+        CanonicalAxis::LeftStickY,
+        1,
+        "Left Stick Down",
+        0.36,
+        0.65,
+        0.070,
+        0.040,
+    ),
+    rect_axis(
+        CanonicalAxis::LeftStickX,
+        -1,
+        "Left Stick Left",
+        0.28,
+        0.57,
+        0.040,
+        0.070,
+    ),
+    rect_axis(
+        CanonicalAxis::LeftStickX,
+        1,
+        "Left Stick Right",
+        0.44,
+        0.57,
+        0.040,
+        0.070,
+    ),
+    rect_axis(
+        CanonicalAxis::RightStickY,
+        -1,
+        "Right Stick Up",
+        0.64,
+        0.49,
+        0.070,
+        0.040,
+    ),
+    rect_axis(
+        CanonicalAxis::RightStickY,
+        1,
+        "Right Stick Down",
+        0.64,
+        0.65,
+        0.070,
+        0.040,
+    ),
+    rect_axis(
+        CanonicalAxis::RightStickX,
+        -1,
+        "Right Stick Left",
+        0.56,
+        0.57,
+        0.040,
+        0.070,
+    ),
+    rect_axis(
+        CanonicalAxis::RightStickX,
+        1,
+        "Right Stick Right",
+        0.72,
+        0.57,
+        0.040,
+        0.070,
+    ),
 ];
 
 const PS4_TOP_HOTSPOTS: [ControllerHotspot; 4] = [
@@ -213,26 +360,121 @@ const PS4_TOP_HOTSPOTS: [ControllerHotspot; 4] = [
 
 const PS5_FRONT_HOTSPOTS: [ControllerHotspot; 21] = [
     circle_button(CanonicalButton::Guide, "PS", 0.503, 0.478, 0.015),
-    rect_button(CanonicalButton::Select, "Create", 0.267, 0.218, 0.020, 0.034),
+    rect_button(
+        CanonicalButton::Select,
+        "Create",
+        0.267,
+        0.218,
+        0.020,
+        0.034,
+    ),
     rect_button(CanonicalButton::Start, "Menu", 0.733, 0.218, 0.020, 0.034),
     circle_button(CanonicalButton::DPadUp, "D-Pad Up", 0.199, 0.290, 0.016),
     circle_button(CanonicalButton::DPadDown, "D-Pad Down", 0.199, 0.404, 0.016),
     circle_button(CanonicalButton::DPadLeft, "D-Pad Left", 0.133, 0.347, 0.016),
-    circle_button(CanonicalButton::DPadRight, "D-Pad Right", 0.264, 0.347, 0.016),
+    circle_button(
+        CanonicalButton::DPadRight,
+        "D-Pad Right",
+        0.264,
+        0.347,
+        0.016,
+    ),
     circle_button(CanonicalButton::West, "Square / West", 0.731, 0.347, 0.018),
-    circle_button(CanonicalButton::North, "Triangle / North", 0.807, 0.278, 0.018),
+    circle_button(
+        CanonicalButton::North,
+        "Triangle / North",
+        0.807,
+        0.278,
+        0.018,
+    ),
     circle_button(CanonicalButton::East, "Circle / East", 0.857, 0.347, 0.018),
     circle_button(CanonicalButton::South, "Cross / South", 0.781, 0.417, 0.018),
-    circle_button(CanonicalButton::LeftThumb, "L3 / Left Stick Click", 0.342, 0.476, 0.028),
-    circle_button(CanonicalButton::RightThumb, "R3 / Right Stick Click", 0.658, 0.476, 0.028),
-    rect_axis(CanonicalAxis::LeftStickY, -1, "Left Stick Up", 0.342, 0.443, 0.024, 0.012),
-    rect_axis(CanonicalAxis::LeftStickY, 1, "Left Stick Down", 0.342, 0.509, 0.024, 0.012),
-    rect_axis(CanonicalAxis::LeftStickX, -1, "Left Stick Left", 0.309, 0.476, 0.012, 0.024),
-    rect_axis(CanonicalAxis::LeftStickX, 1, "Left Stick Right", 0.375, 0.476, 0.012, 0.024),
-    rect_axis(CanonicalAxis::RightStickY, -1, "Right Stick Up", 0.658, 0.443, 0.024, 0.012),
-    rect_axis(CanonicalAxis::RightStickY, 1, "Right Stick Down", 0.658, 0.509, 0.024, 0.012),
-    rect_axis(CanonicalAxis::RightStickX, -1, "Right Stick Left", 0.625, 0.476, 0.012, 0.024),
-    rect_axis(CanonicalAxis::RightStickX, 1, "Right Stick Right", 0.691, 0.476, 0.012, 0.024),
+    circle_button(
+        CanonicalButton::LeftThumb,
+        "L3 / Left Stick Click",
+        0.342,
+        0.476,
+        0.028,
+    ),
+    circle_button(
+        CanonicalButton::RightThumb,
+        "R3 / Right Stick Click",
+        0.658,
+        0.476,
+        0.028,
+    ),
+    rect_axis(
+        CanonicalAxis::LeftStickY,
+        -1,
+        "Left Stick Up",
+        0.342,
+        0.443,
+        0.024,
+        0.012,
+    ),
+    rect_axis(
+        CanonicalAxis::LeftStickY,
+        1,
+        "Left Stick Down",
+        0.342,
+        0.509,
+        0.024,
+        0.012,
+    ),
+    rect_axis(
+        CanonicalAxis::LeftStickX,
+        -1,
+        "Left Stick Left",
+        0.309,
+        0.476,
+        0.012,
+        0.024,
+    ),
+    rect_axis(
+        CanonicalAxis::LeftStickX,
+        1,
+        "Left Stick Right",
+        0.375,
+        0.476,
+        0.012,
+        0.024,
+    ),
+    rect_axis(
+        CanonicalAxis::RightStickY,
+        -1,
+        "Right Stick Up",
+        0.658,
+        0.443,
+        0.024,
+        0.012,
+    ),
+    rect_axis(
+        CanonicalAxis::RightStickY,
+        1,
+        "Right Stick Down",
+        0.658,
+        0.509,
+        0.024,
+        0.012,
+    ),
+    rect_axis(
+        CanonicalAxis::RightStickX,
+        -1,
+        "Right Stick Left",
+        0.625,
+        0.476,
+        0.012,
+        0.024,
+    ),
+    rect_axis(
+        CanonicalAxis::RightStickX,
+        1,
+        "Right Stick Right",
+        0.691,
+        0.476,
+        0.012,
+        0.024,
+    ),
 ];
 
 const PS5_TOP_HOTSPOTS: [ControllerHotspot; 4] = [
@@ -284,16 +526,92 @@ const XBOX_FRONT_HOTSPOTS: [ControllerHotspot; 21] = [
     circle_button(CanonicalButton::North, "Y / North", 0.83, 0.28, 0.030),
     circle_button(CanonicalButton::East, "B / East", 0.91, 0.39, 0.030),
     circle_button(CanonicalButton::South, "A / South", 0.83, 0.50, 0.030),
-    circle_button(CanonicalButton::LeftThumb, "L3 / Left Stick Click", 0.14, 0.31, 0.054),
-    circle_button(CanonicalButton::RightThumb, "R3 / Right Stick Click", 0.64, 0.56, 0.054),
-    rect_axis(CanonicalAxis::LeftStickY, -1, "Left Stick Up", 0.14, 0.23, 0.074, 0.042),
-    rect_axis(CanonicalAxis::LeftStickY, 1, "Left Stick Down", 0.14, 0.39, 0.074, 0.042),
-    rect_axis(CanonicalAxis::LeftStickX, -1, "Left Stick Left", 0.06, 0.31, 0.042, 0.074),
-    rect_axis(CanonicalAxis::LeftStickX, 1, "Left Stick Right", 0.22, 0.31, 0.042, 0.074),
-    rect_axis(CanonicalAxis::RightStickY, -1, "Right Stick Up", 0.64, 0.48, 0.074, 0.042),
-    rect_axis(CanonicalAxis::RightStickY, 1, "Right Stick Down", 0.64, 0.64, 0.074, 0.042),
-    rect_axis(CanonicalAxis::RightStickX, -1, "Right Stick Left", 0.56, 0.56, 0.042, 0.074),
-    rect_axis(CanonicalAxis::RightStickX, 1, "Right Stick Right", 0.72, 0.56, 0.042, 0.074),
+    circle_button(
+        CanonicalButton::LeftThumb,
+        "L3 / Left Stick Click",
+        0.14,
+        0.31,
+        0.054,
+    ),
+    circle_button(
+        CanonicalButton::RightThumb,
+        "R3 / Right Stick Click",
+        0.64,
+        0.56,
+        0.054,
+    ),
+    rect_axis(
+        CanonicalAxis::LeftStickY,
+        -1,
+        "Left Stick Up",
+        0.14,
+        0.23,
+        0.074,
+        0.042,
+    ),
+    rect_axis(
+        CanonicalAxis::LeftStickY,
+        1,
+        "Left Stick Down",
+        0.14,
+        0.39,
+        0.074,
+        0.042,
+    ),
+    rect_axis(
+        CanonicalAxis::LeftStickX,
+        -1,
+        "Left Stick Left",
+        0.06,
+        0.31,
+        0.042,
+        0.074,
+    ),
+    rect_axis(
+        CanonicalAxis::LeftStickX,
+        1,
+        "Left Stick Right",
+        0.22,
+        0.31,
+        0.042,
+        0.074,
+    ),
+    rect_axis(
+        CanonicalAxis::RightStickY,
+        -1,
+        "Right Stick Up",
+        0.64,
+        0.48,
+        0.074,
+        0.042,
+    ),
+    rect_axis(
+        CanonicalAxis::RightStickY,
+        1,
+        "Right Stick Down",
+        0.64,
+        0.64,
+        0.074,
+        0.042,
+    ),
+    rect_axis(
+        CanonicalAxis::RightStickX,
+        -1,
+        "Right Stick Left",
+        0.56,
+        0.56,
+        0.042,
+        0.074,
+    ),
+    rect_axis(
+        CanonicalAxis::RightStickX,
+        1,
+        "Right Stick Right",
+        0.72,
+        0.56,
+        0.042,
+        0.074,
+    ),
 ];
 
 const XBOX_TOP_HOTSPOTS: [ControllerHotspot; 4] = [
@@ -345,16 +663,92 @@ const GENERIC_FRONT_HOTSPOTS: [ControllerHotspot; 21] = [
     circle_button(CanonicalButton::North, "North Button", 0.84, 0.34, 0.030),
     circle_button(CanonicalButton::East, "East Button", 0.92, 0.42, 0.030),
     circle_button(CanonicalButton::South, "South Button", 0.84, 0.50, 0.030),
-    circle_button(CanonicalButton::LeftThumb, "L3 / Left Stick Click", 0.14, 0.33, 0.054),
-    circle_button(CanonicalButton::RightThumb, "R3 / Right Stick Click", 0.63, 0.53, 0.054),
-    rect_axis(CanonicalAxis::LeftStickY, -1, "Left Stick Up", 0.14, 0.25, 0.074, 0.042),
-    rect_axis(CanonicalAxis::LeftStickY, 1, "Left Stick Down", 0.14, 0.41, 0.074, 0.042),
-    rect_axis(CanonicalAxis::LeftStickX, -1, "Left Stick Left", 0.06, 0.33, 0.042, 0.074),
-    rect_axis(CanonicalAxis::LeftStickX, 1, "Left Stick Right", 0.22, 0.33, 0.042, 0.074),
-    rect_axis(CanonicalAxis::RightStickY, -1, "Right Stick Up", 0.63, 0.45, 0.074, 0.042),
-    rect_axis(CanonicalAxis::RightStickY, 1, "Right Stick Down", 0.63, 0.61, 0.074, 0.042),
-    rect_axis(CanonicalAxis::RightStickX, -1, "Right Stick Left", 0.55, 0.53, 0.042, 0.074),
-    rect_axis(CanonicalAxis::RightStickX, 1, "Right Stick Right", 0.71, 0.53, 0.042, 0.074),
+    circle_button(
+        CanonicalButton::LeftThumb,
+        "L3 / Left Stick Click",
+        0.14,
+        0.33,
+        0.054,
+    ),
+    circle_button(
+        CanonicalButton::RightThumb,
+        "R3 / Right Stick Click",
+        0.63,
+        0.53,
+        0.054,
+    ),
+    rect_axis(
+        CanonicalAxis::LeftStickY,
+        -1,
+        "Left Stick Up",
+        0.14,
+        0.25,
+        0.074,
+        0.042,
+    ),
+    rect_axis(
+        CanonicalAxis::LeftStickY,
+        1,
+        "Left Stick Down",
+        0.14,
+        0.41,
+        0.074,
+        0.042,
+    ),
+    rect_axis(
+        CanonicalAxis::LeftStickX,
+        -1,
+        "Left Stick Left",
+        0.06,
+        0.33,
+        0.042,
+        0.074,
+    ),
+    rect_axis(
+        CanonicalAxis::LeftStickX,
+        1,
+        "Left Stick Right",
+        0.22,
+        0.33,
+        0.042,
+        0.074,
+    ),
+    rect_axis(
+        CanonicalAxis::RightStickY,
+        -1,
+        "Right Stick Up",
+        0.63,
+        0.45,
+        0.074,
+        0.042,
+    ),
+    rect_axis(
+        CanonicalAxis::RightStickY,
+        1,
+        "Right Stick Down",
+        0.63,
+        0.61,
+        0.074,
+        0.042,
+    ),
+    rect_axis(
+        CanonicalAxis::RightStickX,
+        -1,
+        "Right Stick Left",
+        0.55,
+        0.53,
+        0.042,
+        0.074,
+    ),
+    rect_axis(
+        CanonicalAxis::RightStickX,
+        1,
+        "Right Stick Right",
+        0.71,
+        0.53,
+        0.042,
+        0.074,
+    ),
 ];
 
 const GENERIC_TOP_HOTSPOTS: [ControllerHotspot; 4] = [
@@ -488,13 +882,62 @@ const PS2_SYSTEM_HOTSPOTS: [SystemActionHotspot; 22] = [
     system_circle("L3", "L3", 0.365, 0.585, 0.048),
     system_circle("R3", "R3", 0.635, 0.585, 0.048),
     system_rect("Left Stick Up", "Left Stick Up", 0.365, 0.530, 0.042, 0.020),
-    system_rect("Left Stick Down", "Left Stick Down", 0.365, 0.640, 0.042, 0.020),
-    system_rect("Left Stick Left", "Left Stick Left", 0.310, 0.585, 0.020, 0.042),
-    system_rect("Left Stick Right", "Left Stick Right", 0.420, 0.585, 0.020, 0.042),
-    system_rect("Right Stick Up", "Right Stick Up", 0.635, 0.530, 0.042, 0.020),
-    system_rect("Right Stick Down", "Right Stick Down", 0.635, 0.640, 0.042, 0.020),
-    system_rect("Right Stick Left", "Right Stick Left", 0.580, 0.585, 0.020, 0.042),
-    system_rect("Right Stick Right", "Right Stick Right", 0.690, 0.585, 0.020, 0.042),
+    system_rect(
+        "Left Stick Down",
+        "Left Stick Down",
+        0.365,
+        0.640,
+        0.042,
+        0.020,
+    ),
+    system_rect(
+        "Left Stick Left",
+        "Left Stick Left",
+        0.310,
+        0.585,
+        0.020,
+        0.042,
+    ),
+    system_rect(
+        "Left Stick Right",
+        "Left Stick Right",
+        0.420,
+        0.585,
+        0.020,
+        0.042,
+    ),
+    system_rect(
+        "Right Stick Up",
+        "Right Stick Up",
+        0.635,
+        0.530,
+        0.042,
+        0.020,
+    ),
+    system_rect(
+        "Right Stick Down",
+        "Right Stick Down",
+        0.635,
+        0.640,
+        0.042,
+        0.020,
+    ),
+    system_rect(
+        "Right Stick Left",
+        "Right Stick Left",
+        0.580,
+        0.585,
+        0.020,
+        0.042,
+    ),
+    system_rect(
+        "Right Stick Right",
+        "Right Stick Right",
+        0.690,
+        0.585,
+        0.020,
+        0.042,
+    ),
 ];
 
 const PS2_SYSTEM_HOTSPOTS_CENTER: [SystemActionHotspot; 2] = [
@@ -589,12 +1032,18 @@ pub(crate) fn system_controller_mapper_art_asset(layout: SystemControllerLayout)
     match layout {
         SystemControllerLayout::Nes => "/gamepads/controllercons.2.1/svg/outline/nes.svg",
         SystemControllerLayout::Snes => "/gamepads/controllercons.2.1/svg/outline/snes.svg",
-        SystemControllerLayout::Genesis => "/gamepads/controllercons.2.1/svg/outline/mega-drive.svg",
+        SystemControllerLayout::Genesis => {
+            "/gamepads/controllercons.2.1/svg/outline/mega-drive.svg"
+        }
         SystemControllerLayout::N64 => "/gamepads/controllercons.2.1/svg/outline/n64.svg",
         SystemControllerLayout::Psx => "/gamepads/controllercons.2.1/svg/outline/ps1.svg",
         SystemControllerLayout::Ps2 => "/gamepads/controllercons.2.1/svg/outline/ps2.svg",
-        SystemControllerLayout::Dreamcast => "/gamepads/controllercons.2.1/svg/outline/dreamcast.svg",
-        SystemControllerLayout::Saturn => "/gamepads/controllercons.2.1/svg/outline/sega-saturn.svg",
+        SystemControllerLayout::Dreamcast => {
+            "/gamepads/controllercons.2.1/svg/outline/dreamcast.svg"
+        }
+        SystemControllerLayout::Saturn => {
+            "/gamepads/controllercons.2.1/svg/outline/sega-saturn.svg"
+        }
     }
 }
 
@@ -663,7 +1112,9 @@ pub(crate) fn parse_system_hotspot_overlay(
     let view_box = parse_view_box(root.attribute("viewBox"))
         .ok_or_else(|| String::from("hotspot overlay is missing a valid viewBox"))?;
     if view_box[2] <= 0.0 || view_box[3] <= 0.0 {
-        return Err(String::from("hotspot overlay viewBox must have positive width and height"));
+        return Err(String::from(
+            "hotspot overlay viewBox must have positive width and height",
+        ));
     }
 
     let mut hotspots = Vec::new();
@@ -720,7 +1171,9 @@ pub(crate) fn parse_system_hotspot_overlay(
     }
 
     if hotspots.is_empty() {
-        return Err(String::from("hotspot overlay does not define any supported shapes"));
+        return Err(String::from(
+            "hotspot overlay does not define any supported shapes",
+        ));
     }
 
     validate_system_overlay_actions(layout, &hotspots)?;
@@ -820,7 +1273,10 @@ pub(crate) fn assign_action_to_visual_control(
 ) {
     let mapped_entry = visual_control_to_mapping_entry(control);
     for (existing_action, entry) in actions.iter_mut() {
-        if entry.as_ref().is_some_and(|existing| *existing == mapped_entry) {
+        if entry
+            .as_ref()
+            .is_some_and(|existing| *existing == mapped_entry)
+        {
             *entry = None;
         }
         if existing_action == action {
@@ -844,7 +1300,10 @@ pub(crate) fn unassign_visual_control(
 ) {
     let mapped_entry = visual_control_to_mapping_entry(control);
     for entry in actions.values_mut() {
-        if entry.as_ref().is_some_and(|existing| *existing == mapped_entry) {
+        if entry
+            .as_ref()
+            .is_some_and(|existing| *existing == mapped_entry)
+        {
             *entry = None;
         }
     }
@@ -909,8 +1368,10 @@ fn visual_control_fallback_label(control: VisualControlId) -> &'static str {
 
 fn hotspot_pos(image_rect: Rect, uv_rect: Rect, normalized_center: [f32; 2]) -> Pos2 {
     pos2(
-        image_rect.left() + ((normalized_center[0] - uv_rect.left()) / uv_rect.width()) * image_rect.width(),
-        image_rect.top() + ((normalized_center[1] - uv_rect.top()) / uv_rect.height()) * image_rect.height(),
+        image_rect.left()
+            + ((normalized_center[0] - uv_rect.left()) / uv_rect.width()) * image_rect.width(),
+        image_rect.top()
+            + ((normalized_center[1] - uv_rect.top()) / uv_rect.height()) * image_rect.height(),
     )
 }
 
@@ -1047,7 +1508,9 @@ fn validate_system_overlay_actions(
     let required = required_system_actions(layout);
     for action in &required {
         if !hotspots.iter().any(|hotspot| hotspot.action == *action) {
-            return Err(format!("hotspot overlay is missing required action {action}"));
+            return Err(format!(
+                "hotspot overlay is missing required action {action}"
+            ));
         }
     }
     Ok(())
@@ -1448,7 +1911,8 @@ mod tests {
     fn ps5_top_hotspots_are_tight_in_cropped_strip() {
         let image_rect = Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0));
         let uv_rect = Rect::from_min_max(pos2(0.04, 0.18), pos2(0.96, 0.72));
-        let hotspots = controller_mapper_hotspots(ControllerMapperArt::Ps5, ControllerMapperView::Top);
+        let hotspots =
+            controller_mapper_hotspots(ControllerMapperArt::Ps5, ControllerMapperView::Top);
 
         for hotspot in hotspots {
             let rect = hotspot.paint_rect(image_rect, uv_rect);
@@ -1603,7 +2067,11 @@ mod tests {
 
         assert_eq!(hotspots.len(), 8);
         assert!(matches!(
-            hotspots.iter().find(|hotspot| hotspot.id == "up").unwrap().shape,
+            hotspots
+                .iter()
+                .find(|hotspot| hotspot.id == "up")
+                .unwrap()
+                .shape,
             OverlayHotspotShape::Circle { .. }
         ));
         assert!(matches!(
@@ -1615,7 +2083,11 @@ mod tests {
             OverlayHotspotShape::Rect { .. }
         ));
         assert!(matches!(
-            hotspots.iter().find(|hotspot| hotspot.id == "a").unwrap().shape,
+            hotspots
+                .iter()
+                .find(|hotspot| hotspot.id == "a")
+                .unwrap()
+                .shape,
             OverlayHotspotShape::Polygon { .. }
         ));
     }
