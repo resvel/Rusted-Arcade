@@ -1,8 +1,11 @@
 /target/
+/build
 /dist/
 /config.toml
 /CONTEXT.md
 /CLAUDE.md
+/AGENTS.md
+/docs/llm-wiki/
 
 # macOS / editor noise
 .DS_Store
@@ -22,6 +25,37 @@ recentRun*.log
 /public/covers/
 /public/system-logos-web/
 
+# Local-only UI art overrides/assets. GitHub ships only the default
+# header/background plus source-controlled logos and mapper SVGs.
+/public/system-logos/*_header.*
+!/public/system-logos/all_header.jpg
+/public/system-logos/*_background.*
+!/public/system-logos/All-background.jpg
+/public/system-logos/snesbackground.jpg
+/public/system-logos/headerbackground.jpg
+/public/system-logos/headerbackground.png
+/public/system-logos/DOSbackGround.png
+/public/system-logos/221-2216289_image-gba-sp-and-light-blue-gameboy-sp.png
+/public/system-logos/Dreamcast-Console-Set.png
+/public/system-logos/Game-Boy-Advance-SP-Mk1-Blue.png
+/public/system-logos/Game-Boy-system.png
+/public/system-logos/Game_Boy_Advance_Purple_Model.webp
+/public/system-logos/N64-Console-Set.png
+/public/system-logos/Neo-Geo-AES-Console-Set.jpg
+/public/system-logos/Neo-Geo_Pocket_Color.JPG
+/public/system-logos/PSX-Original-Controller.png
+/public/system-logos/PSX_2_controller.png
+/public/system-logos/arcade-neogeo-snk.png
+/public/system-logos/arcadesystem.png
+/public/system-logos/dos_controller.png
+/public/system-logos/genesiscontroller.jpeg
+/public/system-logos/genesiscontroller.png
+/public/system-logos/nescontroller.jpeg
+/public/system-logos/nescontroller.png
+/public/system-logos/snescontroller.jpeg
+/public/system-logos/snescontroller.png
+
 # Local third-party scratch copies/backups
+/third_party/mupen64plus-libretro-nx/
 /third_party/*-backup-*/
 /third_party/beetle-psx-libretro/

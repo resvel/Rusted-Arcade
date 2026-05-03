@@ -1366,6 +1366,7 @@ pub(crate) fn assign_physical_input_to_action(
     assign_action_to_visual_control(actions, action, control);
 }
 
+#[cfg(test)]
 pub(crate) fn unassign_visual_control(
     actions: &mut BTreeMap<String, Option<MappingEntry>>,
     control: VisualControlId,
@@ -1381,12 +1382,14 @@ pub(crate) fn unassign_visual_control(
     }
 }
 
+#[cfg(test)]
 pub(crate) fn unassign_action(actions: &mut BTreeMap<String, Option<MappingEntry>>, action: &str) {
     if let Some(entry) = actions.get_mut(action) {
         *entry = None;
     }
 }
 
+#[cfg(test)]
 impl ControllerHotspot {
     pub(crate) fn paint_rect(self, image_rect: Rect, uv_rect: Rect) -> Rect {
         hotspot_shape_rect_with_uv(self.shape, image_rect, uv_rect)
@@ -1447,6 +1450,7 @@ fn hotspot_pos(image_rect: Rect, uv_rect: Rect, normalized_center: [f32; 2]) -> 
     )
 }
 
+#[cfg(test)]
 fn hotspot_shape_rect_with_uv(shape: HotspotShape, image_rect: Rect, uv_rect: Rect) -> Rect {
     match shape {
         HotspotShape::Circle { center, radius } => {

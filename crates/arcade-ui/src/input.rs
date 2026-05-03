@@ -157,17 +157,11 @@ enum RetroKeyboardRouting {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ShortcutDirectionalGuardMode {
-    Disabled,
-    Enabled,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct RuntimeInputPolicy {
     keyboard_routing: RetroKeyboardRouting,
     uses_primary_stick_selector: bool,
     supports_native_analog: bool,
-    shortcut_directional_guard: ShortcutDirectionalGuardMode,
+    shortcut_directional_guard_enabled: bool,
 }
 
 #[derive(Default, Clone, Copy)]
@@ -206,6 +200,7 @@ struct GamepadCapture {
 pub(crate) struct ControllerMappingTarget {
     pub(crate) identity: DetectedPadIdentity,
     pub(crate) player_slot: Option<u8>,
+    #[cfg_attr(not(feature = "gamepad"), allow(dead_code))]
     pub(crate) connect_seq: u64,
 }
 
@@ -2566,10 +2561,8 @@ fn mapped_shortcut_action_is_active(
         return false;
     }
 
-    if matches!(
-        input_policy.shortcut_directional_guard,
-        ShortcutDirectionalGuardMode::Enabled
-    ) && directional_input_active(state)
+    if input_policy.shortcut_directional_guard_enabled
+        && directional_input_active(state)
         && !mapping_entry_is_directional(entry)
     {
         return false;
@@ -2855,10 +2848,12 @@ fn button_debug_data(gamepad: &gilrs::Gamepad<'_>, button: Button) -> Controller
     }
 }
 
+#[cfg(any(feature = "gamepad", test))]
 fn digital_button_active(data_pressed: Option<bool>) -> bool {
     data_pressed.unwrap_or(false)
 }
 
+#[cfg(any(feature = "gamepad", test))]
 fn valued_button_active(
     data_pressed: Option<bool>,
     data_value: Option<f32>,
@@ -2881,25 +2876,6 @@ fn button_pressed_with_value_fallback(gamepad: &gilrs::Gamepad<'_>, button: Butt
         data.map(|d| d.value()),
         BUTTON_ACTIVE_THRESHOLD,
     )
-}
-
-#[cfg(feature = "gamepad")]
-fn deghost_non_dpad_button_against_active_dpad(
-    button: &ControllerInputButtonDebug,
-    dpad_buttons: &[&ControllerInputButtonDebug],
-) -> bool {
-    if !button.is_pressed {
-        return false;
-    }
-
-    let Some(button_code) = button.code else {
-        return true;
-    };
-
-    let collides_with_active_dpad = dpad_buttons
-        .iter()
-        .any(|dpad| dpad.is_pressed && dpad.code == Some(button_code));
-    !collides_with_active_dpad
 }
 
 #[cfg(feature = "gamepad")]
@@ -3329,8 +3305,7 @@ fn runtime_input_policy_for_system(
         },
         uses_primary_stick_selector,
         supports_native_analog: uses_primary_stick_selector,
-        // Keep hook available for targeted re-enable without restoring a global guard.
-        shortcut_directional_guard: ShortcutDirectionalGuardMode::Disabled,
+        shortcut_directional_guard_enabled: false,
     }
 }
 
@@ -4278,53 +4253,6 @@ mod tests {
 
     #[cfg(feature = "gamepad")]
     #[test]
-    fn deghost_non_dpad_button_suppresses_same_code_as_active_dpad() {
-        let suspect = ControllerInputButtonDebug {
-            code: Some(42),
-            is_pressed: true,
-            ..Default::default()
-        };
-        let dpad_active = ControllerInputButtonDebug {
-            code: Some(42),
-            is_pressed: true,
-            ..Default::default()
-        };
-        assert!(!deghost_non_dpad_button_against_active_dpad(
-            &suspect,
-            &[&dpad_active]
-        ));
-    }
-
-    #[cfg(feature = "gamepad")]
-    #[test]
-    fn deghost_non_dpad_button_keeps_unique_or_inactive_codes() {
-        let suspect = ControllerInputButtonDebug {
-            code: Some(42),
-            is_pressed: true,
-            ..Default::default()
-        };
-        let dpad_different = ControllerInputButtonDebug {
-            code: Some(99),
-            is_pressed: true,
-            ..Default::default()
-        };
-        let dpad_same_but_idle = ControllerInputButtonDebug {
-            code: Some(42),
-            is_pressed: false,
-            ..Default::default()
-        };
-        assert!(deghost_non_dpad_button_against_active_dpad(
-            &suspect,
-            &[&dpad_different]
-        ));
-        assert!(deghost_non_dpad_button_against_active_dpad(
-            &suspect,
-            &[&dpad_same_but_idle]
-        ));
-    }
-
-    #[cfg(feature = "gamepad")]
-    #[test]
     fn strict_safety_effective_non_dpad_button_suppresses_missing_or_ambiguous_codes() {
         let suspect_missing = ControllerInputButtonDebug {
             code: None,
@@ -4718,25 +4646,16 @@ mod tests {
 
     #[test]
     fn runtime_policy_defaults_shortcut_directional_guard_to_disabled() {
-        assert_eq!(
-            runtime_input_policy_for_system("DOS", false).shortcut_directional_guard,
-            ShortcutDirectionalGuardMode::Disabled
+        assert!(!runtime_input_policy_for_system("DOS", false).shortcut_directional_guard_enabled);
+        assert!(!runtime_input_policy_for_system("N64", false).shortcut_directional_guard_enabled);
+        assert!(
+            !runtime_input_policy_for_system("DREAMCAST", false).shortcut_directional_guard_enabled
         );
-        assert_eq!(
-            runtime_input_policy_for_system("N64", false).shortcut_directional_guard,
-            ShortcutDirectionalGuardMode::Disabled
+        assert!(
+            !runtime_input_policy_for_system("SATURN", false).shortcut_directional_guard_enabled
         );
-        assert_eq!(
-            runtime_input_policy_for_system("DREAMCAST", false).shortcut_directional_guard,
-            ShortcutDirectionalGuardMode::Disabled
-        );
-        assert_eq!(
-            runtime_input_policy_for_system("SATURN", false).shortcut_directional_guard,
-            ShortcutDirectionalGuardMode::Disabled
-        );
-        assert_eq!(
-            runtime_input_policy_for_system("PCECD", false).shortcut_directional_guard,
-            ShortcutDirectionalGuardMode::Disabled
+        assert!(
+            !runtime_input_policy_for_system("PCECD", false).shortcut_directional_guard_enabled
         );
     }
 
@@ -5150,7 +5069,7 @@ mod tests {
             ..Default::default()
         };
         let mut policy = runtime_input_policy_for_system("NES", false);
-        policy.shortcut_directional_guard = ShortcutDirectionalGuardMode::Enabled;
+        policy.shortcut_directional_guard_enabled = true;
         assert!(!mapped_shortcut_action_is_active(
             &mapping,
             QUICK_LOAD_ACTION,

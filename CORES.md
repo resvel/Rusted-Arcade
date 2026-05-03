@@ -6,16 +6,18 @@ This project ships app binaries only. Libretro cores are not bundled in release 
 
 1. Obtain core binaries that you are legally allowed to use.
 2. Place them in your configured `core_root` directory.
-3. Use platform-appropriate core files:
-   - Linux: `<core_name>_libretro.so`
-   - Windows: `<core_name>_libretro.dll`
-   - macOS: `<core_name>_libretro.dylib`
+3. Use macOS libretro dynamic library files:
+   - `<core_name>_libretro.dylib`
 
 ## macOS core filename behavior
 
 - On macOS, native core resolution expects the libretro suffix form only:
   - Example: `fbneo_libretro.dylib`
-- Unlike Windows, macOS does not use a secondary fallback filename like `<core_name>.dylib`.
+- This app does not use a secondary fallback filename like `<core_name>.dylib`.
+- Compatibility filename fallbacks are currently recognized for:
+  - `mednafen_pce_fast`: also tries `beetle_pce_fast_libretro.dylib`
+  - `mednafen_saturn`: also tries `beetle_saturn_libretro.dylib`
+- On Apple Silicon macOS, selecting the N64 dynarec lane makes `mupen64plus_next` prefer `mupen64plus_next_dynarec_arm64_libretro.dylib` before falling back to `mupen64plus_next_libretro.dylib`.
 
 ## Expected core names
 
@@ -39,6 +41,7 @@ This project ships app binaries only. Libretro cores are not bundled in release 
 
 ### Arcade
 - `fbneo` (FBNeo — default arcade core)
+- `mame2003` (MAME 2003)
 - `mame2003_plus` (MAME 2003 Plus)
 
 ### Other
@@ -47,14 +50,17 @@ This project ships app binaries only. Libretro cores are not bundled in release 
 ## Platform-specific core notes
 
 ### N64
-- macOS uses `mupen64plus_next` as the embedded N64 core with support for both cached interpreter and dynarec CPU lanes.
+- N64 uses `mupen64plus_next` with support for both cached interpreter and Apple Silicon dynarec CPU lanes.
+- The dynarec lane expects `mupen64plus_next_dynarec_arm64_libretro.dylib` on Apple Silicon macOS and falls back to `mupen64plus_next_libretro.dylib` if needed.
 
 ### PlayStation 2
 - Two cores available: `pcsx2` and `play`.
+- The default core is `play` on Apple Silicon macOS.
 
 ### Arcade
 - Default `ARCADE` core is `fbneo`.
-- `mame2003_plus` remains supported for title-specific compatibility.
+- `mame2003` and `mame2003_plus` remain supported for title-specific compatibility.
+- `mame2003_plus` has a core settings profile; plain `mame2003` is supported as a launch core but does not currently expose a separate settings profile.
 - Shared arcade BIOS archives (`neogeo.zip`, `qsound.zip`, `pgm.zip`) are resolved from:
   - `bios_root/arcade-mame2003`
   - `bios_root`

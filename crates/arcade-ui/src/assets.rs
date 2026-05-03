@@ -12,7 +12,6 @@ use crate::controller_mapper::{
     parse_system_hotspot_overlay, system_controller_hotspot_overlay_asset,
     system_controller_mapper_art_asset, SystemControllerLayout, SystemOverlayHotspot,
 };
-use crate::render::fit_size;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct SizedTextureKey {
@@ -27,10 +26,8 @@ pub(crate) struct AssetCache {
     pub(crate) background_textures: HashMap<PathBuf, TextureHandle>,
     pub(crate) repeating_background_textures: HashMap<PathBuf, TextureHandle>,
     pub(crate) system_logo_textures: HashMap<PathBuf, TextureHandle>,
-    pub(crate) system_controller_textures: HashMap<PathBuf, TextureHandle>,
     pub(crate) controller_mapper_textures: HashMap<SizedTextureKey, TextureHandle>,
     pub(crate) controller_mapper_hotspot_overlays: HashMap<PathBuf, Arc<Vec<SystemOverlayHotspot>>>,
-    pub(crate) themed_art_textures: HashMap<PathBuf, TextureHandle>,
     pub(crate) image_load_failures: HashSet<PathBuf>,
     pub(crate) controller_mapper_overlay_failures: HashSet<PathBuf>,
     pub(crate) last_frame_texture: Option<TextureHandle>,
@@ -46,10 +43,8 @@ impl AssetCache {
             background_textures: HashMap::new(),
             repeating_background_textures: HashMap::new(),
             system_logo_textures: HashMap::new(),
-            system_controller_textures: HashMap::new(),
             controller_mapper_textures: HashMap::new(),
             controller_mapper_hotspot_overlays: HashMap::new(),
-            themed_art_textures: HashMap::new(),
             image_load_failures: HashSet::new(),
             controller_mapper_overlay_failures: HashSet::new(),
             last_frame_texture: None,
@@ -57,11 +52,6 @@ impl AssetCache {
             cover_load_budget: 0,
         }
     }
-}
-
-struct AllThemeAssets {
-    devices: Vec<PathBuf>,
-    controllers: Vec<PathBuf>,
 }
 
 impl NativeArcadeUiApp {
@@ -105,24 +95,6 @@ impl NativeArcadeUiApp {
     fn draw_all_systems_background(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         let palette = self.palette();
         let rect = ui.max_rect();
-        let assets = self.resolve_all_theme_assets();
-        let lane_width = Self::content_band_width_for(rect.width()).min(rect.width() * 0.94);
-        let lane_rect = egui::Rect::from_center_size(
-            rect.center(),
-            egui::vec2((lane_width + 40.0).min(rect.width()), rect.height() * 0.98),
-        );
-        let gutter_gap = 20.0;
-        let left_gutter =
-            (lane_rect.left() - rect.left() > 72.0).then_some(egui::Rect::from_min_max(
-                rect.left_top(),
-                egui::pos2(lane_rect.left() - gutter_gap, rect.bottom()),
-            ));
-        let right_gutter =
-            (rect.right() - lane_rect.right() > 72.0).then_some(egui::Rect::from_min_max(
-                egui::pos2(lane_rect.right() + gutter_gap, rect.top()),
-                rect.right_bottom(),
-            ));
-
         Self::paint_background_gradient(ui, rect, palette.bg_top, palette.bg_bottom);
         if let Some(texture) = self.all_systems_background_texture(ctx) {
             let size = texture.size_vec2();
@@ -141,35 +113,6 @@ impl NativeArcadeUiApp {
                 );
             }
         }
-        let mut side_art: Vec<&PathBuf> =
-            Vec::with_capacity(assets.devices.len() + assets.controllers.len());
-        side_art.extend(assets.devices.iter());
-        side_art.extend(assets.controllers.iter());
-
-        let gutter_top = rect.top() + 10.0;
-        let left_column = left_gutter.map(|left_rect| {
-            egui::Rect::from_min_max(egui::pos2(left_rect.min.x, gutter_top), left_rect.max)
-                .shrink2(egui::vec2(8.0, 10.0))
-        });
-        let right_column = right_gutter.map(|right_rect| {
-            egui::Rect::from_min_max(egui::pos2(right_rect.min.x, gutter_top), right_rect.max)
-                .shrink2(egui::vec2(8.0, 10.0))
-        });
-
-        match (left_column, right_column) {
-            (Some(left_rect), Some(right_rect)) => {
-                let split_at = side_art.len().div_ceil(2);
-                self.paint_vertical_art_stack(ui, ctx, left_rect, &side_art[..split_at], 92, 14);
-                self.paint_vertical_art_stack(ui, ctx, right_rect, &side_art[split_at..], 84, 12);
-            }
-            (Some(left_rect), None) => {
-                self.paint_vertical_art_stack(ui, ctx, left_rect, &side_art, 90, 10);
-            }
-            (None, Some(right_rect)) => {
-                self.paint_vertical_art_stack(ui, ctx, right_rect, &side_art, 90, 10);
-            }
-            (None, None) => {}
-        }
     }
 
     fn paint_background_gradient(ui: &egui::Ui, rect: egui::Rect, top: Color32, bottom: Color32) {
@@ -180,67 +123,6 @@ impl NativeArcadeUiApp {
         mesh.colored_vertex(rect.left_bottom(), bottom);
         mesh.indices.extend_from_slice(&[0, 1, 2, 0, 2, 3]);
         ui.painter().add(egui::Shape::mesh(mesh));
-    }
-
-    fn paint_vertical_art_stack(
-        &mut self,
-        ui: &egui::Ui,
-        ctx: &egui::Context,
-        column_rect: egui::Rect,
-        paths: &[&PathBuf],
-        start_alpha: u8,
-        alpha_step: u8,
-    ) -> bool {
-        if paths.is_empty() || column_rect.width() <= 8.0 || column_rect.height() <= 8.0 {
-            return false;
-        }
-
-        let slot_height = column_rect.height() / paths.len() as f32;
-        let mut drew_any = false;
-        for (index, path) in paths.iter().enumerate() {
-            let slot = egui::Rect::from_min_max(
-                egui::pos2(
-                    column_rect.min.x,
-                    column_rect.min.y + slot_height * index as f32,
-                ),
-                egui::pos2(
-                    column_rect.max.x,
-                    column_rect.min.y + slot_height * (index + 1) as f32,
-                ),
-            )
-            .shrink2(egui::vec2(2.0, 6.0));
-            let alpha = start_alpha.saturating_sub(alpha_step.saturating_mul(index as u8));
-            self.paint_fitted_accent_texture(ui, ctx, slot, path, alpha);
-            drew_any = true;
-        }
-
-        drew_any
-    }
-
-    fn paint_fitted_accent_texture(
-        &mut self,
-        ui: &egui::Ui,
-        ctx: &egui::Context,
-        rect: egui::Rect,
-        path: &Path,
-        alpha: u8,
-    ) {
-        if rect.width() <= 8.0 || rect.height() <= 8.0 {
-            return;
-        }
-        let Some(texture) = self.themed_art_texture(ctx, path.to_path_buf()) else {
-            return;
-        };
-        let max_size = egui::vec2(rect.width(), rect.height());
-        let draw_size = fit_size(texture.size_vec2(), max_size);
-        let draw_rect = egui::Rect::from_center_size(rect.center(), draw_size);
-        let uv = egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0));
-        ui.painter().image(
-            texture.id(),
-            draw_rect,
-            uv,
-            Color32::from_rgba_premultiplied(255, 255, 255, alpha),
-        );
     }
 
     pub(crate) fn discover_asset_roots(rom_root: &Path) -> Vec<PathBuf> {
@@ -301,33 +183,6 @@ impl NativeArcadeUiApp {
             .and_then(|path| self.resolve_db_asset_path(path))
     }
 
-    fn resolve_existing_assets(&self, candidates: &[&str]) -> Vec<PathBuf> {
-        candidates
-            .iter()
-            .filter_map(|path| self.resolve_db_asset_path(path))
-            .collect()
-    }
-
-    fn resolve_all_theme_assets(&self) -> AllThemeAssets {
-        AllThemeAssets {
-            devices: self.resolve_existing_assets(&[
-                "/system-logos/Game-Boy-system.png",
-                "/system-logos/Game-Boy-Advance-SP-Mk1-Blue.png",
-                "/system-logos/N64-Console-Set.png",
-                "/system-logos/arcadesystem.png",
-                "/system-logos/221-2216289_image-gba-sp-and-light-blue-gameboy-sp.png",
-                "/system-logos/Dreamcast-Console-Set.png",
-            ]),
-            controllers: self.resolve_existing_assets(&[
-                "/system-logos/nescontroller.png",
-                "/system-logos/snescontroller.png",
-                "/system-logos/genesiscontroller.png",
-                "/system-logos/PSX-Original-Controller.png",
-                "/system-logos/PSX_2_controller.png",
-            ]),
-        }
-    }
-
     fn resolve_all_background_path(&self) -> Option<PathBuf> {
         self.resolve_db_asset_path("/system-logos/All-background.jpg")
     }
@@ -348,7 +203,7 @@ impl NativeArcadeUiApp {
             }
         }
 
-        self.resolve_db_asset_path("/system-logos/headerbackground.jpg")
+        self.resolve_db_asset_path("/system-logos/all_header.jpg")
     }
 
     fn resolve_header_title_path(&self) -> Option<PathBuf> {
@@ -383,21 +238,7 @@ impl NativeArcadeUiApp {
             }
         }
 
-        let candidate = match self.active_system() {
-            "NES" => "system-logos/nes_background.jpg",
-            "SNES" => "system-logos/snes_background.jpg",
-            "GENESIS" => "system-logos/genesis_background.jpg",
-            "GB" => "system-logos/gb_background.jpg",
-            "GBA" => "system-logos/gba_background.jpg",
-            "N64" => "system-logos/n64_background.webp",
-            "ARCADE" => "system-logos/arcade_background.jpg",
-            "PSX" => "system-logos/psx_background.jpg",
-            "PS2" => "system-logos/ps2_background.jpg",
-            "DREAMCAST" => "system-logos/dreamcast_background.jpg",
-            "DOS" => "system-logos/DOSbackGround.png",
-            _ => "system-logos/arcade_background.jpg",
-        };
-        self.resolve_db_asset_path(candidate)
+        self.resolve_all_background_path()
     }
 
     pub(crate) fn load_texture_from_path(
@@ -551,21 +392,6 @@ impl NativeArcadeUiApp {
         )
     }
 
-    pub(crate) fn themed_art_texture(
-        &mut self,
-        ctx: &egui::Context,
-        path: PathBuf,
-    ) -> Option<TextureHandle> {
-        Self::load_texture_from_path(
-            &mut self.assets.themed_art_textures,
-            &mut self.assets.image_load_failures,
-            ctx,
-            path,
-            "theme-art",
-            egui::TextureOptions::LINEAR,
-        )
-    }
-
     pub(crate) fn resolve_system_logo_path(&self, system: &str) -> Option<PathBuf> {
         if system == "ALL" {
             return None;
@@ -585,7 +411,7 @@ impl NativeArcadeUiApp {
             "SATURN" => "/system-logos/SegaSaturn_logo.png",
             "PCECD" => "/system-logos/pcecd_logo.png",
             "DOS" => "/system-logos/Msdos.png",
-            _ => "/system-logos/arcadesystem.png",
+            _ => return None,
         };
         self.resolve_db_asset_path(candidate)
     }
@@ -623,40 +449,6 @@ impl NativeArcadeUiApp {
             "DOS" => egui::vec2(42.0, 18.0),
             _ => egui::vec2(42.0, 15.0),
         }
-    }
-
-    pub(crate) fn resolve_system_controller_path(&self, system: &str) -> Option<PathBuf> {
-        let candidate = match system {
-            "NES" => "/system-logos/nescontroller.png",
-            "SNES" => "/system-logos/snescontroller.png",
-            "GENESIS" => "/system-logos/genesiscontroller.png",
-            "GB" => "/system-logos/Game-Boy-system.png",
-            "GBA" => "/system-logos/Game-Boy-Advance-SP-Mk1-Blue.png",
-            "N64" => "/system-logos/N64-Console-Set.png",
-            "ARCADE" => "/system-logos/arcadesystem.png",
-            "PSX" => "/system-logos/PSX-Original-Controller.png",
-            "PS2" => "/system-logos/PSX_2_controller.png",
-            "DREAMCAST" => "/system-logos/Dreamcast-Console-Set.png",
-            "DOS" => "/system-logos/dos_controller.png",
-            _ => "/system-logos/arcadesystem.png",
-        };
-        self.resolve_db_asset_path(candidate)
-    }
-
-    pub(crate) fn system_controller_texture(
-        &mut self,
-        ctx: &egui::Context,
-        system: &str,
-    ) -> Option<TextureHandle> {
-        let path = self.resolve_system_controller_path(system)?;
-        Self::load_texture_from_path(
-            &mut self.assets.system_controller_textures,
-            &mut self.assets.image_load_failures,
-            ctx,
-            path,
-            "system-controller",
-            egui::TextureOptions::LINEAR,
-        )
     }
 
     fn resolve_system_mapper_diagram_path(

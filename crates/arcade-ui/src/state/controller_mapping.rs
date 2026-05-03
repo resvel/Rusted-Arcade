@@ -18,6 +18,7 @@ pub(crate) struct ControllerMappingState {
     pub(crate) selected_device_key: Option<String>,
     pub(crate) pending_device_switch_key: Option<String>,
     pub(crate) pending_device_switch_label: Option<String>,
+    #[cfg_attr(not(feature = "gamepad"), allow(dead_code))]
     pub(crate) loaded_system: String,
     pub(crate) loaded_key: String,
     pub(crate) loaded_actions: BTreeMap<String, Option<MappingEntry>>,
@@ -89,6 +90,7 @@ impl ControllerMappingState {
         self.cancel_listening();
     }
 
+    #[cfg_attr(not(feature = "gamepad"), allow(dead_code))]
     pub(crate) fn queue_pending_device_switch(&mut self, key: String, label: String) {
         self.pending_device_switch_key = Some(key);
         self.pending_device_switch_label = Some(label);
@@ -109,6 +111,7 @@ impl ControllerMappingState {
         self.pending_device_switch_label = None;
     }
 
+    #[cfg_attr(not(feature = "gamepad"), allow(dead_code))]
     pub(crate) fn apply_pending_device_switch(&mut self) {
         let Some(key) = self.pending_device_switch_key.take() else {
             return;
@@ -130,10 +133,12 @@ impl ControllerMappingState {
         self.cancel_listening();
     }
 
+    #[cfg_attr(not(feature = "gamepad"), allow(dead_code))]
     pub(crate) fn needs_reload(&self, system: &str, desired_key: &str) -> bool {
         self.loaded_system != system || self.loaded_key != desired_key
     }
 
+    #[cfg_attr(not(feature = "gamepad"), allow(dead_code))]
     pub(crate) fn load_from_mapping(
         &mut self,
         system: String,
@@ -193,6 +198,7 @@ impl ControllerMappingState {
         self.selected_mapping_action = action;
     }
 
+    #[cfg_attr(not(feature = "gamepad"), allow(dead_code))]
     pub(crate) fn start_listening(&mut self, action: String, device_key: String) {
         self.selected_mapping_action = Some(action.clone());
         self.listening_action = Some(action);
@@ -213,10 +219,12 @@ impl ControllerMappingState {
         self.listening_device_key.as_deref()
     }
 
+    #[cfg_attr(not(feature = "gamepad"), allow(dead_code))]
     pub(crate) fn listening_needs_baseline(&self) -> bool {
         self.listening_needs_baseline
     }
 
+    #[cfg_attr(not(feature = "gamepad"), allow(dead_code))]
     pub(crate) fn set_listening_baseline<I>(&mut self, held_controls: I)
     where
         I: IntoIterator<Item = VisualControlId>,
@@ -225,6 +233,7 @@ impl ControllerMappingState {
         self.listening_needs_baseline = false;
     }
 
+    #[cfg_attr(not(feature = "gamepad"), allow(dead_code))]
     pub(crate) fn update_listening_held_controls<I>(&mut self, held_controls: I)
     where
         I: IntoIterator<Item = VisualControlId>,
@@ -232,6 +241,7 @@ impl ControllerMappingState {
         self.listening_held_controls = held_controls.into_iter().collect();
     }
 
+    #[cfg_attr(not(feature = "gamepad"), allow(dead_code))]
     pub(crate) fn listening_control_is_held(&self, control: VisualControlId) -> bool {
         self.listening_held_controls.contains(&control)
     }

@@ -194,21 +194,6 @@ impl NativeArcadeUiApp {
         let active_system = self.state.controller_mapping.input_system.clone();
         let available_width = ui.available_width();
         let wide_layout = available_width >= 620.0;
-        let max_image_height = if active_system == "ARCADE" {
-            if wide_layout {
-                120.0
-            } else if available_width >= 360.0 {
-                96.0
-            } else {
-                84.0
-            }
-        } else if wide_layout {
-            76.0
-        } else if available_width >= 360.0 {
-            64.0
-        } else {
-            52.0
-        };
         let palette = self.palette();
         let action_labels: &[&str] = if active_system == "ALL" {
             &[]
@@ -216,7 +201,6 @@ impl NativeArcadeUiApp {
             self.supported_mapping_actions(&active_system)
         };
         let action_count = action_labels.len();
-        let preview_texture = self.system_controller_texture(ctx, &active_system);
         let (mapping_targets, selected_target, has_device, dirty) = if active_system == "ALL" {
             (Vec::new(), None, false, false)
         } else {
@@ -397,8 +381,6 @@ impl NativeArcadeUiApp {
             }
 
             if active_system == "ALL" {
-                draw_controller_preview(ui, preview_texture.as_ref(), &palette, max_image_height);
-                ui.add_space(3.0);
                 ui.label(
                     egui::RichText::new("Pick a specific system to edit controller mappings.")
                         .size(11.0)
@@ -1504,29 +1486,6 @@ fn draw_device_preset_hint(
 
     ui.add_space(1.0);
     ui.label(egui::RichText::new(hint).size(11.0).color(palette.accent));
-}
-
-fn draw_controller_preview(
-    ui: &mut egui::Ui,
-    texture: Option<&egui::TextureHandle>,
-    palette: &ThemePalette,
-    max_image_height: f32,
-) {
-    egui::Frame::new()
-        .fill(palette.panel)
-        .stroke(egui::Stroke::new(1.0, palette.border))
-        .corner_radius(egui::CornerRadius::same(12))
-        .inner_margin(egui::Margin::same(6))
-        .show(ui, |ui| {
-            ui.vertical_centered(|ui| {
-                if let Some(texture) = texture {
-                    let max_size =
-                        egui::vec2((ui.available_width() - 2.0).max(180.0), max_image_height);
-                    let draw_size = fit_size(texture.size_vec2(), max_size);
-                    ui.add(egui::Image::new((texture.id(), draw_size)));
-                }
-            });
-        });
 }
 
 fn paint_system_action_hotspot(
