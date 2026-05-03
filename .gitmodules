@@ -1,0 +1,3 @@
+[submodule "third_party/mupen64plus-libretro-nx"]
+	path = third_party/mupen64plus-libretro-nx
+	url = https://github.com/libretro/mupen64plus-libretro-nx.git

@@ -651,3 +651,53 @@ Wire Arcade into the visual mapper using the revised labeled arcade control-pane
 ### Next Steps
 
 - Do one in-app visual pass on the Arcade mapper screen and nudge any hotspot if the joystick directions or `Start/Coin` circles feel off.
+
+## 2026-05-02 - Refresh commit reference
+
+### Goal
+
+Bring the persistent commit reference page up to date with the latest git history.
+
+### Findings
+
+- `docs/llm-wiki/commit-reference.md` was stale and stopped at `61e6c25`.
+- The latest recorded commit in the repo history is `43abe7d`.
+
+### Changes
+
+- `docs/llm-wiki/commit-reference.md`: appended the missing entries for `1141800`, `527d09f`, `c6d075f`, `1262ba8`, and `43abe7d`.
+
+### Tests
+
+- `git log --reverse --date=short --pretty=format:'%h | %ad | %s' | tail -n 10` — confirmed the current trailing commit history.
+
+### Next Steps
+
+- Refresh `commit-reference.md` again after the next docs or feature commit so it stays aligned with `git log`.
+
+## 2026-05-03 - Clean Git metadata noise
+
+### Goal
+
+Safely clean repository status noise around macOS `.DS_Store` files and the Mupen64Plus gitlink.
+
+### Findings
+
+- `crates/.DS_Store` was tracked even though the root `.gitignore` already ignores `.DS_Store` globally.
+- `third_party/mupen64plus-libretro-nx` was recorded as a gitlink at `4da9fcc`, but the repo had no `.gitmodules`, causing `git submodule status` to fail.
+- The nested Mupen checkout was already at the recorded gitlink commit and had one untracked `.DS_Store`.
+
+### Changes
+
+- Added `.gitmodules` for `third_party/mupen64plus-libretro-nx` using its existing origin URL.
+- Stopped tracking `crates/.DS_Store` with `git rm --cached`, leaving the local file ignored on disk.
+- Removed the untracked `.DS_Store` inside the Mupen checkout.
+
+### Tests
+
+- `git submodule status` now succeeds and reports `4da9fcc95d83d309639f4fffa816689f07c8c665`.
+- `git -C third_party/mupen64plus-libretro-nx status --short --branch` now shows only `develop...origin/develop [ahead 4]`.
+
+### Next Steps
+
+- Commit the `.gitmodules` addition and `crates/.DS_Store` removal when ready.

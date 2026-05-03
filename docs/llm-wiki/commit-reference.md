@@ -92,4 +92,9 @@ c4c2d49 | 2026-04-30 | chore(submodule): bump mupen64plus-libretro-nx to fix reg
 a8b7973 | 2026-05-01 | Refine SVG hotspot overlays for SNES, Genesis, N64, and PSX
 cdda147 | 2026-05-01 | Refine controller hotspot overlays
 61e6c25 | 2026-05-01 | Add direct press-to-bind controller mapping
+1141800 | 2026-05-02 | docs: add commit history reference
+527d09f | 2026-05-02 | style: rustfmt assets.rs
+c6d075f | 2026-05-02 | style: rustfmt controller_mapper.rs
+1262ba8 | 2026-05-02 | docs: add initial llm-wiki bug, decision, and external pages
+43abe7d | 2026-05-02 | Add visual mapper layouts for more systems
 ```
