@@ -55,6 +55,40 @@ recentRun*.log
 /public/system-logos/snescontroller.jpeg
 /public/system-logos/snescontroller.png
 
+# Track only the system mapper SVGs and hotspot overlays used by the app.
+/public/controller-mapper/
+/public/gamepads/**
+!/public/gamepads/
+!/public/gamepads/controllercons.2.1/
+!/public/gamepads/controllercons.2.1/svg/
+!/public/gamepads/controllercons.2.1/svg/outline/
+!/public/gamepads/controllercons.2.1/svg/outline/arcade.svg
+!/public/gamepads/controllercons.2.1/svg/outline/dreamcast.svg
+!/public/gamepads/controllercons.2.1/svg/outline/gb.svg
+!/public/gamepads/controllercons.2.1/svg/outline/gba.svg
+!/public/gamepads/controllercons.2.1/svg/outline/mega-drive.svg
+!/public/gamepads/controllercons.2.1/svg/outline/n64.svg
+!/public/gamepads/controllercons.2.1/svg/outline/nes.svg
+!/public/gamepads/controllercons.2.1/svg/outline/pc-engine.svg
+!/public/gamepads/controllercons.2.1/svg/outline/ps1.svg
+!/public/gamepads/controllercons.2.1/svg/outline/ps2.svg
+!/public/gamepads/controllercons.2.1/svg/outline/sega-saturn.svg
+!/public/gamepads/controllercons.2.1/svg/outline/snes.svg
+!/public/gamepads/hotspots/
+!/public/gamepads/hotspots/outline/
+!/public/gamepads/hotspots/outline/arcade.hotspots.svg
+!/public/gamepads/hotspots/outline/dreamcast.hotspots.svg
+!/public/gamepads/hotspots/outline/gb.hotspots.svg
+!/public/gamepads/hotspots/outline/gba.hotspots.svg
+!/public/gamepads/hotspots/outline/genesis.hotspots.svg
+!/public/gamepads/hotspots/outline/n64.hotspots.svg
+!/public/gamepads/hotspots/outline/nes.hotspots.svg
+!/public/gamepads/hotspots/outline/pc-engine.hotspots.svg
+!/public/gamepads/hotspots/outline/ps2.hotspots.svg
+!/public/gamepads/hotspots/outline/psx.hotspots.svg
+!/public/gamepads/hotspots/outline/saturn.hotspots.svg
+!/public/gamepads/hotspots/outline/snes.hotspots.svg
+
 # Local third-party scratch copies/backups
 /third_party/mupen64plus-libretro-nx/
 /third_party/*-backup-*/
