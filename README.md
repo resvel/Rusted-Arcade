@@ -1,6 +1,6 @@
-# Personal Arcade Native
+# Rusted Arcade
 
-Personal Arcade Native is a Rust desktop libretro frontend for a local game library. It is built around `eframe`/`egui`, SQLite, native audio/input, and dynamically loaded libretro cores.
+Rusted Arcade is a Rust desktop libretro frontend for a local game library. It is built around `eframe`/`egui`, SQLite, native audio/input, and dynamically loaded libretro cores.
 
 The current development target is macOS, especially Apple Silicon. Release readiness and runtime validation are focused on macOS.
 
