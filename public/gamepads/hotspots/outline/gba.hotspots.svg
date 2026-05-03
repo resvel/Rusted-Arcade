@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <circle id="gba-up" data-action="Up" data-label="Up" cx="10.97" cy="26.54" r="2.18" />
+  <circle id="gba-down" data-action="Down" data-label="Down" cx="10.97" cy="31.15" r="2.18" />
+  <circle id="gba-left" data-action="Left" data-label="Left" cx="8.66" cy="28.85" r="2.18" />
+  <circle id="gba-right" data-action="Right" data-label="Right" cx="13.27" cy="28.85" r="2.18" />
+  <circle id="gba-start" data-action="Start" data-label="Start" cx="14.01" cy="36.50" r="1.45" />
+  <circle id="gba-select" data-action="Select" data-label="Select" cx="14.01" cy="39.81" r="1.45" />
+  <circle id="gba-b" data-action="B" data-label="B" cx="49.05" cy="30.24" r="2.28" />
+  <circle id="gba-a" data-action="A" data-label="A" cx="54.20" cy="27.82" r="2.28" />
+  <rect id="gba-l" data-action="L" data-label="L" x="8.96" y="15.80" width="6.92" height="2.56" />
+  <rect id="gba-r" data-action="R" data-label="R" x="48.12" y="15.80" width="6.92" height="2.56" />
+</svg>

@@ -1039,8 +1039,7 @@ impl NativeArcadeUiApp {
                 let dpad_right_debug = button_debug_data(&gamepad, Button::DPadRight);
                 let mut guide_debug = button_debug_data(&gamepad, Button::Mode);
                 let mut right_thumb_debug = button_debug_data(&gamepad, Button::RightThumb);
-                let dpad_up_pressed =
-                    (has_dpad_buttons && dpad_up_debug.is_pressed) || raw_dpad.up;
+                let dpad_up_pressed = (has_dpad_buttons && dpad_up_debug.is_pressed) || raw_dpad.up;
                 let dpad_down_pressed =
                     (has_dpad_buttons && dpad_down_debug.is_pressed) || raw_dpad.down;
                 let dpad_left_pressed =
@@ -1105,7 +1104,11 @@ impl NativeArcadeUiApp {
                     right_shoulder: button_pressed_digital(&gamepad, Button::RightTrigger),
                     guide: guide_debug.effective_is_pressed,
                     left_trigger: trigger_axis_value(&gamepad, Axis::LeftZ, Button::LeftTrigger2),
-                    right_trigger: trigger_axis_value(&gamepad, Axis::RightZ, Button::RightTrigger2),
+                    right_trigger: trigger_axis_value(
+                        &gamepad,
+                        Axis::RightZ,
+                        Button::RightTrigger2,
+                    ),
                     select: button_pressed_digital(&gamepad, Button::Select),
                     start: button_pressed_digital(&gamepad, Button::Start),
                     left_thumb: button_pressed_digital(&gamepad, Button::LeftThumb),
@@ -4921,6 +4924,62 @@ mod tests {
         );
         assert_eq!(
             action_to_retro_binding("PCECD", "Select", None),
+            Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_SELECT))
+        );
+    }
+
+    #[test]
+    fn gba_action_bindings_map_to_expected_retropad_ids() {
+        assert_eq!(
+            action_to_retro_binding("GBA", "A", None),
+            Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_A))
+        );
+        assert_eq!(
+            action_to_retro_binding("GBA", "B", None),
+            Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_B))
+        );
+        assert_eq!(
+            action_to_retro_binding("GBA", "L", None),
+            Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_L))
+        );
+        assert_eq!(
+            action_to_retro_binding("GBA", "R", None),
+            Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_R))
+        );
+        assert_eq!(
+            action_to_retro_binding("GBA", "Start", None),
+            Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_START))
+        );
+        assert_eq!(
+            action_to_retro_binding("GBA", "Select", None),
+            Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_SELECT))
+        );
+    }
+
+    #[test]
+    fn arcade_action_bindings_map_to_expected_retropad_ids() {
+        assert_eq!(
+            action_to_retro_binding("ARCADE", "A", None),
+            Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_A))
+        );
+        assert_eq!(
+            action_to_retro_binding("ARCADE", "B", None),
+            Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_B))
+        );
+        assert_eq!(
+            action_to_retro_binding("ARCADE", "C", None),
+            Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_X))
+        );
+        assert_eq!(
+            action_to_retro_binding("ARCADE", "D", None),
+            Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_Y))
+        );
+        assert_eq!(
+            action_to_retro_binding("ARCADE", "Start", None),
+            Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_START))
+        );
+        assert_eq!(
+            action_to_retro_binding("ARCADE", "Coin", None),
             Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_SELECT))
         );
     }

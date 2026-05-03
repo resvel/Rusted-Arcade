@@ -1,0 +1,47 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" class="ccsvg ccsvg--outline ccsvg--arcade">
+  <g
+    class="ccsvg__primary"
+    fill="none"
+    stroke="currentColor"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  >
+    <rect x="2.5" y="6.5" width="59" height="49" rx="3.2" stroke-width="0.9" />
+
+    <circle cx="16.7" cy="31.0" r="6.5" stroke-width="0.8" />
+    <circle cx="16.7" cy="31.0" r="3.6" stroke-width="0.8" />
+    <path
+      stroke-width="0.8"
+      d="M15.2 28.4V31.2C15.2 32.5 15.9 33.2 17.1 33.2C18.3 33.2 19 32.5 19 31.2V28.4"
+    />
+    <circle cx="16.7" cy="23.6" r="4.7" stroke-width="0.8" />
+
+    <circle cx="39.2" cy="20.2" r="4.25" stroke-width="0.8" />
+    <circle cx="39.2" cy="20.2" r="3.35" stroke-width="0.5" />
+    <circle cx="49.1" cy="20.2" r="4.25" stroke-width="0.8" />
+    <circle cx="49.1" cy="20.2" r="3.35" stroke-width="0.5" />
+    <circle cx="39.2" cy="31.2" r="4.25" stroke-width="0.8" />
+    <circle cx="39.2" cy="31.2" r="3.35" stroke-width="0.5" />
+    <circle cx="49.1" cy="31.2" r="4.25" stroke-width="0.8" />
+    <circle cx="49.1" cy="31.2" r="3.35" stroke-width="0.5" />
+
+    <circle cx="35.6" cy="44.4" r="2.95" stroke-width="0.7" />
+    <circle cx="35.6" cy="44.0" r="2.35" stroke-width="0.45" />
+    <circle cx="46.7" cy="44.4" r="2.95" stroke-width="0.7" />
+    <circle cx="46.7" cy="44.0" r="2.35" stroke-width="0.45" />
+  </g>
+
+  <g
+    fill="currentColor"
+    font-family="Arial, Helvetica, sans-serif"
+    text-anchor="middle"
+    dominant-baseline="middle"
+  >
+    <text x="39.2" y="20.5" font-size="3.5" font-weight="700">A</text>
+    <text x="49.1" y="20.5" font-size="3.5" font-weight="700">B</text>
+    <text x="39.2" y="31.5" font-size="3.5" font-weight="700">C</text>
+    <text x="49.1" y="31.5" font-size="3.5" font-weight="700">D</text>
+    <text x="35.6" y="44.0" font-size="2.0">Start</text>
+    <text x="46.7" y="44.0" font-size="2.0">Coin</text>
+  </g>
+</svg>

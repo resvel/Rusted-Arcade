@@ -33,7 +33,11 @@ The actual source code is the source of truth. These notes are a compressed work
 
 ## Decisions
 
+- [Arcade Controller Art Evaluation](decisions/arcade-controller-art-evaluation.md)
 - [Cross Platform Graphics Strategy](decisions/cross-platform-graphics-strategy.md)
+- [GBA Controller Art Evaluation](decisions/gba-controller-art-evaluation.md)
+- [Game Boy Controller Art Evaluation](decisions/game-boy-controller-art-evaluation.md)
+- [PC Engine Controller Support](decisions/pc-engine-controller-support.md)
 
 ## External Research
 

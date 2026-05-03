@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" class="ccsvg ccsvg--outline ccsvg--pc-engine">
+  <g class="ccsvg__primary" transform="translate(0 15.4667) scale(0.0533333)">
+    <g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
+      <path stroke-width="10" d="M600 66C600 40 600 26 600 0" />
+      <path stroke-width="6" d="M560 91C560 66 578 48 600 48C622 48 640 66 640 91" />
+
+      <path
+        stroke-width="18"
+        d="M150 96H1050C1082 96 1108 122 1108 154V468C1108 500 1082 526 1050 526H150C118 526 92 500 92 468V154C92 122 118 96 150 96Z"
+      />
+
+      <circle cx="269" cy="304" r="92" stroke-width="10" />
+      <path
+        stroke-width="10"
+        d="M226 188H312V261H385V347H312V420H226V347H153V261H226Z"
+      />
+      <circle cx="269" cy="304" r="26" stroke-width="8" />
+
+      <ellipse cx="511" cy="403" rx="48" ry="20" stroke-width="7" />
+      <ellipse cx="689" cy="403" rx="48" ry="20" stroke-width="7" />
+
+      <circle cx="859" cy="325" r="63" stroke-width="7" />
+      <circle cx="1000" cy="325" r="63" stroke-width="7" />
+
+      <rect x="806" y="194" width="104" height="39" rx="10" stroke-width="7" />
+      <rect x="948" y="194" width="104" height="39" rx="10" stroke-width="7" />
+      <line x1="831" y1="213.5" x2="886" y2="213.5" stroke-width="6" />
+      <line x1="973" y1="213.5" x2="1028" y2="213.5" stroke-width="6" />
+    </g>
+
+    <g fill="currentColor">
+      <rect x="495" y="396" width="32" height="8" rx="4" />
+      <rect x="673" y="396" width="32" height="8" rx="4" />
+
+      <rect x="845" y="298" width="10" height="54" rx="5" />
+      <rect x="863" y="298" width="10" height="54" rx="5" />
+      <rect x="995" y="298" width="10" height="54" rx="5" />
+
+      <rect x="821" y="199" width="30" height="29" rx="6" />
+      <rect x="1012" y="199" width="30" height="29" rx="6" />
+    </g>
+  </g>
+</svg>

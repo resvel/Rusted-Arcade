@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <circle id="gb-up" data-action="Up" data-label="Up" cx="21.95" cy="39.32" r="2.30" />
+  <circle id="gb-down" data-action="Down" data-label="Down" cx="21.95" cy="45.13" r="2.30" />
+  <circle id="gb-left" data-action="Left" data-label="Left" cx="19.08" cy="42.22" r="2.30" />
+  <circle id="gb-right" data-action="Right" data-label="Right" cx="24.79" cy="42.22" r="2.30" />
+  <circle id="gb-a" data-action="A" data-label="A" cx="44.51" cy="40.69" r="2.95" />
+  <circle id="gb-b" data-action="B" data-label="B" cx="38.65" cy="42.98" r="2.95" />
+  <rect id="gb-select" data-action="Select" data-label="Select" x="24.42" y="49.04" width="5.58" height="2.88" />
+  <rect id="gb-start" data-action="Start" data-label="Start" x="30.24" y="49.04" width="5.58" height="2.88" />
+</svg>

@@ -18,6 +18,10 @@ pub(crate) enum SystemControllerLayout {
     Nes,
     Snes,
     Genesis,
+    Arcade,
+    PcEngine,
+    GameBoy,
+    GameBoyAdvance,
     N64,
     Psx,
     Ps2,
@@ -825,6 +829,54 @@ const GENESIS_SYSTEM_HOTSPOTS: [SystemActionHotspot; 8] = [
     system_rect("Start", "Start", 0.520, 0.735, 0.120, 0.048),
 ];
 
+const ARCADE_SYSTEM_HOTSPOTS: [SystemActionHotspot; 10] = [
+    system_circle("Up", "Up", 0.261, 0.408, 0.030),
+    system_circle("Down", "Down", 0.261, 0.562, 0.030),
+    system_circle("Left", "Left", 0.183, 0.484, 0.030),
+    system_circle("Right", "Right", 0.339, 0.484, 0.030),
+    system_circle("A", "A", 0.612, 0.316, 0.047),
+    system_circle("B", "B", 0.767, 0.316, 0.047),
+    system_circle("C", "C", 0.612, 0.487, 0.047),
+    system_circle("D", "D", 0.767, 0.487, 0.047),
+    system_circle("Start", "Start", 0.556, 0.688, 0.040),
+    system_circle("Coin", "Coin", 0.730, 0.688, 0.040),
+];
+
+const PC_ENGINE_SYSTEM_HOTSPOTS: [SystemActionHotspot; 8] = [
+    system_circle("Up", "Up", 0.224, 0.429, 0.030),
+    system_circle("Down", "Down", 0.224, 0.561, 0.030),
+    system_circle("Left", "Left", 0.158, 0.495, 0.030),
+    system_circle("Right", "Right", 0.290, 0.495, 0.030),
+    system_circle("II", "II", 0.716, 0.513, 0.052),
+    system_circle("I", "I", 0.833, 0.513, 0.052),
+    system_rect("Select", "Select", 0.426, 0.578, 0.080, 0.034),
+    system_rect("Run", "Run", 0.574, 0.578, 0.080, 0.034),
+];
+
+const GB_SYSTEM_HOTSPOTS: [SystemActionHotspot; 8] = [
+    system_circle("Up", "Up", 0.343, 0.614, 0.036),
+    system_circle("Down", "Down", 0.343, 0.705, 0.036),
+    system_circle("Left", "Left", 0.298, 0.660, 0.036),
+    system_circle("Right", "Right", 0.387, 0.660, 0.036),
+    system_circle("A", "A", 0.695, 0.636, 0.046),
+    system_circle("B", "B", 0.604, 0.672, 0.046),
+    system_rect("Select", "Select", 0.425, 0.789, 0.072, 0.038),
+    system_rect("Start", "Start", 0.516, 0.789, 0.072, 0.038),
+];
+
+const GBA_SYSTEM_HOTSPOTS: [SystemActionHotspot; 10] = [
+    system_circle("Up", "Up", 0.171, 0.415, 0.034),
+    system_circle("Down", "Down", 0.171, 0.487, 0.034),
+    system_circle("Left", "Left", 0.135, 0.451, 0.034),
+    system_circle("Right", "Right", 0.207, 0.451, 0.034),
+    system_circle("Start", "Start", 0.219, 0.570, 0.024),
+    system_circle("Select", "Select", 0.219, 0.622, 0.024),
+    system_circle("B", "B", 0.766, 0.473, 0.040),
+    system_circle("A", "A", 0.847, 0.435, 0.040),
+    system_rect("L", "L", 0.194, 0.257, 0.108, 0.040),
+    system_rect("R", "R", 0.806, 0.257, 0.108, 0.040),
+];
+
 const N64_SYSTEM_HOTSPOTS: [SystemActionHotspot; 14] = [
     system_circle("Up", "Up", 0.190, 0.430, 0.030),
     system_circle("Down", "Down", 0.190, 0.575, 0.030),
@@ -1019,6 +1071,10 @@ pub(crate) fn system_controller_layout_for_system(system: &str) -> Option<System
         "NES" => Some(SystemControllerLayout::Nes),
         "SNES" => Some(SystemControllerLayout::Snes),
         "GENESIS" => Some(SystemControllerLayout::Genesis),
+        "ARCADE" => Some(SystemControllerLayout::Arcade),
+        "PCECD" | "PC_ENGINE" | "PCENGINE" => Some(SystemControllerLayout::PcEngine),
+        "GB" => Some(SystemControllerLayout::GameBoy),
+        "GBA" => Some(SystemControllerLayout::GameBoyAdvance),
         "N64" => Some(SystemControllerLayout::N64),
         "PSX" => Some(SystemControllerLayout::Psx),
         "PS2" => Some(SystemControllerLayout::Ps2),
@@ -1034,6 +1090,14 @@ pub(crate) fn system_controller_mapper_art_asset(layout: SystemControllerLayout)
         SystemControllerLayout::Snes => "/gamepads/controllercons.2.1/svg/outline/snes.svg",
         SystemControllerLayout::Genesis => {
             "/gamepads/controllercons.2.1/svg/outline/mega-drive.svg"
+        }
+        SystemControllerLayout::Arcade => "/gamepads/controllercons.2.1/svg/outline/arcade.svg",
+        SystemControllerLayout::PcEngine => {
+            "/gamepads/controllercons.2.1/svg/outline/pc-engine.svg"
+        }
+        SystemControllerLayout::GameBoy => "/gamepads/controllercons.2.1/svg/outline/gb.svg",
+        SystemControllerLayout::GameBoyAdvance => {
+            "/gamepads/controllercons.2.1/svg/outline/gba.svg"
         }
         SystemControllerLayout::N64 => "/gamepads/controllercons.2.1/svg/outline/n64.svg",
         SystemControllerLayout::Psx => "/gamepads/controllercons.2.1/svg/outline/ps1.svg",
@@ -1054,6 +1118,10 @@ pub(crate) fn system_controller_hotspot_overlay_asset(
         SystemControllerLayout::Nes => "/gamepads/hotspots/outline/nes.hotspots.svg",
         SystemControllerLayout::Snes => "/gamepads/hotspots/outline/snes.hotspots.svg",
         SystemControllerLayout::Genesis => "/gamepads/hotspots/outline/genesis.hotspots.svg",
+        SystemControllerLayout::Arcade => "/gamepads/hotspots/outline/arcade.hotspots.svg",
+        SystemControllerLayout::PcEngine => "/gamepads/hotspots/outline/pc-engine.hotspots.svg",
+        SystemControllerLayout::GameBoy => "/gamepads/hotspots/outline/gb.hotspots.svg",
+        SystemControllerLayout::GameBoyAdvance => "/gamepads/hotspots/outline/gba.hotspots.svg",
         SystemControllerLayout::N64 => "/gamepads/hotspots/outline/n64.hotspots.svg",
         SystemControllerLayout::Psx => "/gamepads/hotspots/outline/psx.hotspots.svg",
         SystemControllerLayout::Ps2 => "/gamepads/hotspots/outline/ps2.hotspots.svg",
@@ -1069,6 +1137,10 @@ pub(crate) fn system_controller_hotspots(
         SystemControllerLayout::Nes => &NES_SYSTEM_HOTSPOTS,
         SystemControllerLayout::Snes => &SNES_SYSTEM_HOTSPOTS,
         SystemControllerLayout::Genesis => &GENESIS_SYSTEM_HOTSPOTS,
+        SystemControllerLayout::Arcade => &ARCADE_SYSTEM_HOTSPOTS,
+        SystemControllerLayout::PcEngine => &PC_ENGINE_SYSTEM_HOTSPOTS,
+        SystemControllerLayout::GameBoy => &GB_SYSTEM_HOTSPOTS,
+        SystemControllerLayout::GameBoyAdvance => &GBA_SYSTEM_HOTSPOTS,
         SystemControllerLayout::N64 => &N64_SYSTEM_HOTSPOTS,
         SystemControllerLayout::Psx => &PSX_SYSTEM_HOTSPOTS,
         SystemControllerLayout::Ps2 => &PS2_SYSTEM_HOTSPOTS,
@@ -2028,6 +2100,22 @@ mod tests {
             Some(SystemControllerLayout::Genesis)
         );
         assert_eq!(
+            system_controller_layout_for_system("ARCADE"),
+            Some(SystemControllerLayout::Arcade)
+        );
+        assert_eq!(
+            system_controller_layout_for_system("PCECD"),
+            Some(SystemControllerLayout::PcEngine)
+        );
+        assert_eq!(
+            system_controller_layout_for_system("GB"),
+            Some(SystemControllerLayout::GameBoy)
+        );
+        assert_eq!(
+            system_controller_layout_for_system("GBA"),
+            Some(SystemControllerLayout::GameBoyAdvance)
+        );
+        assert_eq!(
             system_controller_layout_for_system("PSX"),
             Some(SystemControllerLayout::Psx)
         );
@@ -2035,7 +2123,10 @@ mod tests {
             system_controller_layout_for_system("SATURN"),
             Some(SystemControllerLayout::Saturn)
         );
-        assert_eq!(system_controller_layout_for_system("GBA"), None);
+        assert_eq!(
+            system_controller_layout_for_system("GBA"),
+            Some(SystemControllerLayout::GameBoyAdvance)
+        );
         assert_eq!(system_controller_layout_for_system("DOS"), None);
     }
 
@@ -2043,6 +2134,14 @@ mod tests {
     fn system_native_action_detection_matches_supported_visual_layouts() {
         assert!(system_action_is_native("NES", "A"));
         assert!(system_action_is_native("SNES", "L"));
+        assert!(system_action_is_native("ARCADE", "D"));
+        assert!(system_action_is_native("ARCADE", "Coin"));
+        assert!(system_action_is_native("PCECD", "I"));
+        assert!(system_action_is_native("PCECD", "Run"));
+        assert!(system_action_is_native("GB", "B"));
+        assert!(system_action_is_native("GB", "Start"));
+        assert!(system_action_is_native("GBA", "Select"));
+        assert!(system_action_is_native("GBA", "L"));
         assert!(system_action_is_native("PS2", "Right Stick Left"));
         assert!(system_action_is_native("N64", "C-Up"));
         assert!(!system_action_is_native("NES", "Quick Save"));
@@ -2135,6 +2234,22 @@ mod tests {
             (
                 SystemControllerLayout::Genesis,
                 include_str!("../../../public/gamepads/hotspots/outline/genesis.hotspots.svg"),
+            ),
+            (
+                SystemControllerLayout::Arcade,
+                include_str!("../../../public/gamepads/hotspots/outline/arcade.hotspots.svg"),
+            ),
+            (
+                SystemControllerLayout::PcEngine,
+                include_str!("../../../public/gamepads/hotspots/outline/pc-engine.hotspots.svg"),
+            ),
+            (
+                SystemControllerLayout::GameBoy,
+                include_str!("../../../public/gamepads/hotspots/outline/gb.hotspots.svg"),
+            ),
+            (
+                SystemControllerLayout::GameBoyAdvance,
+                include_str!("../../../public/gamepads/hotspots/outline/gba.hotspots.svg"),
             ),
             (
                 SystemControllerLayout::N64,
