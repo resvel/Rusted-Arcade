@@ -11,6 +11,8 @@ use eframe::egui;
 use tracing::{info, Level};
 use tracing_subscriber::EnvFilter;
 
+const APP_TITLE: &str = "Rusted Arcade";
+
 fn init_tracing() {
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
     if let Some(log_path) = std::env::var_os("ARCADE_LOG_FILE").map(PathBuf::from) {
@@ -151,7 +153,7 @@ fn main() -> Result<()> {
 
     let native_options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_title("Personal Arcade Native")
+            .with_title(APP_TITLE)
             .with_inner_size([1440.0, 900.0])
             .with_min_inner_size([1024.0, 720.0])
             .with_icon(load_app_icon().context("failed to load window icon")?),
@@ -162,7 +164,7 @@ fn main() -> Result<()> {
     };
 
     eframe::run_native(
-        "Personal Arcade Native",
+        APP_TITLE,
         native_options,
         Box::new(move |cc| {
             NativeArcadeUiApp::configure_egui(&cc.egui_ctx);

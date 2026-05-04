@@ -139,7 +139,7 @@ impl ExternalVulkanWindow {
             let _: () = msg_send![content_view, setLayer: metal_layer];
 
             // Configure the window.
-            let title = CString::new("Personal Arcade N64 (Vulkan)").unwrap();
+            let title = CString::new("Rusted Arcade N64 (Vulkan)").unwrap();
             let ns_string_class = class!(NSString);
             let ns_title: *mut Object =
                 msg_send![ns_string_class, stringWithUTF8String: title.as_ptr()];
