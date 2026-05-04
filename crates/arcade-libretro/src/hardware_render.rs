@@ -1067,11 +1067,37 @@ fn sampled_non_black_pixels(pixels: &[u8], width: u32, height: u32) -> usize {
     non_black_samples
 }
 
+fn read_gl_framebuffer_rgba(
+    gl: &glow::Context,
+    framebuffer: Option<glow::Framebuffer>,
+    width: u32,
+    height: u32,
+) -> Vec<u8> {
+    let mut pixels = vec![0_u8; width as usize * height as usize * 4];
+    unsafe {
+        gl.bind_framebuffer(glow::FRAMEBUFFER, framebuffer);
+        if framebuffer.is_some() {
+            gl.read_buffer(glow::COLOR_ATTACHMENT0);
+        }
+        gl.read_pixels(
+            0,
+            0,
+            width as i32,
+            height as i32,
+            glow::RGBA,
+            glow::UNSIGNED_BYTE,
+            glow::PixelPackData::Slice(Some(&mut pixels)),
+        );
+    }
+    pixels
+}
+
 const PLAY_TEXTURE_REVALIDATE_INTERVAL_FRAMES: u64 = 120;
 const PLAY_TEXTURE_SWITCH_COOLDOWN_FRAMES: u64 = 90;
 const PLAY_TEXTURE_STALE_RESCAN_STREAK: u32 = 24;
 const PLAY_TEXTURE_STALE_INVALIDATE_STREAK: u32 = 64;
 const PLAY_TEXTURE_SWITCH_SCORE_MARGIN: f32 = 0.22;
+const PLAY_TEXTURE_EXACT_SCORE_EPSILON: f32 = 0.001;
 
 fn play_texture_u64_env(name: &str, default: u64) -> u64 {
     std::env::var(name)
@@ -1111,6 +1137,69 @@ fn play_texture_switch_score_margin() -> f32 {
         "ARCADE_PLAY_GL_SWITCH_SCORE_MARGIN",
         PLAY_TEXTURE_SWITCH_SCORE_MARGIN,
     )
+}
+
+fn play_texture_score_is_exact(score: f32) -> bool {
+    score.is_finite() && score.abs() <= PLAY_TEXTURE_EXACT_SCORE_EPSILON
+}
+
+fn read_play_callback_framebuffer(
+    gl: &glow::Context,
+    pending: PendingHardwareFrame,
+) -> Option<Vec<u8>> {
+    let framebuffer = pending.callback_framebuffer?;
+    if !unsafe { gl.is_framebuffer(framebuffer) } {
+        return None;
+    }
+
+    let previous_binding = unsafe { gl.get_parameter_i32(glow::FRAMEBUFFER_BINDING) };
+    let previous_framebuffer =
+        NonZeroU32::new(previous_binding as u32).map(glow::NativeFramebuffer);
+    unsafe {
+        gl.bind_framebuffer(glow::FRAMEBUFFER, Some(framebuffer));
+    }
+    let status = unsafe { gl.check_framebuffer_status(glow::FRAMEBUFFER) };
+    let pixels = if status == glow::FRAMEBUFFER_COMPLETE {
+        let pixels = read_gl_framebuffer_rgba(gl, Some(framebuffer), pending.width, pending.height);
+        let non_black = sampled_non_black_pixels(&pixels, pending.width, pending.height);
+        if non_black > 0 {
+            if std::env::var_os("LIBRETRO_TRACE_GL_READBACK").is_some() {
+                let (_, _, first_rgba, center_rgba) =
+                    summarize_rgba_debug_pixels_grid(&pixels, pending.width, pending.height);
+                eprintln!(
+                    "play gl framebuffer: using callback FBO {} non_black_samples={non_black}/64 first_rgba={:02x},{:02x},{:02x},{:02x} center_rgba={:02x},{:02x},{:02x},{:02x}",
+                    framebuffer.0.get(),
+                    first_rgba[0],
+                    first_rgba[1],
+                    first_rgba[2],
+                    first_rgba[3],
+                    center_rgba[0],
+                    center_rgba[1],
+                    center_rgba[2],
+                    center_rgba[3],
+                );
+            }
+            Some(pixels)
+        } else {
+            if std::env::var_os("LIBRETRO_TRACE_GL_READBACK").is_some() {
+                eprintln!(
+                    "play gl framebuffer: callback FBO {} is black, falling back",
+                    framebuffer.0.get()
+                );
+            }
+            None
+        }
+    } else {
+        if std::env::var_os("LIBRETRO_TRACE_GL_READBACK").is_some() {
+            eprintln!(
+                "play gl framebuffer: callback FBO {} incomplete status=0x{status:x}, falling back",
+                framebuffer.0.get()
+            );
+        }
+        None
+    };
+    unsafe { gl.bind_framebuffer(glow::FRAMEBUFFER, previous_framebuffer) };
+    pixels
 }
 
 fn play_texture_signature_from_rgba(
@@ -1234,14 +1323,17 @@ fn should_switch_play_texture_candidate(
     if force_due_to_stale {
         return true;
     }
-    if frame_counter.saturating_sub(last_switch_frame) < switch_cooldown {
-        return false;
-    }
     if !candidate_score.is_finite() {
         return false;
     }
     if !current_score.is_finite() {
         return true;
+    }
+    if play_texture_score_is_exact(candidate_score) && !play_texture_score_is_exact(current_score) {
+        return true;
+    }
+    if frame_counter.saturating_sub(last_switch_frame) < switch_cooldown {
+        return false;
     }
     candidate_score + score_margin < current_score
 }
@@ -1358,9 +1450,18 @@ pub(super) fn read_opengl_render_frame(
     let mut play_scan_reason: Option<&'static str> = None;
     let mut play_cached_fast_path_pixels: Option<Vec<u8>> = None;
 
+    if is_play {
+        if let Some(pixels) = read_play_callback_framebuffer(&gl, pending) {
+            emu_game_texture = None;
+            play_texture_cache_score = f32::INFINITY;
+            play_blank_frame_streak = 0;
+            play_cached_fast_path_pixels = Some(pixels);
+        }
+    }
+
     // Fast path: if a previous scan found the core's game-frame texture (visible here because
     // the core uses a shared GL context), read from it directly via a temporary FBO.
-    if let Some(game_tex) = emu_game_texture {
+    if let Some(game_tex) = emu_game_texture.filter(|_| play_cached_fast_path_pixels.is_none()) {
         let mut pixels = vec![0_u8; pending.width as usize * pending.height as usize * 4];
         if let Ok(temp_fbo) = unsafe { gl.create_framebuffer() } {
             let mut fbo_complete = false;
@@ -1545,23 +1646,7 @@ pub(super) fn read_opengl_render_frame(
     }
 
     let read_framebuffer = |framebuffer: Option<glow::Framebuffer>| -> Vec<u8> {
-        let mut pixels = vec![0_u8; pending.width as usize * pending.height as usize * 4];
-        unsafe {
-            gl.bind_framebuffer(glow::FRAMEBUFFER, framebuffer);
-            if framebuffer.is_some() {
-                gl.read_buffer(glow::COLOR_ATTACHMENT0);
-            }
-            gl.read_pixels(
-                0,
-                0,
-                pending.width as i32,
-                pending.height as i32,
-                glow::RGBA,
-                glow::UNSIGNED_BYTE,
-                glow::PixelPackData::Slice(Some(&mut pixels)),
-            );
-        }
-        pixels
+        read_gl_framebuffer_rgba(&gl, framebuffer, pending.width, pending.height)
     };
 
     // Flush pending GPU work so read_pixels captures the completed frame.
@@ -2115,6 +2200,20 @@ mod tests {
         ));
         assert!(should_switch_play_texture_candidate(
             false, 1.0, 0.5, 200, 0
+        ));
+    }
+
+    #[test]
+    fn switch_decision_prefers_exact_candidate_without_waiting_for_cooldown() {
+        assert!(should_switch_play_texture_candidate(
+            false, 1.507, 0.0, 115, 90
+        ));
+    }
+
+    #[test]
+    fn switch_decision_keeps_cooldown_for_non_exact_candidates() {
+        assert!(!should_switch_play_texture_candidate(
+            false, 1.507, 0.4, 115, 90
         ));
     }
 

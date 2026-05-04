@@ -130,6 +130,7 @@ struct PendingHardwareFrame {
     width: u32,
     height: u32,
     bottom_left_origin: bool,
+    callback_framebuffer: Option<glow::NativeFramebuffer>,
 }
 
 #[derive(Debug, Default)]

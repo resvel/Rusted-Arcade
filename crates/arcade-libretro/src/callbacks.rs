@@ -1115,6 +1115,7 @@ pub(super) unsafe extern "C" fn retro_video_refresh(
                 width,
                 height,
                 bottom_left_origin,
+                callback_framebuffer: None,
             });
             return;
         }
@@ -1186,6 +1187,14 @@ pub(super) unsafe extern "C" fn retro_video_refresh(
                 let is_vulkan = state.context_type == Some(RETRO_HW_CONTEXT_VULKAN);
                 (blo, gl, is_vulkan)
             };
+            let callback_framebuffer = if is_vulkan_hw_context {
+                None
+            } else {
+                gl.as_ref().and_then(|gl| {
+                    let binding = unsafe { gl.get_parameter_i32(glow::FRAMEBUFFER_BINDING) };
+                    NonZeroU32::new(binding as u32).map(glow::NativeFramebuffer)
+                })
+            };
             if !is_vulkan_hw_context {
                 if let Some(gl) = gl {
                     unsafe { gl.finish() };
@@ -1231,6 +1240,7 @@ pub(super) unsafe extern "C" fn retro_video_refresh(
                 width: source_width,
                 height: source_height,
                 bottom_left_origin,
+                callback_framebuffer,
             });
             return;
         }
