@@ -34,6 +34,8 @@ const PLAY_AUDIO_QUEUE_CORRECTION: f64 = 0.0;
 #[cfg(feature = "audio")]
 const PLAY_AUDIO_DRIFT_LIMIT: f64 = 0.02;
 #[cfg(feature = "audio")]
+const PLAY_AUDIO_UNDERFLOW_CONCEALMENT_FRAMES: usize = 512;
+#[cfg(feature = "audio")]
 const FLYCAST_AUDIO_TARGET_LATENCY_SECS: f64 = 0.120;
 #[cfg(feature = "audio")]
 const FLYCAST_AUDIO_MAX_LATENCY_SECS: f64 = 0.300;
@@ -51,6 +53,7 @@ struct AudioProfile {
     resample_ratio_drift_limit: f64,
     trim_to_target_on_overflow: bool,
     drop_excess_silence_when_buffered: bool,
+    underflow_concealment_frames: usize,
 }
 
 #[cfg(feature = "audio")]
@@ -62,6 +65,9 @@ impl AudioProfile {
         state.resample_ratio_drift_limit = self.resample_ratio_drift_limit;
         state.trim_to_target_on_overflow = self.trim_to_target_on_overflow;
         state.drop_excess_silence_when_buffered = self.drop_excess_silence_when_buffered;
+        state.underflow_concealment_frames = self.underflow_concealment_frames;
+        state.underflow_concealment_remaining = 0;
+        state.last_output_frame = (0, 0);
     }
 }
 
@@ -74,6 +80,7 @@ fn default_audio_profile() -> AudioProfile {
         resample_ratio_drift_limit: DEFAULT_AUDIO_RESAMPLE_RATIO_DRIFT_LIMIT,
         trim_to_target_on_overflow: true,
         drop_excess_silence_when_buffered: false,
+        underflow_concealment_frames: 0,
     }
 }
 
@@ -86,6 +93,7 @@ fn play_audio_profile_defaults() -> AudioProfile {
         resample_ratio_drift_limit: PLAY_AUDIO_DRIFT_LIMIT,
         trim_to_target_on_overflow: false,
         drop_excess_silence_when_buffered: true,
+        underflow_concealment_frames: PLAY_AUDIO_UNDERFLOW_CONCEALMENT_FRAMES,
     }
 }
 
@@ -101,6 +109,7 @@ fn flycast_audio_profile_defaults() -> AudioProfile {
         resample_ratio_drift_limit: FLYCAST_AUDIO_DRIFT_LIMIT,
         trim_to_target_on_overflow: false,
         drop_excess_silence_when_buffered: true,
+        underflow_concealment_frames: 0,
     }
 }
 
@@ -136,6 +145,11 @@ fn apply_audio_profile_for_core(state: &mut AudioState, core_name: &str) {
             "ARCADE_PLAY_AUDIO_DRIFT_LIMIT",
             profile.resample_ratio_drift_limit,
         );
+        profile.underflow_concealment_frames =
+            std::env::var("ARCADE_PLAY_AUDIO_UNDERFLOW_CONCEALMENT_FRAMES")
+                .ok()
+                .and_then(|value| value.parse::<usize>().ok())
+                .unwrap_or(profile.underflow_concealment_frames);
     } else if core_name.eq_ignore_ascii_case("flycast") {
         profile.target_latency_secs = audio_profile_f64_env(
             "ARCADE_FLYCAST_AUDIO_TARGET_LATENCY_SECS",
@@ -343,6 +357,7 @@ pub(super) fn configure_audio_profile_for_core(core_name: &str) {
                 resample_ratio_drift_limit = state.resample_ratio_drift_limit,
                 trim_to_target_on_overflow = state.trim_to_target_on_overflow,
                 drop_excess_silence_when_buffered = state.drop_excess_silence_when_buffered,
+                underflow_concealment_frames = state.underflow_concealment_frames,
                 "applied audio profile"
             );
         }
@@ -381,6 +396,7 @@ mod tests {
         let profile = audio_profile_for_core_defaults("pcsx_rearmed");
         assert!(profile.trim_to_target_on_overflow);
         assert!(!profile.drop_excess_silence_when_buffered);
+        assert_eq!(profile.underflow_concealment_frames, 0);
         assert_eq!(
             profile.resample_queue_correction,
             DEFAULT_AUDIO_RESAMPLE_QUEUE_CORRECTION
@@ -394,6 +410,29 @@ mod tests {
             DEFAULT_AUDIO_TARGET_LATENCY_SECS
         );
         assert_eq!(profile.max_latency_secs, DEFAULT_AUDIO_MAX_LATENCY_SECS);
+    }
+
+    #[test]
+    fn play_profile_enables_short_underflow_concealment() {
+        let profile = audio_profile_for_core_defaults("play");
+        assert_eq!(
+            profile.underflow_concealment_frames,
+            PLAY_AUDIO_UNDERFLOW_CONCEALMENT_FRAMES
+        );
+    }
+
+    #[test]
+    fn pop_stereo_frame_fades_last_output_during_underflow() {
+        let mut state = AudioState {
+            underflow_concealment_frames: 2,
+            underflow_concealment_remaining: 2,
+            last_output_frame: (1000, -1000),
+            ..AudioState::default()
+        };
+
+        assert_eq!(pop_stereo_frame(&mut state), (1000, -1000));
+        assert_eq!(pop_stereo_frame(&mut state), (500, -500));
+        assert_eq!(pop_stereo_frame(&mut state), (0, 0));
     }
 }
 
@@ -636,14 +675,33 @@ fn pop_stereo_frame(state: &mut AudioState) -> (i16, i16) {
     let left = left.unwrap_or(0);
     let right = right.unwrap_or(0);
     if underflow {
+        let concealed =
+            if state.underflow_concealment_remaining > 0 && state.last_output_frame != (0, 0) {
+                let fade = state.underflow_concealment_remaining as f32
+                    / state.underflow_concealment_frames.max(1) as f32;
+                state.underflow_concealment_remaining =
+                    state.underflow_concealment_remaining.saturating_sub(1);
+                Some((
+                    (state.last_output_frame.0 as f32 * fade).round() as i16,
+                    (state.last_output_frame.1 as f32 * fade).round() as i16,
+                ))
+            } else {
+                None
+            };
         if UNDERFLOW_WARN_COUNT.fetch_add(1, Ordering::Relaxed) < 20 {
             eprintln!(
                 "[AUDIO-RS] underflow: q_before={queue_before} produced=({}, {}) q_after={}",
-                left,
-                right,
+                concealed.map(|frame| frame.0).unwrap_or(left),
+                concealed.map(|frame| frame.1).unwrap_or(right),
                 state.samples.len(),
             );
         }
+        if let Some(frame) = concealed {
+            return frame;
+        }
+    } else {
+        state.last_output_frame = (left, right);
+        state.underflow_concealment_remaining = state.underflow_concealment_frames;
     }
     if left == 0 && right == 0 {
         if SILENCE_WARN_COUNT.fetch_add(1, Ordering::Relaxed) < 10 {

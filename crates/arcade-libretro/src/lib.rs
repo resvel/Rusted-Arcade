@@ -86,6 +86,15 @@ pub struct AudioQueueSnapshot {
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct FrameTimingSnapshot {
+    pub frames: u64,
+    pub run_total_us: u64,
+    pub frame_delivery_total_us: u64,
+    pub last_run_us: u64,
+    pub last_frame_delivery_us: u64,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum PixelFormat {
     #[default]
     Argb1555,
@@ -155,6 +164,9 @@ struct AudioState {
     resample_ratio_drift_limit: f64,
     trim_to_target_on_overflow: bool,
     drop_excess_silence_when_buffered: bool,
+    underflow_concealment_frames: usize,
+    underflow_concealment_remaining: usize,
+    last_output_frame: (i16, i16),
     produced_samples_total: u64,
     consumed_samples_total: u64,
     trimmed_samples_total: u64,
@@ -179,6 +191,9 @@ impl Default for AudioState {
             resample_ratio_drift_limit: DEFAULT_AUDIO_RESAMPLE_RATIO_DRIFT_LIMIT,
             trim_to_target_on_overflow: true,
             drop_excess_silence_when_buffered: false,
+            underflow_concealment_frames: 0,
+            underflow_concealment_remaining: 0,
+            last_output_frame: (0, 0),
             produced_samples_total: 0,
             consumed_samples_total: 0,
             trimmed_samples_total: 0,
@@ -492,6 +507,7 @@ struct HostRuntime {
     video_coordinator: Mutex<VideoCoordinator>,
     hw_render_state: Mutex<HardwareRenderState>,
     vulkan_present_metrics: Mutex<VulkanPresentMetricsState>,
+    frame_timing: Mutex<FrameTimingSnapshot>,
     shutdown_requested: AtomicBool,
 }
 
@@ -1555,6 +1571,10 @@ impl LibretroHost {
         })
     }
 
+    pub fn frame_timing_snapshot(&self) -> FrameTimingSnapshot {
+        *self.runtime.frame_timing.lock()
+    }
+
     pub fn video_aspect_ratio(&self) -> Option<f32> {
         let aspect = self.loaded.lock().as_ref().map(|c| c.video_aspect_ratio)?;
         if aspect.is_finite() && aspect > 0.0 {
@@ -1774,6 +1794,7 @@ impl LibretroHost {
             Err(err) => FrameDelivery::Error(err.to_string()),
         };
         record_frame_delivery_metrics(&self.runtime, using_vulkan_hw_render, &delivery);
+        record_frame_timing(&self.runtime, run_duration, present_duration);
         if let Some(snapshot) = frontend_gl_state.as_ref() {
             restore_frontend_gl_state(&self.runtime, snapshot);
         }

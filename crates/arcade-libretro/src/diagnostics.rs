@@ -221,6 +221,27 @@ pub(super) fn record_frame_delivery_metrics(
     }
 }
 
+pub(super) fn record_frame_timing(
+    runtime: &HostRuntime,
+    run_duration: std::time::Duration,
+    frame_delivery_duration: std::time::Duration,
+) {
+    let run_us = duration_to_us(run_duration);
+    let frame_delivery_us = duration_to_us(frame_delivery_duration);
+    let mut timing = runtime.frame_timing.lock();
+    timing.frames = timing.frames.saturating_add(1);
+    timing.run_total_us = timing.run_total_us.saturating_add(run_us);
+    timing.frame_delivery_total_us = timing
+        .frame_delivery_total_us
+        .saturating_add(frame_delivery_us);
+    timing.last_run_us = run_us;
+    timing.last_frame_delivery_us = frame_delivery_us;
+}
+
+fn duration_to_us(duration: std::time::Duration) -> u64 {
+    duration.as_micros().min(u64::MAX as u128) as u64
+}
+
 pub(super) fn vulkan_present_fail_fast_error(runtime: &HostRuntime) -> Option<String> {
     let _ = runtime;
     // Fail-fast gating is intentionally disabled for now so unhealthy runs

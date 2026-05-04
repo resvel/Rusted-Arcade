@@ -17,6 +17,8 @@ pub(crate) struct PlayPerfSample {
     pub(crate) tick_hz: f64,
     pub(crate) avg_gap_ms: f64,
     pub(crate) avg_work_ms: f64,
+    pub(crate) avg_core_run_ms: f64,
+    pub(crate) avg_frame_delivery_ms: f64,
     pub(crate) avg_frames_per_tick: f64,
 }
 
@@ -51,6 +53,9 @@ pub(crate) struct PlaySessionState {
     pub(crate) perf_tick_count: u32,
     pub(crate) perf_gap_ns: u64,
     pub(crate) perf_work_ns: u64,
+    pub(crate) perf_core_run_ns: u64,
+    pub(crate) perf_frame_delivery_ns: u64,
+    pub(crate) perf_timed_frames: u64,
     pub(crate) perf_frames_run: u32,
 }
 
@@ -87,6 +92,9 @@ impl Default for PlaySessionState {
             perf_tick_count: 0,
             perf_gap_ns: 0,
             perf_work_ns: 0,
+            perf_core_run_ns: 0,
+            perf_frame_delivery_ns: 0,
+            perf_timed_frames: 0,
             perf_frames_run: 0,
         }
     }
@@ -164,11 +172,21 @@ impl PlaySessionState {
         &mut self,
         gap: Duration,
         work: Duration,
+        core_run_work: Duration,
+        frame_delivery_work: Duration,
+        timed_frames: u64,
         frames_run: u32,
     ) -> Option<PlayPerfSample> {
         self.perf_tick_count = self.perf_tick_count.saturating_add(1);
         self.perf_gap_ns = self.perf_gap_ns.saturating_add(duration_to_ns(gap));
         self.perf_work_ns = self.perf_work_ns.saturating_add(duration_to_ns(work));
+        self.perf_core_run_ns = self
+            .perf_core_run_ns
+            .saturating_add(duration_to_ns(core_run_work));
+        self.perf_frame_delivery_ns = self
+            .perf_frame_delivery_ns
+            .saturating_add(duration_to_ns(frame_delivery_work));
+        self.perf_timed_frames = self.perf_timed_frames.saturating_add(timed_frames);
         self.perf_frames_run = self.perf_frames_run.saturating_add(frames_run);
 
         if self.perf_tick_count < PLAY_PERF_SAMPLE_TICKS {
@@ -178,6 +196,9 @@ impl PlaySessionState {
         let ticks = self.perf_tick_count;
         let total_gap_ns = self.perf_gap_ns.max(1);
         let total_work_ns = self.perf_work_ns;
+        let total_core_run_ns = self.perf_core_run_ns;
+        let total_frame_delivery_ns = self.perf_frame_delivery_ns;
+        let total_timed_frames = self.perf_timed_frames.max(1);
         let total_frames_run = self.perf_frames_run;
 
         self.reset_perf_counters();
@@ -187,6 +208,10 @@ impl PlaySessionState {
             tick_hz: ticks as f64 * 1_000_000_000.0 / total_gap_ns as f64,
             avg_gap_ms: total_gap_ns as f64 / ticks as f64 / 1_000_000.0,
             avg_work_ms: total_work_ns as f64 / ticks as f64 / 1_000_000.0,
+            avg_core_run_ms: total_core_run_ns as f64 / total_timed_frames as f64 / 1_000_000.0,
+            avg_frame_delivery_ms: total_frame_delivery_ns as f64
+                / total_timed_frames as f64
+                / 1_000_000.0,
             avg_frames_per_tick: total_frames_run as f64 / ticks as f64,
         })
     }
@@ -298,6 +323,9 @@ impl PlaySessionState {
         self.perf_tick_count = 0;
         self.perf_gap_ns = 0;
         self.perf_work_ns = 0;
+        self.perf_core_run_ns = 0;
+        self.perf_frame_delivery_ns = 0;
+        self.perf_timed_frames = 0;
         self.perf_frames_run = 0;
     }
 }

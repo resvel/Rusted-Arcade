@@ -14,6 +14,8 @@ const AUDIO_MASTER_DRAIN_WATERMARK: f64 = 1.25;
 const AUDIO_MASTER_REFILL_WATERMARK: f64 = 0.85;
 const PLAY_MAX_CATCH_UP_FRAMES: u32 = 2;
 const PLAY_CATCH_UP_DEBT_CAP: f64 = 0.75;
+const PLAY_REPAINT_WAKE_AHEAD: std::time::Duration = std::time::Duration::from_millis(2);
+const PLAY_REPAINT_IMMEDIATE_THRESHOLD: std::time::Duration = std::time::Duration::from_micros(500);
 
 fn audio_master_frames_to_run(snapshot: Option<AudioQueueSnapshot>) -> Option<u32> {
     let snapshot = snapshot?;
@@ -59,6 +61,27 @@ fn play_frames_to_run_for_elapsed(
     let leftover = elapsed.saturating_sub(advance);
 
     (frames_to_run, catch_up_debt, leftover)
+}
+
+fn play_repaint_delay_for_remaining(remaining: std::time::Duration) -> Option<std::time::Duration> {
+    if remaining <= PLAY_REPAINT_IMMEDIATE_THRESHOLD {
+        return None;
+    }
+
+    let delay = remaining.saturating_sub(PLAY_REPAINT_WAKE_AHEAD);
+    if delay <= PLAY_REPAINT_IMMEDIATE_THRESHOLD {
+        None
+    } else {
+        Some(delay)
+    }
+}
+
+fn request_play_runner_repaint(ctx: &egui::Context, remaining: std::time::Duration) {
+    if let Some(delay) = play_repaint_delay_for_remaining(remaining) {
+        ctx.request_repaint_after(delay);
+    } else {
+        ctx.request_repaint();
+    }
 }
 
 impl NativeArcadeUiApp {
@@ -111,10 +134,11 @@ impl NativeArcadeUiApp {
             active_core.is_some_and(|core| core.eq_ignore_ascii_case("flycast"));
         let low_latency_pacing = arcade_low_latency_pacing || dreamcast_low_latency_pacing;
         let play_tight_pacing = active_core.is_some_and(|core| core.eq_ignore_ascii_case("play"));
+        let audio_snapshot = self.host.audio_queue_snapshot();
         let audio_master_frames = audio_master_frames_to_run(
             active_core
                 .is_some_and(is_audio_master_pacing_core)
-                .then(|| self.host.audio_queue_snapshot())
+                .then_some(audio_snapshot)
                 .flatten(),
         );
         if audio_master_frames.is_some() {
@@ -130,7 +154,7 @@ impl NativeArcadeUiApp {
         } else if play_tight_pacing {
             if elapsed < frame_interval {
                 let remaining = frame_interval - elapsed;
-                ctx.request_repaint_after(remaining);
+                request_play_runner_repaint(ctx, remaining);
                 return;
             }
         } else if elapsed < frame_interval {
@@ -213,6 +237,7 @@ impl NativeArcadeUiApp {
 
         let mut latest_frame = None;
         let tick_started_at = std::time::Instant::now();
+        let frame_timing_before = self.host.frame_timing_snapshot();
         let mut frames_executed = 0;
         let mut terminal_frame_error = None;
         for _ in 0..frames_to_run {
@@ -228,6 +253,20 @@ impl NativeArcadeUiApp {
                 }
             }
         }
+        let frame_timing_after = self.host.frame_timing_snapshot();
+        let timed_frames = frame_timing_after
+            .frames
+            .saturating_sub(frame_timing_before.frames);
+        let core_run_work = std::time::Duration::from_micros(
+            frame_timing_after
+                .run_total_us
+                .saturating_sub(frame_timing_before.run_total_us),
+        );
+        let frame_delivery_work = std::time::Duration::from_micros(
+            frame_timing_after
+                .frame_delivery_total_us
+                .saturating_sub(frame_timing_before.frame_delivery_total_us),
+        );
         if frames_executed > 0 {
             self.mark_retro_keyboard_frame_advanced();
             self.flush_deferred_retro_keyboard_releases();
@@ -242,11 +281,14 @@ impl NativeArcadeUiApp {
             self.update_frame_texture(ctx, frame);
         }
         let tick_work = tick_started_at.elapsed();
-        if let Some(sample) = self
-            .state
-            .play
-            .record_perf_tick(elapsed, tick_work, frames_executed)
-        {
+        if let Some(sample) = self.state.play.record_perf_tick(
+            elapsed,
+            tick_work,
+            core_run_work,
+            frame_delivery_work,
+            timed_frames,
+            frames_executed,
+        ) {
             let target_fps = if frame_interval.as_nanos() > 0 {
                 1.0 / frame_interval.as_secs_f64()
             } else {
@@ -260,17 +302,27 @@ impl NativeArcadeUiApp {
             };
             info!(
                 target: "arcade_ui::perf",
-                "play_tick system={} core={} ticks={} tick_hz={:.1} avg_gap_ms={:.2} avg_work_ms={:.2} avg_frames_per_tick={:.2} effective_run_fps={:.2} target_fps={:.2} speed_ratio={:.3}",
+                "play_tick system={} core={} ticks={} tick_hz={:.1} avg_gap_ms={:.2} avg_work_ms={:.2} avg_core_run_ms={:.2} avg_frame_delivery_ms={:.2} avg_frames_per_tick={:.2} effective_run_fps={:.2} target_fps={:.2} speed_ratio={:.3} audio_queue_frames={} audio_target_frames={} audio_source_rate={:.1} audio_output_rate={:.1}",
                 self.state.play.active_system.as_deref().unwrap_or("unknown"),
                 self.state.play.active_core.as_deref().unwrap_or("unknown"),
                 sample.ticks,
                 sample.tick_hz,
                 sample.avg_gap_ms,
                 sample.avg_work_ms,
+                sample.avg_core_run_ms,
+                sample.avg_frame_delivery_ms,
                 sample.avg_frames_per_tick,
                 effective_run_fps,
                 target_fps,
                 speed_ratio,
+                audio_snapshot.map(|snapshot| snapshot.queue_frames).unwrap_or(0),
+                audio_snapshot.map(|snapshot| snapshot.target_frames).unwrap_or(0),
+                audio_snapshot
+                    .map(|snapshot| snapshot.source_rate)
+                    .unwrap_or(0.0),
+                audio_snapshot
+                    .map(|snapshot| snapshot.output_rate)
+                    .unwrap_or(0.0),
             );
         }
 
@@ -308,7 +360,7 @@ impl NativeArcadeUiApp {
                 std::time::Instant::now().duration_since(self.state.play.last_frame_run_at);
             if post_tick_elapsed < target_interval {
                 let remaining = target_interval - post_tick_elapsed;
-                ctx.request_repaint_after(remaining);
+                request_play_runner_repaint(ctx, remaining);
             } else {
                 self.state.play.catch_up_frame_debt = self.state.play.catch_up_frame_debt.min(0.25);
                 ctx.request_repaint();
@@ -624,5 +676,25 @@ mod tests {
         assert_eq!(frames_to_run, 2);
         assert_eq!(debt, 0.0);
         assert_eq!(leftover, std::time::Duration::from_millis(2));
+    }
+
+    #[test]
+    fn play_repaint_delay_wakes_ahead_of_frame_deadline() {
+        assert_eq!(
+            play_repaint_delay_for_remaining(std::time::Duration::from_millis(10)),
+            Some(std::time::Duration::from_millis(8))
+        );
+    }
+
+    #[test]
+    fn play_repaint_delay_requests_immediate_near_deadline() {
+        assert_eq!(
+            play_repaint_delay_for_remaining(std::time::Duration::from_millis(2)),
+            None
+        );
+        assert_eq!(
+            play_repaint_delay_for_remaining(std::time::Duration::from_micros(400)),
+            None
+        );
     }
 }
