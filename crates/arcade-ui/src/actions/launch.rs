@@ -86,6 +86,7 @@ impl NativeArcadeUiApp {
                             self.state.current_view,
                         );
                         self.assets.last_frame_texture = None;
+                        self.assets.last_gl_texture_frame = None;
                         self.show_play_bar();
                     }
                     Err(err) => {

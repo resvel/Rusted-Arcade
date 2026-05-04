@@ -247,6 +247,8 @@ pub(super) fn release_hw_render_target(state: &mut HardwareRenderState) {
         gl.delete_renderbuffer(target.depth_stencil);
         gl.delete_texture(target.color_texture);
         gl.delete_framebuffer(target.framebuffer);
+        gl.delete_texture(target.play_present_texture);
+        gl.delete_framebuffer(target.play_present_framebuffer);
     }
 }
 
@@ -357,22 +359,34 @@ pub(super) fn ensure_hw_render_target(target_size: (u32, u32)) -> Result<()> {
     }
 
     let (width, height) = target_size;
-    let (framebuffer, color_texture, depth_stencil) = if let Some(existing) = state.target.as_ref()
-    {
-        (
-            existing.framebuffer,
-            existing.color_texture,
-            existing.depth_stencil,
-        )
-    } else {
-        let color_texture = unsafe { gl.create_texture() }
-            .map_err(|err| anyhow!("failed to create hardware-render texture: {err}"))?;
-        let framebuffer = unsafe { gl.create_framebuffer() }
-            .map_err(|err| anyhow!("failed to create hardware-render framebuffer: {err}"))?;
-        let depth_stencil = unsafe { gl.create_renderbuffer() }
-            .map_err(|err| anyhow!("failed to create hardware-render depth buffer: {err}"))?;
-        (framebuffer, color_texture, depth_stencil)
-    };
+    let (framebuffer, color_texture, depth_stencil, play_present_framebuffer, play_present_texture) =
+        if let Some(existing) = state.target.as_ref() {
+            (
+                existing.framebuffer,
+                existing.color_texture,
+                existing.depth_stencil,
+                existing.play_present_framebuffer,
+                existing.play_present_texture,
+            )
+        } else {
+            let color_texture = unsafe { gl.create_texture() }
+                .map_err(|err| anyhow!("failed to create hardware-render texture: {err}"))?;
+            let framebuffer = unsafe { gl.create_framebuffer() }
+                .map_err(|err| anyhow!("failed to create hardware-render framebuffer: {err}"))?;
+            let depth_stencil = unsafe { gl.create_renderbuffer() }
+                .map_err(|err| anyhow!("failed to create hardware-render depth buffer: {err}"))?;
+            let play_present_texture = unsafe { gl.create_texture() }
+                .map_err(|err| anyhow!("failed to create Play presentation texture: {err}"))?;
+            let play_present_framebuffer = unsafe { gl.create_framebuffer() }
+                .map_err(|err| anyhow!("failed to create Play presentation framebuffer: {err}"))?;
+            (
+                framebuffer,
+                color_texture,
+                depth_stencil,
+                play_present_framebuffer,
+                play_present_texture,
+            )
+        };
 
     unsafe {
         let previous_texture = gl.get_parameter_i32(glow::TEXTURE_BINDING_2D);
@@ -444,18 +458,66 @@ pub(super) fn ensure_hw_render_target(target_size: (u32, u32)) -> Result<()> {
         );
 
         let status = gl.check_framebuffer_status(glow::FRAMEBUFFER);
+
+        gl.bind_texture(glow::TEXTURE_2D, Some(play_present_texture));
+        gl.tex_parameter_i32(
+            glow::TEXTURE_2D,
+            glow::TEXTURE_MIN_FILTER,
+            glow::LINEAR as i32,
+        );
+        gl.tex_parameter_i32(
+            glow::TEXTURE_2D,
+            glow::TEXTURE_MAG_FILTER,
+            glow::LINEAR as i32,
+        );
+        gl.tex_parameter_i32(
+            glow::TEXTURE_2D,
+            glow::TEXTURE_WRAP_S,
+            glow::CLAMP_TO_EDGE as i32,
+        );
+        gl.tex_parameter_i32(
+            glow::TEXTURE_2D,
+            glow::TEXTURE_WRAP_T,
+            glow::CLAMP_TO_EDGE as i32,
+        );
+        gl.tex_image_2d(
+            glow::TEXTURE_2D,
+            0,
+            glow::RGBA8 as i32,
+            width as i32,
+            height as i32,
+            0,
+            glow::RGBA,
+            glow::UNSIGNED_BYTE,
+            glow::PixelUnpackData::Slice(None),
+        );
+        gl.bind_framebuffer(glow::FRAMEBUFFER, Some(play_present_framebuffer));
+        gl.framebuffer_texture_2d(
+            glow::FRAMEBUFFER,
+            glow::COLOR_ATTACHMENT0,
+            glow::TEXTURE_2D,
+            Some(play_present_texture),
+            0,
+        );
+        gl.draw_buffer(glow::COLOR_ATTACHMENT0);
+        gl.read_buffer(glow::COLOR_ATTACHMENT0);
+        let play_present_status = gl.check_framebuffer_status(glow::FRAMEBUFFER);
+
         gl.bind_renderbuffer(glow::RENDERBUFFER, previous_renderbuffer);
         gl.bind_framebuffer(glow::FRAMEBUFFER, previous_framebuffer);
         gl.bind_texture(glow::TEXTURE_2D, previous_texture);
 
-        if status != glow::FRAMEBUFFER_COMPLETE {
+        if status != glow::FRAMEBUFFER_COMPLETE || play_present_status != glow::FRAMEBUFFER_COMPLETE
+        {
             if state.target.is_none() {
                 gl.delete_renderbuffer(depth_stencil);
                 gl.delete_texture(color_texture);
                 gl.delete_framebuffer(framebuffer);
+                gl.delete_texture(play_present_texture);
+                gl.delete_framebuffer(play_present_framebuffer);
             }
             return Err(anyhow!(
-                "failed to create a complete hardware-render framebuffer (status=0x{status:04x})"
+                "failed to create a complete hardware-render framebuffer (status=0x{status:04x}, play_present_status=0x{play_present_status:04x})"
             ));
         }
     }
@@ -470,6 +532,9 @@ pub(super) fn ensure_hw_render_target(target_size: (u32, u32)) -> Result<()> {
         target.play_texture_stale_signature_streak = 0;
         target.play_texture_last_scan_frame = 0;
         target.play_texture_last_switch_frame = 0;
+        target.play_present_width = width;
+        target.play_present_height = height;
+        target.play_present_generation = 0;
         // Invalidate the emu-side FBO: it has a depth-stencil renderbuffer at the old size
         // and must be recreated in the emu thread's context at the new size.
         target.emu_ctx_framebuffer = None;
@@ -482,6 +547,11 @@ pub(super) fn ensure_hw_render_target(target_size: (u32, u32)) -> Result<()> {
             width,
             height,
             emu_ctx_framebuffer: None,
+            play_present_framebuffer,
+            play_present_texture,
+            play_present_width: width,
+            play_present_height: height,
+            play_present_generation: 0,
             emu_game_texture: None,
             play_texture_cache_score: f32::INFINITY,
             play_blank_frame_streak: 0,
@@ -1090,6 +1160,143 @@ fn read_gl_framebuffer_rgba(
         );
     }
     pixels
+}
+
+pub(super) fn should_use_play_direct_gl_texture(runtime: &HostRuntime) -> bool {
+    is_play_core(runtime) && std::env::var_os("ARCADE_PLAY_GL_CPU_READBACK").is_none()
+}
+
+pub(super) fn take_play_direct_gl_texture_frame(
+    runtime: &HostRuntime,
+    pending: PendingHardwareFrame,
+) -> Result<Option<GlTextureFrame>> {
+    if !should_use_play_direct_gl_texture(runtime) {
+        return Ok(None);
+    }
+
+    let gl = {
+        let state = runtime.hw_render_state.lock();
+        state.frontend_gl_context.clone()
+    }
+    .ok_or_else(|| anyhow!("Play direct GL frame requested without an active GL context"))?;
+
+    let mut state = runtime.hw_render_state.lock();
+    let Some(target) = state.target.as_mut() else {
+        return Ok(None);
+    };
+    let source_framebuffer = pending.callback_framebuffer.unwrap_or_else(|| {
+        if std::env::var_os("LIBRETRO_TRACE_GL_READBACK").is_some() {
+            eprintln!("play direct gl: no callback FBO; using host render target FBO");
+        }
+        target.framebuffer
+    });
+    if !unsafe { gl.is_framebuffer(source_framebuffer) } {
+        return Ok(None);
+    }
+
+    let previous_read_framebuffer = unsafe { gl.get_parameter_i32(glow::READ_FRAMEBUFFER_BINDING) };
+    let previous_draw_framebuffer = unsafe { gl.get_parameter_i32(glow::DRAW_FRAMEBUFFER_BINDING) };
+    let previous_texture = unsafe { gl.get_parameter_i32(glow::TEXTURE_BINDING_2D) };
+    let scissor_was_enabled = unsafe { gl.is_enabled(glow::SCISSOR_TEST) };
+    let previous_read_framebuffer =
+        NonZeroU32::new(previous_read_framebuffer as u32).map(glow::NativeFramebuffer);
+    let previous_draw_framebuffer =
+        NonZeroU32::new(previous_draw_framebuffer as u32).map(glow::NativeFramebuffer);
+    let previous_texture = NonZeroU32::new(previous_texture as u32).map(glow::NativeTexture);
+
+    unsafe {
+        if target.play_present_width != pending.width
+            || target.play_present_height != pending.height
+        {
+            gl.bind_texture(glow::TEXTURE_2D, Some(target.play_present_texture));
+            gl.tex_image_2d(
+                glow::TEXTURE_2D,
+                0,
+                glow::RGBA8 as i32,
+                pending.width as i32,
+                pending.height as i32,
+                0,
+                glow::RGBA,
+                glow::UNSIGNED_BYTE,
+                glow::PixelUnpackData::Slice(None),
+            );
+            target.play_present_width = pending.width;
+            target.play_present_height = pending.height;
+            target.play_present_generation = 0;
+        }
+
+        gl.bind_framebuffer(glow::READ_FRAMEBUFFER, Some(source_framebuffer));
+        gl.read_buffer(glow::COLOR_ATTACHMENT0);
+        let read_status = gl.check_framebuffer_status(glow::READ_FRAMEBUFFER);
+        if read_status != glow::FRAMEBUFFER_COMPLETE {
+            gl.bind_framebuffer(glow::READ_FRAMEBUFFER, previous_read_framebuffer);
+            gl.bind_framebuffer(glow::DRAW_FRAMEBUFFER, previous_draw_framebuffer);
+            gl.bind_texture(glow::TEXTURE_2D, previous_texture);
+            if std::env::var_os("LIBRETRO_TRACE_GL_READBACK").is_some() {
+                eprintln!(
+                    "play direct gl: callback FBO incomplete status=0x{read_status:04x}; skipping CPU readback"
+                );
+            }
+            return Ok(None);
+        }
+
+        gl.bind_framebuffer(
+            glow::DRAW_FRAMEBUFFER,
+            Some(target.play_present_framebuffer),
+        );
+        gl.draw_buffer(glow::COLOR_ATTACHMENT0);
+        let draw_status = gl.check_framebuffer_status(glow::DRAW_FRAMEBUFFER);
+        if draw_status != glow::FRAMEBUFFER_COMPLETE {
+            gl.bind_framebuffer(glow::READ_FRAMEBUFFER, previous_read_framebuffer);
+            gl.bind_framebuffer(glow::DRAW_FRAMEBUFFER, previous_draw_framebuffer);
+            gl.bind_texture(glow::TEXTURE_2D, previous_texture);
+            return Err(anyhow!(
+                "Play presentation framebuffer incomplete (status=0x{draw_status:04x})"
+            ));
+        }
+
+        if scissor_was_enabled {
+            gl.disable(glow::SCISSOR_TEST);
+        }
+        gl.blit_framebuffer(
+            0,
+            0,
+            pending.width as i32,
+            pending.height as i32,
+            0,
+            0,
+            pending.width as i32,
+            pending.height as i32,
+            glow::COLOR_BUFFER_BIT,
+            glow::NEAREST,
+        );
+        if scissor_was_enabled {
+            gl.enable(glow::SCISSOR_TEST);
+        }
+        gl.bind_framebuffer(glow::READ_FRAMEBUFFER, previous_read_framebuffer);
+        gl.bind_framebuffer(glow::DRAW_FRAMEBUFFER, previous_draw_framebuffer);
+        gl.bind_texture(glow::TEXTURE_2D, previous_texture);
+    }
+
+    target.play_present_generation = target.play_present_generation.saturating_add(1);
+    if std::env::var_os("LIBRETRO_TRACE_GL_READBACK").is_some() {
+        eprintln!(
+            "play direct gl: delivered texture={} size={}x{} generation={} bottom_left_origin={}",
+            target.play_present_texture.0.get(),
+            pending.width,
+            pending.height,
+            target.play_present_generation,
+            pending.bottom_left_origin
+        );
+    }
+
+    Ok(Some(GlTextureFrame {
+        texture: target.play_present_texture,
+        width: pending.width,
+        height: pending.height,
+        bottom_left_origin: pending.bottom_left_origin,
+        generation: target.play_present_generation,
+    }))
 }
 
 const PLAY_TEXTURE_REVALIDATE_INTERVAL_FRAMES: u64 = 120;

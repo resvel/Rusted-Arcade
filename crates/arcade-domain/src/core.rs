@@ -70,12 +70,20 @@ fn allowlist(system: &str) -> &'static [&'static str] {
         "N64" => &["mupen64plus_next"],
         "ARCADE" => &["fbneo", "mame2003", "mame2003_plus"],
         "PSX" => &["mednafen_psx_hw"],
-        "PS2" => &["pcsx2", "play"],
+        "PS2" => ps2_allowlist(),
         "DREAMCAST" => &["flycast"],
         "SATURN" => &["mednafen_saturn"],
         "PCECD" => &["mednafen_pce_fast"],
         "DOS" => &["dosbox_pure"],
         _ => &["fceumm"],
+    }
+}
+
+fn ps2_allowlist() -> &'static [&'static str] {
+    if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
+        &["play"]
+    } else {
+        &["pcsx2", "play"]
     }
 }
 
@@ -189,6 +197,26 @@ mod tests {
             "pcsx2"
         };
         assert_eq!(resolve_core("PS2", None), expected);
+    }
+
+    #[test]
+    fn ps2_allowlist_respects_native_macos_arm64_play_path() {
+        let expected: &[&str] = if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
+            &["play"]
+        } else {
+            &["pcsx2", "play"]
+        };
+        assert_eq!(supported_cores_for_system("PS2"), expected);
+    }
+
+    #[test]
+    fn ps2_pcsx2_override_is_ignored_on_native_macos_arm64() {
+        let expected = if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
+            "play"
+        } else {
+            "pcsx2"
+        };
+        assert_eq!(resolve_core("PS2", Some("pcsx2")), expected);
     }
 
     #[test]

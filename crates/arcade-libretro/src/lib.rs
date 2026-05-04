@@ -75,6 +75,21 @@ pub struct FrameBuffer {
     pub pixel_format: PixelFormat,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GlTextureFrame {
+    pub texture: glow::NativeTexture,
+    pub width: u32,
+    pub height: u32,
+    pub bottom_left_origin: bool,
+    pub generation: u64,
+}
+
+#[derive(Debug, Clone)]
+pub enum FrameOutput {
+    Cpu(FrameBuffer),
+    GlTexture(GlTextureFrame),
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct AudioQueueSnapshot {
     pub queue_frames: usize,
@@ -111,6 +126,7 @@ pub struct VulkanPresentTestMetrics {
     pub queue_present_successes: u64,
     pub external_present_deliveries: u64,
     pub cpu_frame_deliveries: u64,
+    pub gl_texture_deliveries: u64,
     pub source_non_black_seen: bool,
     pub swapchain_non_black_seen: bool,
     pub non_tiny_source_frame_seen: bool,
@@ -126,6 +142,7 @@ impl Default for VulkanPresentTestMetrics {
             queue_present_successes: 0,
             external_present_deliveries: 0,
             cpu_frame_deliveries: 0,
+            gl_texture_deliveries: 0,
             source_non_black_seen: false,
             swapchain_non_black_seen: false,
             non_tiny_source_frame_seen: false,
@@ -167,6 +184,15 @@ struct AudioState {
     underflow_concealment_frames: usize,
     underflow_concealment_remaining: usize,
     last_output_frame: (i16, i16),
+    playback_buffer_secs: f64,
+    playback_buffer_low_water_secs: f64,
+    playback_buffering: bool,
+    adaptive_clock_enabled: bool,
+    adaptive_clock_scale: f64,
+    adaptive_clock_min_scale: f64,
+    adaptive_clock_max_scale: f64,
+    adaptive_clock_smoothing: f64,
+    adaptive_clock_queue_feedback: f64,
     produced_samples_total: u64,
     consumed_samples_total: u64,
     trimmed_samples_total: u64,
@@ -194,6 +220,15 @@ impl Default for AudioState {
             underflow_concealment_frames: 0,
             underflow_concealment_remaining: 0,
             last_output_frame: (0, 0),
+            playback_buffer_secs: 0.0,
+            playback_buffer_low_water_secs: 0.0,
+            playback_buffering: false,
+            adaptive_clock_enabled: false,
+            adaptive_clock_scale: 1.0,
+            adaptive_clock_min_scale: 1.0,
+            adaptive_clock_max_scale: 1.0,
+            adaptive_clock_smoothing: 0.0,
+            adaptive_clock_queue_feedback: 0.0,
             produced_samples_total: 0,
             consumed_samples_total: 0,
             trimmed_samples_total: 0,
@@ -292,6 +327,14 @@ struct HardwareRenderTarget {
     /// this FBO is what get_current_framebuffer() returns.  The main-context FBO above is
     /// used for readback (it wraps the same color_texture via the shared texture namespace).
     emu_ctx_framebuffer: Option<glow::NativeFramebuffer>,
+    /// Frontend-owned texture used by Play!'s direct GL presentation path. Play renders
+    /// into the libretro hardware FBO; we blit that FBO here and let the UI draw this
+    /// texture without a CPU readback/upload round trip.
+    play_present_framebuffer: glow::NativeFramebuffer,
+    play_present_texture: glow::NativeTexture,
+    play_present_width: u32,
+    play_present_height: u32,
+    play_present_generation: u64,
     /// Discovered game-frame texture handle.  When a core (mupen64plus-next/GLideN64) renders
     /// into its own internal texture via a shared GL context, textures from that context are
     /// visible here (textures ARE shared; FBOs are NOT).  We scan texture handles once on the
@@ -517,6 +560,7 @@ struct VulkanPresentMetricsState {
     queue_present_successes: u64,
     external_present_deliveries: u64,
     cpu_frame_deliveries: u64,
+    gl_texture_deliveries: u64,
     source_non_black_seen: bool,
     swapchain_non_black_seen: bool,
     non_tiny_source_frame_seen: bool,
@@ -1148,6 +1192,7 @@ impl LibretroHost {
             queue_present_successes: snapshot.queue_present_successes,
             external_present_deliveries: snapshot.external_present_deliveries,
             cpu_frame_deliveries: snapshot.cpu_frame_deliveries,
+            gl_texture_deliveries: snapshot.gl_texture_deliveries,
             source_non_black_seen: snapshot.source_non_black_seen,
             swapchain_non_black_seen: snapshot.swapchain_non_black_seen,
             non_tiny_source_frame_seen: snapshot.non_tiny_source_frame_seen,
@@ -1190,6 +1235,18 @@ impl LibretroHost {
         rom_path: &Path,
     ) -> Result<String> {
         let core_name = resolve_core(system, core_override);
+        if core_name.eq_ignore_ascii_case("play")
+            && !self
+                .runtime
+                .video_coordinator
+                .lock()
+                .frontend_capabilities()
+                .supports_gl_backend()
+        {
+            return Err(anyhow!(
+                "Play native PS2 requires the OpenGL renderer in this frontend. Restart with ARCADE_MACOS_RENDERER=glow or leave the macOS renderer on auto."
+            ));
+        }
         let candidates = self.resolve_core_candidates(&core_name);
         let core_path = candidates
             .iter()
@@ -1584,7 +1641,7 @@ impl LibretroHost {
         }
     }
 
-    pub fn run_frame(&self) -> Result<Option<FrameBuffer>> {
+    pub fn run_frame(&self) -> Result<Option<FrameOutput>> {
         let loaded_guard = self.loaded.lock();
         let Some(loaded) = loaded_guard.as_ref() else {
             return Ok(None);
@@ -1788,6 +1845,7 @@ impl LibretroHost {
         }
         let delivery = match &frame {
             Ok(FrameDelivery::CpuFrame(frame)) => FrameDelivery::CpuFrame(frame.clone()),
+            Ok(FrameDelivery::GlTexture(frame)) => FrameDelivery::GlTexture(*frame),
             Ok(FrameDelivery::ExternalPresent) => FrameDelivery::ExternalPresent,
             Ok(FrameDelivery::NoFrame) => FrameDelivery::NoFrame,
             Ok(FrameDelivery::Error(err)) => FrameDelivery::Error(err.clone()),
@@ -1808,6 +1866,15 @@ impl LibretroHost {
                         debug_step,
                         frame.width,
                         frame.height,
+                        present_duration.as_secs_f64() * 1000.0
+                    ),
+                    Ok(FrameDelivery::GlTexture(frame)) => info!(
+                        target: "arcade_libretro::vulkan_debug",
+                        "run_frame step={} hw frame result=gl_texture {}x{} generation={} present_ms={:.3}",
+                        debug_step,
+                        frame.width,
+                        frame.height,
+                        frame.generation,
                         present_duration.as_secs_f64() * 1000.0
                     ),
                     Ok(FrameDelivery::ExternalPresent) => info!(
@@ -1867,7 +1934,8 @@ impl LibretroHost {
         }
 
         match frame {
-            Ok(FrameDelivery::CpuFrame(frame)) => Ok(Some(frame)),
+            Ok(FrameDelivery::CpuFrame(frame)) => Ok(Some(FrameOutput::Cpu(frame))),
+            Ok(FrameDelivery::GlTexture(frame)) => Ok(Some(FrameOutput::GlTexture(frame))),
             Ok(FrameDelivery::ExternalPresent | FrameDelivery::NoFrame) => Ok(None),
             Ok(FrameDelivery::Error(err)) => Err(anyhow!(err)),
             Err(err) => Err(err),

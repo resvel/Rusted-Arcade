@@ -30,7 +30,49 @@ impl NativeArcadeUiApp {
     fn draw_fullscreen_play(&mut self, ui: &mut egui::Ui) {
         let rect = ui.max_rect();
         let palette = self.palette();
-        if let Some(texture) = &self.assets.last_frame_texture {
+        if let Some(gl_frame) = self.assets.last_gl_texture_frame {
+            let source_size = egui::vec2(gl_frame.width as f32, gl_frame.height as f32);
+            let source_aspect = if source_size.y > 0.0 {
+                source_size.x / source_size.y
+            } else {
+                4.0 / 3.0
+            };
+            let target_aspect = self
+                .default_system_play_aspect()
+                .or_else(|| self.host.video_aspect_ratio())
+                .unwrap_or(source_aspect);
+            let fitted = fit_size_to_aspect(rect.size(), target_aspect);
+            let min = egui::pos2(
+                (rect.center().x - fitted.x * 0.5).round(),
+                (rect.center().y - fitted.y * 0.5).round(),
+            );
+            let image_rect = egui::Rect::from_min_size(min, fitted);
+            if std::env::var_os("ARCADE_VULKAN_DEBUG").is_some() {
+                let draw_index = PLAY_DRAW_DEBUG_COUNTER.fetch_add(1, Ordering::Relaxed);
+                if draw_index < 32 {
+                    info!(
+                        target: "arcade_ui::video_debug",
+                        "play draw frame={} gl_texture={:?} generation={} texture_size={:.0}x{:.0} panel_rect=({:.1},{:.1})-({:.1},{:.1}) image_rect=({:.1},{:.1})-({:.1},{:.1}) target_aspect={:.3} source_aspect={:.3}",
+                        draw_index,
+                        gl_frame.texture,
+                        gl_frame.generation,
+                        source_size.x,
+                        source_size.y,
+                        rect.min.x,
+                        rect.min.y,
+                        rect.max.x,
+                        rect.max.y,
+                        image_rect.min.x,
+                        image_rect.min.y,
+                        image_rect.max.x,
+                        image_rect.max.y,
+                        target_aspect,
+                        source_aspect,
+                    );
+                }
+            }
+            self.draw_gl_texture_frame(ui, image_rect, gl_frame);
+        } else if let Some(texture) = &self.assets.last_frame_texture {
             let source_size = texture.size_vec2();
             let source_aspect = if source_size.y > 0.0 {
                 source_size.x / source_size.y

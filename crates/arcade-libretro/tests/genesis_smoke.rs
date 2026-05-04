@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 use arcade_domain::EmulationConfig;
-use arcade_libretro::LibretroHost;
+use arcade_libretro::{FrameOutput, LibretroHost};
 
 fn workspace_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -60,7 +60,7 @@ fn genesis_plus_gx_smoke_runs_frames() {
             .run_frame()
             .expect("genesis core should continue running frames")
         {
-            Some(frame) => {
+            Some(FrameOutput::Cpu(frame)) => {
                 assert!(frame.width > 0, "frame width should be non-zero");
                 assert!(frame.height > 0, "frame height should be non-zero");
                 observed_sizes.insert((frame.width, frame.height));
@@ -140,6 +140,9 @@ fn genesis_plus_gx_smoke_runs_frames() {
                     }
                 }
                 cpu_frames += 1;
+            }
+            Some(FrameOutput::GlTexture(frame)) => {
+                panic!("Genesis smoke test produced unexpected GL texture frame: {frame:?}");
             }
             None => empty_frames += 1,
         }

@@ -42,6 +42,14 @@ impl VideoBackend for OpenGlBackend {
             return Ok(fallback);
         };
 
+        if should_use_play_direct_gl_texture(runtime) {
+            return take_play_direct_gl_texture_frame(runtime, pending).map(|frame| {
+                frame
+                    .map(FrameDelivery::GlTexture)
+                    .unwrap_or(FrameDelivery::NoFrame)
+            });
+        }
+
         let frame = read_opengl_render_frame(runtime, pending).map(FrameDelivery::CpuFrame);
         if std::env::var_os("LIBRETRO_TRACE_GL_READBACK").is_some() {
             match &frame {

@@ -36,6 +36,18 @@ const PLAY_AUDIO_DRIFT_LIMIT: f64 = 0.02;
 #[cfg(feature = "audio")]
 const PLAY_AUDIO_UNDERFLOW_CONCEALMENT_FRAMES: usize = 512;
 #[cfg(feature = "audio")]
+const PLAY_AUDIO_PLAYBACK_BUFFER_SECS: f64 = 0.0;
+#[cfg(feature = "audio")]
+const PLAY_AUDIO_PLAYBACK_BUFFER_LOW_WATER_SECS: f64 = 0.0;
+#[cfg(feature = "audio")]
+const PLAY_AUDIO_ADAPTIVE_CLOCK_MIN_SCALE: f64 = 0.65;
+#[cfg(feature = "audio")]
+const PLAY_AUDIO_ADAPTIVE_CLOCK_MAX_SCALE: f64 = 1.0;
+#[cfg(feature = "audio")]
+const PLAY_AUDIO_ADAPTIVE_CLOCK_SMOOTHING: f64 = 0.45;
+#[cfg(feature = "audio")]
+const PLAY_AUDIO_ADAPTIVE_CLOCK_QUEUE_FEEDBACK: f64 = 0.12;
+#[cfg(feature = "audio")]
 const FLYCAST_AUDIO_TARGET_LATENCY_SECS: f64 = 0.120;
 #[cfg(feature = "audio")]
 const FLYCAST_AUDIO_MAX_LATENCY_SECS: f64 = 0.300;
@@ -54,6 +66,13 @@ struct AudioProfile {
     trim_to_target_on_overflow: bool,
     drop_excess_silence_when_buffered: bool,
     underflow_concealment_frames: usize,
+    playback_buffer_secs: f64,
+    playback_buffer_low_water_secs: f64,
+    adaptive_clock_enabled: bool,
+    adaptive_clock_min_scale: f64,
+    adaptive_clock_max_scale: f64,
+    adaptive_clock_smoothing: f64,
+    adaptive_clock_queue_feedback: f64,
 }
 
 #[cfg(feature = "audio")]
@@ -68,6 +87,18 @@ impl AudioProfile {
         state.underflow_concealment_frames = self.underflow_concealment_frames;
         state.underflow_concealment_remaining = 0;
         state.last_output_frame = (0, 0);
+        state.playback_buffer_secs = self.playback_buffer_secs;
+        state.playback_buffer_low_water_secs = self.playback_buffer_low_water_secs;
+        state.playback_buffering = self.playback_buffer_secs > 0.0;
+        state.adaptive_clock_enabled = self.adaptive_clock_enabled;
+        state.adaptive_clock_min_scale = self.adaptive_clock_min_scale;
+        state.adaptive_clock_max_scale = self.adaptive_clock_max_scale;
+        state.adaptive_clock_smoothing = self.adaptive_clock_smoothing;
+        state.adaptive_clock_queue_feedback = self.adaptive_clock_queue_feedback;
+        state.adaptive_clock_scale = 1.0;
+        state.current_frame = None;
+        state.next_frame = None;
+        state.resample_phase = 0.0;
     }
 }
 
@@ -81,6 +112,13 @@ fn default_audio_profile() -> AudioProfile {
         trim_to_target_on_overflow: true,
         drop_excess_silence_when_buffered: false,
         underflow_concealment_frames: 0,
+        playback_buffer_secs: 0.0,
+        playback_buffer_low_water_secs: 0.0,
+        adaptive_clock_enabled: false,
+        adaptive_clock_min_scale: 1.0,
+        adaptive_clock_max_scale: 1.0,
+        adaptive_clock_smoothing: 0.0,
+        adaptive_clock_queue_feedback: 0.0,
     }
 }
 
@@ -94,6 +132,13 @@ fn play_audio_profile_defaults() -> AudioProfile {
         trim_to_target_on_overflow: false,
         drop_excess_silence_when_buffered: true,
         underflow_concealment_frames: PLAY_AUDIO_UNDERFLOW_CONCEALMENT_FRAMES,
+        playback_buffer_secs: PLAY_AUDIO_PLAYBACK_BUFFER_SECS,
+        playback_buffer_low_water_secs: PLAY_AUDIO_PLAYBACK_BUFFER_LOW_WATER_SECS,
+        adaptive_clock_enabled: false,
+        adaptive_clock_min_scale: PLAY_AUDIO_ADAPTIVE_CLOCK_MIN_SCALE,
+        adaptive_clock_max_scale: PLAY_AUDIO_ADAPTIVE_CLOCK_MAX_SCALE,
+        adaptive_clock_smoothing: PLAY_AUDIO_ADAPTIVE_CLOCK_SMOOTHING,
+        adaptive_clock_queue_feedback: PLAY_AUDIO_ADAPTIVE_CLOCK_QUEUE_FEEDBACK,
     }
 }
 
@@ -110,6 +155,13 @@ fn flycast_audio_profile_defaults() -> AudioProfile {
         trim_to_target_on_overflow: false,
         drop_excess_silence_when_buffered: true,
         underflow_concealment_frames: 0,
+        playback_buffer_secs: 0.0,
+        playback_buffer_low_water_secs: 0.0,
+        adaptive_clock_enabled: false,
+        adaptive_clock_min_scale: 1.0,
+        adaptive_clock_max_scale: 1.0,
+        adaptive_clock_smoothing: 0.0,
+        adaptive_clock_queue_feedback: 0.0,
     }
 }
 
@@ -150,6 +202,39 @@ fn apply_audio_profile_for_core(state: &mut AudioState, core_name: &str) {
                 .ok()
                 .and_then(|value| value.parse::<usize>().ok())
                 .unwrap_or(profile.underflow_concealment_frames);
+        profile.playback_buffer_secs = audio_profile_f64_env(
+            "ARCADE_PLAY_AUDIO_PLAYBACK_BUFFER_SECS",
+            profile.playback_buffer_secs,
+        );
+        profile.playback_buffer_low_water_secs = audio_profile_f64_env(
+            "ARCADE_PLAY_AUDIO_PLAYBACK_BUFFER_LOW_WATER_SECS",
+            profile.playback_buffer_low_water_secs,
+        );
+        profile.adaptive_clock_enabled = std::env::var("ARCADE_PLAY_AUDIO_ADAPTIVE_CLOCK")
+            .ok()
+            .map(|value| {
+                matches!(
+                    value.trim().to_ascii_lowercase().as_str(),
+                    "1" | "true" | "yes" | "on"
+                )
+            })
+            .unwrap_or(profile.adaptive_clock_enabled);
+        profile.adaptive_clock_min_scale = audio_profile_f64_env(
+            "ARCADE_PLAY_AUDIO_ADAPTIVE_CLOCK_MIN_SCALE",
+            profile.adaptive_clock_min_scale,
+        );
+        profile.adaptive_clock_max_scale = audio_profile_f64_env(
+            "ARCADE_PLAY_AUDIO_ADAPTIVE_CLOCK_MAX_SCALE",
+            profile.adaptive_clock_max_scale,
+        );
+        profile.adaptive_clock_smoothing = audio_profile_f64_env(
+            "ARCADE_PLAY_AUDIO_ADAPTIVE_CLOCK_SMOOTHING",
+            profile.adaptive_clock_smoothing,
+        );
+        profile.adaptive_clock_queue_feedback = audio_profile_f64_env(
+            "ARCADE_PLAY_AUDIO_ADAPTIVE_CLOCK_QUEUE_FEEDBACK",
+            profile.adaptive_clock_queue_feedback,
+        );
     } else if core_name.eq_ignore_ascii_case("flycast") {
         profile.target_latency_secs = audio_profile_f64_env(
             "ARCADE_FLYCAST_AUDIO_TARGET_LATENCY_SECS",
@@ -358,6 +443,15 @@ pub(super) fn configure_audio_profile_for_core(core_name: &str) {
                 trim_to_target_on_overflow = state.trim_to_target_on_overflow,
                 drop_excess_silence_when_buffered = state.drop_excess_silence_when_buffered,
                 underflow_concealment_frames = state.underflow_concealment_frames,
+                playback_buffer_secs = state.playback_buffer_secs,
+                playback_buffer_low_water_secs = state.playback_buffer_low_water_secs,
+                playback_buffering = state.playback_buffering,
+                adaptive_clock_enabled = state.adaptive_clock_enabled,
+                adaptive_clock_scale = state.adaptive_clock_scale,
+                adaptive_clock_min_scale = state.adaptive_clock_min_scale,
+                adaptive_clock_max_scale = state.adaptive_clock_max_scale,
+                adaptive_clock_smoothing = state.adaptive_clock_smoothing,
+                adaptive_clock_queue_feedback = state.adaptive_clock_queue_feedback,
                 "applied audio profile"
             );
         }
@@ -376,6 +470,9 @@ mod tests {
         let profile = audio_profile_for_core_defaults("flycast");
         assert!(!profile.trim_to_target_on_overflow);
         assert!(profile.drop_excess_silence_when_buffered);
+        assert_eq!(profile.playback_buffer_secs, 0.0);
+        assert_eq!(profile.playback_buffer_low_water_secs, 0.0);
+        assert!(!profile.adaptive_clock_enabled);
         assert_eq!(
             profile.resample_queue_correction,
             FLYCAST_AUDIO_QUEUE_CORRECTION
@@ -397,6 +494,9 @@ mod tests {
         assert!(profile.trim_to_target_on_overflow);
         assert!(!profile.drop_excess_silence_when_buffered);
         assert_eq!(profile.underflow_concealment_frames, 0);
+        assert_eq!(profile.playback_buffer_secs, 0.0);
+        assert_eq!(profile.playback_buffer_low_water_secs, 0.0);
+        assert!(!profile.adaptive_clock_enabled);
         assert_eq!(
             profile.resample_queue_correction,
             DEFAULT_AUDIO_RESAMPLE_QUEUE_CORRECTION
@@ -419,6 +519,125 @@ mod tests {
             profile.underflow_concealment_frames,
             PLAY_AUDIO_UNDERFLOW_CONCEALMENT_FRAMES
         );
+    }
+
+    #[test]
+    fn play_profile_uses_measurement_friendly_defaults() {
+        let profile = audio_profile_for_core_defaults("play");
+        assert!(!profile.trim_to_target_on_overflow);
+        assert!(profile.drop_excess_silence_when_buffered);
+        assert_eq!(
+            profile.resample_queue_correction,
+            PLAY_AUDIO_QUEUE_CORRECTION
+        );
+        assert_eq!(profile.resample_ratio_drift_limit, PLAY_AUDIO_DRIFT_LIMIT);
+        assert_eq!(profile.resample_queue_correction, 0.0);
+        assert!(profile.resample_ratio_drift_limit <= 0.02);
+        assert_eq!(profile.playback_buffer_secs, 0.0);
+        assert_eq!(profile.playback_buffer_low_water_secs, 0.0);
+        assert!(!profile.adaptive_clock_enabled);
+        assert_eq!(
+            profile.adaptive_clock_min_scale,
+            PLAY_AUDIO_ADAPTIVE_CLOCK_MIN_SCALE
+        );
+        assert_eq!(
+            profile.adaptive_clock_max_scale,
+            PLAY_AUDIO_ADAPTIVE_CLOCK_MAX_SCALE
+        );
+        assert_eq!(
+            profile.adaptive_clock_smoothing,
+            PLAY_AUDIO_ADAPTIVE_CLOCK_SMOOTHING
+        );
+        assert_eq!(
+            profile.adaptive_clock_queue_feedback,
+            PLAY_AUDIO_ADAPTIVE_CLOCK_QUEUE_FEEDBACK
+        );
+        assert_eq!(profile.target_latency_secs, PLAY_AUDIO_TARGET_LATENCY_SECS);
+        assert_eq!(profile.max_latency_secs, PLAY_AUDIO_MAX_LATENCY_SECS);
+    }
+
+    fn push_test_frames(state: &mut AudioState, frames: usize) {
+        for _ in 0..frames {
+            state.samples.push_back(1000);
+            state.samples.push_back(-1000);
+        }
+    }
+
+    #[test]
+    fn playback_buffer_waits_until_threshold_without_consuming() {
+        let mut state = AudioState {
+            source_sample_rate: 44_100.0,
+            output_sample_rate: 44_100.0,
+            playback_buffer_secs: 0.010,
+            playback_buffer_low_water_secs: 0.002,
+            playback_buffering: true,
+            ..AudioState::default()
+        };
+        push_test_frames(&mut state, 100);
+
+        let queue_before = state.samples.len();
+        assert_eq!(pop_stereo_i16_with_state(&mut state), (0, 0));
+        assert_eq!(state.samples.len(), queue_before);
+        assert!(state.playback_buffering);
+
+        push_test_frames(&mut state, 400);
+        assert_eq!(pop_stereo_i16_with_state(&mut state), (1000, -1000));
+        assert!(!state.playback_buffering);
+    }
+
+    #[test]
+    fn playback_buffer_rearms_at_low_watermark() {
+        let mut state = AudioState {
+            source_sample_rate: 44_100.0,
+            output_sample_rate: 44_100.0,
+            playback_buffer_secs: 0.010,
+            playback_buffer_low_water_secs: 0.002,
+            playback_buffering: false,
+            ..AudioState::default()
+        };
+        push_test_frames(&mut state, 80);
+
+        assert_eq!(pop_stereo_i16_with_state(&mut state), (0, 0));
+        assert!(state.playback_buffering);
+        assert_eq!(state.samples.len(), 160);
+    }
+
+    #[test]
+    fn adaptive_clock_follows_measured_play_production_rate() {
+        let mut state = AudioState {
+            output_sample_rate: 44_100.0,
+            adaptive_clock_enabled: true,
+            adaptive_clock_scale: 1.0,
+            adaptive_clock_min_scale: 0.75,
+            adaptive_clock_max_scale: 1.0,
+            adaptive_clock_smoothing: 1.0,
+            adaptive_clock_queue_feedback: 0.12,
+            ..AudioState::default()
+        };
+
+        update_adaptive_audio_clock(&mut state, 36_000.0, 10_000, 10_000);
+        assert!((state.adaptive_clock_scale - (36_000.0 / 44_100.0)).abs() < 0.001);
+
+        update_adaptive_audio_clock(&mut state, 20_000.0, 10_000, 10_000);
+        assert_eq!(state.adaptive_clock_scale, 0.75);
+    }
+
+    #[test]
+    fn adaptive_clock_slows_below_production_when_queue_is_low() {
+        let mut state = AudioState {
+            output_sample_rate: 44_100.0,
+            adaptive_clock_enabled: true,
+            adaptive_clock_scale: 1.0,
+            adaptive_clock_min_scale: 0.65,
+            adaptive_clock_max_scale: 1.0,
+            adaptive_clock_smoothing: 1.0,
+            adaptive_clock_queue_feedback: 0.12,
+            ..AudioState::default()
+        };
+
+        update_adaptive_audio_clock(&mut state, 36_000.0, 16_500, 33_000);
+        assert!(state.adaptive_clock_scale < 36_000.0 / 44_100.0);
+        assert!(state.adaptive_clock_scale > 0.70);
     }
 
     #[test]
@@ -572,8 +791,8 @@ fn audio_frames_for_latency(sample_rate_hz: f64, latency_secs: f64) -> usize {
 #[cfg(feature = "audio")]
 fn maybe_log_audio_flow_window(state: &mut AudioState) {
     let now = std::time::Instant::now();
-    let started_at = state.flow_window_started_at.get_or_insert(now);
-    let elapsed = now.saturating_duration_since(*started_at);
+    let started_at = *state.flow_window_started_at.get_or_insert(now);
+    let elapsed = now.saturating_duration_since(started_at);
     if elapsed < std::time::Duration::from_secs(1) {
         return;
     }
@@ -587,6 +806,13 @@ fn maybe_log_audio_flow_window(state: &mut AudioState) {
         audio_frames_for_latency(state.output_sample_rate, state.target_latency_secs);
     let max_frames = audio_frames_for_latency(state.output_sample_rate, state.max_latency_secs)
         .max(target_frames + 1);
+    let playback_buffer_frames =
+        audio_frames_for_latency(state.output_sample_rate, state.playback_buffer_secs);
+    let playback_buffer_low_water_frames = audio_frames_for_latency(
+        state.output_sample_rate,
+        state.playback_buffer_low_water_secs,
+    );
+    update_adaptive_audio_clock(state, produced_frames_per_sec, queue_frames, target_frames);
     info!(
         target: "arcade_libretro::audio",
         elapsed_secs = elapsed_secs,
@@ -596,6 +822,12 @@ fn maybe_log_audio_flow_window(state: &mut AudioState) {
         queue_frames,
         target_frames,
         max_frames,
+        playback_buffer_frames,
+        playback_buffer_low_water_frames,
+        playback_buffering = state.playback_buffering,
+        adaptive_clock_enabled = state.adaptive_clock_enabled,
+        adaptive_clock_scale = state.adaptive_clock_scale,
+        adaptive_clock_queue_feedback = state.adaptive_clock_queue_feedback,
         source_rate = state.source_sample_rate,
         output_rate = state.output_sample_rate,
         produced_total_frames = state.produced_samples_total / 2,
@@ -606,7 +838,51 @@ fn maybe_log_audio_flow_window(state: &mut AudioState) {
     state.produced_samples_window = 0;
     state.consumed_samples_window = 0;
     state.trimmed_samples_window = 0;
-    *started_at = now;
+    state.flow_window_started_at = Some(now);
+}
+
+#[cfg(feature = "audio")]
+fn update_adaptive_audio_clock(
+    state: &mut AudioState,
+    produced_frames_per_sec: f64,
+    queue_frames: usize,
+    target_frames: usize,
+) {
+    if !state.adaptive_clock_enabled || state.output_sample_rate <= 0.0 {
+        state.adaptive_clock_scale = 1.0;
+        return;
+    }
+
+    let min_scale = state
+        .adaptive_clock_min_scale
+        .clamp(0.1, state.adaptive_clock_max_scale.max(0.1));
+    let max_scale = state.adaptive_clock_max_scale.clamp(min_scale, 1.25);
+    let smoothing = state.adaptive_clock_smoothing.clamp(0.0, 1.0);
+    let queue_feedback = state.adaptive_clock_queue_feedback.clamp(0.0, 0.5);
+
+    if !produced_frames_per_sec.is_finite() || produced_frames_per_sec < 1_000.0 {
+        return;
+    }
+
+    let production_scale = (produced_frames_per_sec / state.output_sample_rate).clamp(0.1, 1.25);
+    let mut target_scale = production_scale.clamp(min_scale, max_scale);
+
+    // Match measured production around the target queue. If the queue is low,
+    // consume a little below production so it can recover; if it is high, drift
+    // back toward real time.
+    if target_frames > 0 {
+        let queue_error = (queue_frames as f64 - target_frames as f64) / target_frames as f64;
+        if queue_error < 0.0 {
+            target_scale -= queue_error.abs().clamp(0.0, 1.0) * queue_feedback;
+        } else {
+            target_scale += queue_error.clamp(0.0, 0.25);
+        }
+        target_scale = target_scale.clamp(min_scale, max_scale);
+    }
+
+    state.adaptive_clock_scale =
+        (state.adaptive_clock_scale * (1.0 - smoothing)) + (target_scale * smoothing);
+    state.adaptive_clock_scale = state.adaptive_clock_scale.clamp(min_scale, max_scale);
 }
 
 #[cfg(feature = "audio")]
@@ -715,6 +991,59 @@ fn pop_stereo_frame(state: &mut AudioState) -> (i16, i16) {
 }
 
 #[cfg(feature = "audio")]
+fn reset_audio_interpolation(state: &mut AudioState) {
+    state.current_frame = None;
+    state.next_frame = None;
+    state.resample_phase = 0.0;
+}
+
+#[cfg(feature = "audio")]
+fn hold_audio_for_playback_buffer(state: &mut AudioState) -> bool {
+    let buffer_frames =
+        audio_frames_for_latency(state.output_sample_rate, state.playback_buffer_secs);
+    if buffer_frames == 0 {
+        return false;
+    }
+    let low_water_frames = audio_frames_for_latency(
+        state.output_sample_rate,
+        state.playback_buffer_low_water_secs,
+    )
+    .min(buffer_frames.saturating_sub(1));
+
+    let queued_frames = state.samples.len() / 2;
+    if state.playback_buffering {
+        if queued_frames >= buffer_frames {
+            state.playback_buffering = false;
+            reset_audio_interpolation(state);
+            info!(
+                target: "arcade_libretro::audio",
+                queued_frames,
+                playback_buffer_frames = buffer_frames,
+                playback_buffer_low_water_frames = low_water_frames,
+                "audio playback buffer filled"
+            );
+            return false;
+        }
+        return true;
+    }
+
+    if queued_frames <= low_water_frames.max(1) {
+        state.playback_buffering = true;
+        reset_audio_interpolation(state);
+        info!(
+            target: "arcade_libretro::audio",
+            queued_frames,
+            playback_buffer_frames = buffer_frames,
+            playback_buffer_low_water_frames = low_water_frames,
+            "audio playback buffering at low water"
+        );
+        return true;
+    }
+
+    false
+}
+
+#[cfg(feature = "audio")]
 fn pop_stereo_i16_with_state(state: &mut AudioState) -> (i16, i16) {
     let source_rate = state.source_sample_rate;
     let output_rate = state.output_sample_rate;
@@ -732,6 +1061,10 @@ fn pop_stereo_i16_with_state(state: &mut AudioState) -> (i16, i16) {
         return pop_stereo_frame(state);
     }
 
+    if hold_audio_for_playback_buffer(state) {
+        return (0, 0);
+    }
+
     let target_queue_frames =
         audio_frames_for_latency(output_rate, state.target_latency_secs) as f64;
     let queued_frames = (state.samples.len() / 2) as f64;
@@ -742,9 +1075,10 @@ fn pop_stereo_i16_with_state(state: &mut AudioState) -> (i16, i16) {
     };
 
     let base_ratio = source_rate / output_rate;
-    let mut ratio = base_ratio * (1.0 + queue_error * state.resample_queue_correction);
-    let ratio_min = base_ratio * (1.0 - state.resample_ratio_drift_limit);
-    let ratio_max = base_ratio * (1.0 + state.resample_ratio_drift_limit);
+    let clocked_ratio = base_ratio * state.adaptive_clock_scale;
+    let mut ratio = clocked_ratio * (1.0 + queue_error * state.resample_queue_correction);
+    let ratio_min = clocked_ratio * (1.0 - state.resample_ratio_drift_limit);
+    let ratio_max = clocked_ratio * (1.0 + state.resample_ratio_drift_limit);
     ratio = ratio.clamp(ratio_min, ratio_max);
 
     let near_unity_ratio = (ratio - 1.0).abs() < 0.0005;

@@ -50,6 +50,7 @@ pub struct BackendSelection {
 #[derive(Debug)]
 pub(super) enum FrameDelivery {
     CpuFrame(FrameBuffer),
+    GlTexture(GlTextureFrame),
     ExternalPresent,
     NoFrame,
     Error(String),

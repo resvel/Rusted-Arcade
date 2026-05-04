@@ -217,6 +217,9 @@ pub(super) fn record_frame_delivery_metrics(
         FrameDelivery::CpuFrame(_) => {
             state.cpu_frame_deliveries = state.cpu_frame_deliveries.saturating_add(1);
         }
+        FrameDelivery::GlTexture(_) => {
+            state.gl_texture_deliveries = state.gl_texture_deliveries.saturating_add(1);
+        }
         FrameDelivery::NoFrame | FrameDelivery::Error(_) => {}
     }
 }
@@ -275,6 +278,7 @@ pub(super) fn log_vulkan_present_metrics_summary(
         || snapshot.queue_present_successes > 0
         || snapshot.external_present_deliveries > 0
         || snapshot.cpu_frame_deliveries > 0
+        || snapshot.gl_texture_deliveries > 0
         || snapshot.source_sample_checks > 0
         || snapshot.swapchain_sample_checks > 0
         || vulkan_test_metrics_enabled();
@@ -293,6 +297,7 @@ pub(super) fn log_vulkan_present_metrics_summary(
         queue_present_successes = snapshot.queue_present_successes,
         external_present_deliveries = snapshot.external_present_deliveries,
         cpu_frame_deliveries = snapshot.cpu_frame_deliveries,
+        gl_texture_deliveries = snapshot.gl_texture_deliveries,
         source_non_black_seen = snapshot.source_non_black_seen,
         swapchain_non_black_seen = snapshot.swapchain_non_black_seen,
         non_tiny_source_frame_seen = snapshot.non_tiny_source_frame_seen,

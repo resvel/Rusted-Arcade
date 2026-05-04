@@ -1082,7 +1082,11 @@ fn pcsx2_profile() -> CoreProfile {
 fn play_profile() -> CoreProfile {
     CoreProfile {
         core_name: "play",
-        display_name: "Play!",
+        display_name: if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
+            "Play! Native PS2"
+        } else {
+            "Play!"
+        },
         system: "PS2",
         variables: vec![
             var(

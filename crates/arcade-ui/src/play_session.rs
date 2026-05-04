@@ -1,7 +1,7 @@
 use eframe::egui;
 use tracing::{info, warn};
 
-use arcade_libretro::AudioQueueSnapshot;
+use arcade_libretro::{AudioQueueSnapshot, FrameOutput};
 use arcade_services::SaveOperationError;
 use std::sync::OnceLock;
 
@@ -278,7 +278,10 @@ impl NativeArcadeUiApp {
             return;
         }
         if let Some(frame) = latest_frame {
-            self.update_frame_texture(ctx, frame);
+            match frame {
+                FrameOutput::Cpu(frame) => self.update_frame_texture(ctx, frame),
+                FrameOutput::GlTexture(frame) => self.update_gl_texture_frame(frame),
+            }
         }
         let tick_work = tick_started_at.elapsed();
         if let Some(sample) = self.state.play.record_perf_tick(
@@ -410,6 +413,7 @@ impl NativeArcadeUiApp {
         }
         self.state.play.clear_session();
         self.assets.last_frame_texture = None;
+        self.assets.last_gl_texture_frame = None;
         self.reset_play_clock();
         if self.state.current_view != return_view {
             self.state.current_view = return_view;

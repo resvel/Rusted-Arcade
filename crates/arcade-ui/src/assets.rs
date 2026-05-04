@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use arcade_domain::RomCard;
+use arcade_libretro::GlTextureFrame;
 use eframe::egui;
 use egui::{Color32, ColorImage, TextureHandle, Vec2};
 
@@ -31,6 +32,7 @@ pub(crate) struct AssetCache {
     pub(crate) image_load_failures: HashSet<PathBuf>,
     pub(crate) controller_mapper_overlay_failures: HashSet<PathBuf>,
     pub(crate) last_frame_texture: Option<TextureHandle>,
+    pub(crate) last_gl_texture_frame: Option<GlTextureFrame>,
     pub(crate) play_frame_rgba: Vec<u8>,
     pub(crate) cover_load_budget: usize,
 }
@@ -48,6 +50,7 @@ impl AssetCache {
             image_load_failures: HashSet::new(),
             controller_mapper_overlay_failures: HashSet::new(),
             last_frame_texture: None,
+            last_gl_texture_frame: None,
             play_frame_rgba: Vec::new(),
             cover_load_budget: 0,
         }

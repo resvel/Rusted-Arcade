@@ -1,12 +1,146 @@
-use arcade_libretro::{FrameBuffer, PixelFormat};
+use arcade_libretro::{FrameBuffer, GlTextureFrame, PixelFormat};
 use eframe::egui;
+use eframe::glow::{self, HasContext};
 use egui::{ColorImage, Vec2};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
 use tracing::info;
 
 use crate::app::NativeArcadeUiApp;
 
 static UI_FRAME_UPLOAD_DEBUG_COUNTER: AtomicU64 = AtomicU64::new(0);
+static PLAY_GL_PAINTER: OnceLock<Mutex<Option<PlayGlPainter>>> = OnceLock::new();
+
+struct PlayGlPainter {
+    program: glow::NativeProgram,
+    vertex_array: glow::NativeVertexArray,
+    vertex_buffer: glow::NativeBuffer,
+    pos_attr: u32,
+    texture_uniform: Option<glow::NativeUniformLocation>,
+    bottom_left_origin_uniform: Option<glow::NativeUniformLocation>,
+}
+
+impl PlayGlPainter {
+    unsafe fn new(gl: &glow::Context) -> Result<Self, String> {
+        let program = gl.create_program()?;
+        let vertex_shader = compile_shader(
+            gl,
+            glow::VERTEX_SHADER,
+            r#"#version 150
+in vec2 a_pos;
+out vec2 v_uv;
+uniform int u_bottom_left_origin;
+void main() {
+    gl_Position = vec4(a_pos, 0.0, 1.0);
+    float y = (a_pos.y + 1.0) * 0.5;
+    if (u_bottom_left_origin == 0) {
+        y = 1.0 - y;
+    }
+    v_uv = vec2((a_pos.x + 1.0) * 0.5, y);
+}
+"#,
+        )?;
+        let fragment_shader = compile_shader(
+            gl,
+            glow::FRAGMENT_SHADER,
+            r#"#version 150
+uniform sampler2D u_texture;
+in vec2 v_uv;
+out vec4 out_color;
+void main() {
+    out_color = texture(u_texture, v_uv);
+    out_color.a = 1.0;
+}
+"#,
+        )?;
+
+        gl.attach_shader(program, vertex_shader);
+        gl.attach_shader(program, fragment_shader);
+        gl.link_program(program);
+        let linked = gl.get_program_link_status(program);
+        let link_log = gl.get_program_info_log(program);
+        gl.detach_shader(program, vertex_shader);
+        gl.detach_shader(program, fragment_shader);
+        gl.delete_shader(vertex_shader);
+        gl.delete_shader(fragment_shader);
+        if !linked {
+            gl.delete_program(program);
+            return Err(format!("failed to link Play GL painter shader: {link_log}"));
+        }
+
+        let vertex_array = gl.create_vertex_array()?;
+        let vertex_buffer = gl.create_buffer()?;
+        let pos_attr = gl.get_attrib_location(program, "a_pos").unwrap_or(0);
+        let texture_uniform = gl.get_uniform_location(program, "u_texture");
+        let bottom_left_origin_uniform = gl.get_uniform_location(program, "u_bottom_left_origin");
+
+        Ok(Self {
+            program,
+            vertex_array,
+            vertex_buffer,
+            pos_attr,
+            texture_uniform,
+            bottom_left_origin_uniform,
+        })
+    }
+
+    unsafe fn paint(&self, gl: &glow::Context, frame: GlTextureFrame) {
+        const VERTICES: [f32; 8] = [-1.0, -1.0, 1.0, -1.0, -1.0, 1.0, 1.0, 1.0];
+
+        gl.use_program(Some(self.program));
+        gl.active_texture(glow::TEXTURE0);
+        gl.bind_texture(glow::TEXTURE_2D, Some(frame.texture));
+        gl.tex_parameter_i32(
+            glow::TEXTURE_2D,
+            glow::TEXTURE_MIN_FILTER,
+            glow::LINEAR as i32,
+        );
+        gl.tex_parameter_i32(
+            glow::TEXTURE_2D,
+            glow::TEXTURE_MAG_FILTER,
+            glow::LINEAR as i32,
+        );
+        if let Some(uniform) = self.texture_uniform.as_ref() {
+            gl.uniform_1_i32(Some(uniform), 0);
+        }
+        if let Some(uniform) = self.bottom_left_origin_uniform.as_ref() {
+            gl.uniform_1_i32(Some(uniform), if frame.bottom_left_origin { 1 } else { 0 });
+        }
+
+        gl.bind_vertex_array(Some(self.vertex_array));
+        gl.bind_buffer(glow::ARRAY_BUFFER, Some(self.vertex_buffer));
+        let vertex_bytes = std::slice::from_raw_parts(
+            VERTICES.as_ptr().cast::<u8>(),
+            VERTICES.len() * std::mem::size_of::<f32>(),
+        );
+        gl.buffer_data_u8_slice(glow::ARRAY_BUFFER, vertex_bytes, glow::STREAM_DRAW);
+        gl.enable_vertex_attrib_array(self.pos_attr);
+        gl.vertex_attrib_pointer_f32(self.pos_attr, 2, glow::FLOAT, false, 8, 0);
+        gl.draw_arrays(glow::TRIANGLE_STRIP, 0, 4);
+        gl.disable_vertex_attrib_array(self.pos_attr);
+        gl.bind_buffer(glow::ARRAY_BUFFER, None);
+        gl.bind_vertex_array(None);
+        gl.bind_texture(glow::TEXTURE_2D, None);
+        gl.use_program(None);
+    }
+}
+
+unsafe fn compile_shader(
+    gl: &glow::Context,
+    shader_type: u32,
+    source: &str,
+) -> Result<glow::NativeShader, String> {
+    let shader = gl.create_shader(shader_type)?;
+    gl.shader_source(shader, source);
+    gl.compile_shader(shader);
+    if gl.get_shader_compile_status(shader) {
+        Ok(shader)
+    } else {
+        let log = gl.get_shader_info_log(shader);
+        gl.delete_shader(shader);
+        Err(format!("failed to compile Play GL painter shader: {log}"))
+    }
+}
 
 fn summarize_rgba_debug_pixels(pixels: &[u8]) -> (u64, usize, [u8; 4]) {
     let mut checksum = 0_u64;
@@ -29,7 +163,49 @@ fn summarize_rgba_debug_pixels(pixels: &[u8]) -> (u64, usize, [u8; 4]) {
 }
 
 impl NativeArcadeUiApp {
+    pub(crate) fn update_gl_texture_frame(&mut self, frame: GlTextureFrame) {
+        self.assets.last_gl_texture_frame = Some(frame);
+        self.assets.last_frame_texture = None;
+        self.state.play.last_frame_size = Some((frame.width, frame.height));
+    }
+
+    pub(crate) fn draw_gl_texture_frame(
+        &self,
+        ui: &egui::Ui,
+        rect: egui::Rect,
+        frame: GlTextureFrame,
+    ) {
+        let callback = eframe::egui_glow::CallbackFn::new(move |_info, painter| {
+            let gl = painter.gl();
+            let state = PLAY_GL_PAINTER.get_or_init(|| Mutex::new(None));
+            let mut guard = match state.lock() {
+                Ok(guard) => guard,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            if guard.is_none() {
+                match unsafe { PlayGlPainter::new(gl) } {
+                    Ok(painter) => *guard = Some(painter),
+                    Err(err) => {
+                        tracing::warn!("failed to initialize Play GL painter: {err}");
+                        return;
+                    }
+                }
+            }
+            if let Some(painter) = guard.as_ref() {
+                unsafe {
+                    painter.paint(gl, frame);
+                }
+            }
+        });
+
+        ui.painter().add(egui::PaintCallback {
+            rect,
+            callback: Arc::new(callback),
+        });
+    }
+
     pub(crate) fn update_frame_texture(&mut self, ctx: &egui::Context, mut frame: FrameBuffer) {
+        self.assets.last_gl_texture_frame = None;
         let size = [frame.width as usize, frame.height as usize];
         let required_len = size[0].saturating_mul(size[1]).saturating_mul(4);
         let direct_rgba = matches!(frame.pixel_format, PixelFormat::Rgba8888)
