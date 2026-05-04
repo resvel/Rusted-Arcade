@@ -206,6 +206,7 @@ const DEFAULT_AUDIO_RESAMPLE_RATIO_DRIFT_LIMIT: f64 = 0.05;
 const VULKAN_FALLBACK_SYNC_FRAMES: u32 = 3;
 const DISPLAY_FPS_TOLERANCE: f64 = 2.0;
 const COMMON_DISPLAY_FPS: &[f64] = &[60.0, 50.0, 30.0];
+const DEFAULT_TARGET_REFRESH_RATE_HZ: f32 = 60.0;
 /// Function pointer type for the libretro keyboard event callback.
 /// Signature: `void callback(bool down, unsigned keycode, uint32_t character, uint16_t key_modifiers)`
 type RetroKeyboardEventFn =
@@ -582,6 +583,22 @@ fn sanitized_video_fps(fps: f64) -> Option<f64> {
         Some(fps)
     } else {
         None
+    }
+}
+
+fn target_refresh_rate_hz_for(runtime: Option<&HostRuntime>) -> f32 {
+    let Some(runtime) = runtime else {
+        return DEFAULT_TARGET_REFRESH_RATE_HZ;
+    };
+    let fps = runtime.environment_context.lock().runtime_video_fps;
+    let Some(fps) = fps.and_then(sanitized_video_fps) else {
+        return DEFAULT_TARGET_REFRESH_RATE_HZ;
+    };
+    let normalized = normalize_display_fps(fps);
+    if normalized.is_finite() && normalized > 0.0 {
+        normalized as f32
+    } else {
+        DEFAULT_TARGET_REFRESH_RATE_HZ
     }
 }
 
@@ -2099,6 +2116,8 @@ impl StableCStringBuffer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    static ACTIVE_RUNTIME_TEST_LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
     use tempfile::tempdir;
 
     #[test]
@@ -2285,6 +2304,7 @@ mod tests {
 
     #[test]
     fn active_runtime_registration_roundtrip() {
+        let _guard = ACTIVE_RUNTIME_TEST_LOCK.lock();
         *ACTIVE_RUNTIME.lock() = None;
         let runtime = Arc::new(HostRuntime::default());
 
@@ -2298,6 +2318,7 @@ mod tests {
 
     #[test]
     fn frame_callback_writes_into_active_runtime() {
+        let _guard = ACTIVE_RUNTIME_TEST_LOCK.lock();
         *ACTIVE_RUNTIME.lock() = None;
         let runtime = Arc::new(HostRuntime::default());
         register_active_runtime(&runtime);
@@ -2324,6 +2345,7 @@ mod tests {
 
     #[test]
     fn environment_shutdown_request_sets_runtime_shutdown_flag() {
+        let _guard = ACTIVE_RUNTIME_TEST_LOCK.lock();
         *ACTIVE_RUNTIME.lock() = None;
         let runtime = Arc::new(HostRuntime::default());
         register_active_runtime(&runtime);
@@ -2384,6 +2406,7 @@ mod tests {
 
     #[test]
     fn set_system_av_info_updates_runtime_video_fps() {
+        let _guard = ACTIVE_RUNTIME_TEST_LOCK.lock();
         *ACTIVE_RUNTIME.lock() = None;
         let runtime = Arc::new(HostRuntime::default());
         register_active_runtime(&runtime);
@@ -2413,6 +2436,66 @@ mod tests {
             runtime.environment_context.lock().runtime_video_fps,
             Some(59.94)
         );
+
+        clear_active_runtime(&runtime);
+    }
+
+    #[test]
+    fn target_refresh_rate_defaults_to_60_when_unknown() {
+        let _guard = ACTIVE_RUNTIME_TEST_LOCK.lock();
+        *ACTIVE_RUNTIME.lock() = None;
+        let mut target_refresh_rate = 0.0_f32;
+        let handled = unsafe {
+            retro_environment(
+                50 | RETRO_ENVIRONMENT_EXPERIMENTAL,
+                (&mut target_refresh_rate as *mut f32).cast::<c_void>(),
+            )
+        };
+
+        assert!(handled);
+        assert_eq!(target_refresh_rate, 60.0);
+    }
+
+    #[test]
+    fn target_refresh_rate_uses_runtime_pal_fps() {
+        let _guard = ACTIVE_RUNTIME_TEST_LOCK.lock();
+        *ACTIVE_RUNTIME.lock() = None;
+        let runtime = Arc::new(HostRuntime::default());
+        runtime.environment_context.lock().runtime_video_fps = Some(50.0);
+        register_active_runtime(&runtime);
+
+        let mut target_refresh_rate = 0.0_f32;
+        let handled = unsafe {
+            retro_environment(
+                50 | RETRO_ENVIRONMENT_EXPERIMENTAL,
+                (&mut target_refresh_rate as *mut f32).cast::<c_void>(),
+            )
+        };
+
+        assert!(handled);
+        assert_eq!(target_refresh_rate, 50.0);
+
+        clear_active_runtime(&runtime);
+    }
+
+    #[test]
+    fn target_refresh_rate_normalizes_common_ntsc_fps() {
+        let _guard = ACTIVE_RUNTIME_TEST_LOCK.lock();
+        *ACTIVE_RUNTIME.lock() = None;
+        let runtime = Arc::new(HostRuntime::default());
+        runtime.environment_context.lock().runtime_video_fps = Some(59.94);
+        register_active_runtime(&runtime);
+
+        let mut target_refresh_rate = 0.0_f32;
+        let handled = unsafe {
+            retro_environment(
+                50 | RETRO_ENVIRONMENT_EXPERIMENTAL,
+                (&mut target_refresh_rate as *mut f32).cast::<c_void>(),
+            )
+        };
+
+        assert!(handled);
+        assert_eq!(target_refresh_rate, 60.0);
 
         clear_active_runtime(&runtime);
     }

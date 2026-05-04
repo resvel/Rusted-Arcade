@@ -12,6 +12,8 @@ use crate::{
 
 const AUDIO_MASTER_DRAIN_WATERMARK: f64 = 1.25;
 const AUDIO_MASTER_REFILL_WATERMARK: f64 = 0.85;
+const PLAY_MAX_CATCH_UP_FRAMES: u32 = 2;
+const PLAY_CATCH_UP_DEBT_CAP: f64 = 0.75;
 
 fn audio_master_frames_to_run(snapshot: Option<AudioQueueSnapshot>) -> Option<u32> {
     let snapshot = snapshot?;
@@ -36,7 +38,27 @@ fn is_audio_master_pacing_core(core_name: &str) -> bool {
         || core_name.eq_ignore_ascii_case("mednafen_psx_hw")
         || core_name.eq_ignore_ascii_case("mednafen_saturn")
         || core_name.eq_ignore_ascii_case("pcsx2")
-        || core_name.eq_ignore_ascii_case("play")
+}
+
+fn play_frames_to_run_for_elapsed(
+    elapsed: std::time::Duration,
+    frame_interval: std::time::Duration,
+    catch_up_debt: f64,
+) -> (u32, f64, std::time::Duration) {
+    if frame_interval.is_zero() {
+        return (1, 0.0, std::time::Duration::ZERO);
+    }
+
+    let elapsed_frames = elapsed.as_secs_f64() / frame_interval.as_secs_f64();
+    let frame_budget = (catch_up_debt + elapsed_frames).clamp(1.0, PLAY_MAX_CATCH_UP_FRAMES as f64);
+    let frames_to_run = frame_budget
+        .floor()
+        .clamp(1.0, PLAY_MAX_CATCH_UP_FRAMES as f64) as u32;
+    let catch_up_debt = (frame_budget - frames_to_run as f64).clamp(0.0, PLAY_CATCH_UP_DEBT_CAP);
+    let advance = frame_interval.saturating_mul(frames_to_run);
+    let leftover = elapsed.saturating_sub(advance);
+
+    (frames_to_run, catch_up_debt, leftover)
 }
 
 impl NativeArcadeUiApp {
@@ -149,15 +171,18 @@ impl NativeArcadeUiApp {
                 (frame_budget - frames_to_run as f64).clamp(0.0, debt_cap);
             frames_to_run
         } else if play_tight_pacing {
-            let elapsed_frames = elapsed.as_secs_f64() / frame_interval.as_secs_f64();
-            let frame_budget =
-                (self.state.play.catch_up_frame_debt + elapsed_frames).clamp(1.0, 1.35);
-            // Keep Play pacing strict (single-step) to avoid burst catch-up that can make
-            // FMV sequences appear speed-shifted during timing jitter.
-            let frames_to_run = 1;
-            self.state.play.set_last_frame_run_at(now);
-            self.state.play.catch_up_frame_debt =
-                (frame_budget - frames_to_run as f64).clamp(0.0, 0.35);
+            // Play should follow the core-reported frame clock, not the audio queue.
+            // Allow small wall-clock catch-up when the UI timer fires late so audio
+            // production does not starve, but cap it tightly to avoid FMV overspeed.
+            let (frames_to_run, catch_up_debt, leftover) = play_frames_to_run_for_elapsed(
+                elapsed,
+                frame_interval,
+                self.state.play.catch_up_frame_debt,
+            );
+            self.state
+                .play
+                .set_last_frame_run_at(now.checked_sub(leftover).unwrap_or(now));
+            self.state.play.catch_up_frame_debt = catch_up_debt;
             frames_to_run
         } else if low_latency_pacing {
             let elapsed_frames = elapsed.as_secs_f64() / frame_interval.as_secs_f64();
@@ -569,7 +594,35 @@ mod tests {
         assert!(is_audio_master_pacing_core("mednafen_psx_hw"));
         assert!(is_audio_master_pacing_core("mednafen_saturn"));
         assert!(is_audio_master_pacing_core("pcsx2"));
-        assert!(is_audio_master_pacing_core("play"));
         assert!(!is_audio_master_pacing_core("fceumm"));
+    }
+
+    #[test]
+    fn play_uses_strict_frame_pacing_not_audio_master_pacing() {
+        assert!(!is_audio_master_pacing_core("play"));
+    }
+
+    #[test]
+    fn play_frame_pacing_runs_one_frame_for_small_jitter() {
+        let frame_interval = std::time::Duration::from_micros(16_667);
+        let elapsed = frame_interval + std::time::Duration::from_millis(3);
+        let (frames_to_run, debt, leftover) =
+            play_frames_to_run_for_elapsed(elapsed, frame_interval, 0.0);
+
+        assert_eq!(frames_to_run, 1);
+        assert!(debt > 0.0);
+        assert_eq!(leftover, std::time::Duration::from_millis(3));
+    }
+
+    #[test]
+    fn play_frame_pacing_catches_up_when_wall_clock_is_two_frames_late() {
+        let frame_interval = std::time::Duration::from_micros(16_667);
+        let elapsed = frame_interval.saturating_mul(2) + std::time::Duration::from_millis(2);
+        let (frames_to_run, debt, leftover) =
+            play_frames_to_run_for_elapsed(elapsed, frame_interval, 0.0);
+
+        assert_eq!(frames_to_run, 2);
+        assert_eq!(debt, 0.0);
+        assert_eq!(leftover, std::time::Duration::from_millis(2));
     }
 }

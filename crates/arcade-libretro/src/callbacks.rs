@@ -843,8 +843,10 @@ pub(super) unsafe extern "C" fn retro_environment(cmd: u32, data: *mut c_void) -
             if data.is_null() {
                 return false;
             }
+            let runtime = active_runtime();
+            let target_refresh_rate = target_refresh_rate_hz_for(runtime.as_deref());
             unsafe {
-                *(data as *mut f32) = 60.0;
+                *(data as *mut f32) = target_refresh_rate;
             }
             true
         }
