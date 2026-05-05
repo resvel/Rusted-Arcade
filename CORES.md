@@ -38,6 +38,7 @@ This project ships app binaries only. Libretro cores are not bundled in release 
 - `pcsx2` (PlayStation 2)
 - `play` (PlayStation 2 - alternative core)
 - `flycast` (Dreamcast)
+- `dolphin` (GameCube)
 
 ### Arcade
 - `fbneo` (FBNeo — default arcade core)
@@ -56,6 +57,12 @@ This project ships app binaries only. Libretro cores are not bundled in release 
 ### PlayStation 2
 - Two cores available: `pcsx2` and `play`.
 - The default core is `play` on Apple Silicon macOS.
+
+### GameCube
+- GameCube uses the Libretro Dolphin core.
+- Place `dolphin_libretro.dylib` in `core_root`.
+- Place Dolphin's `Data/Sys` folder at `bios_root/dolphin-emu/Sys`; the app validates that `Sys/GC` and either `Sys/GameSettings` or `Sys/Resources` are present.
+- Optional GameCube IPL BIOS files are not required by the app's launch validation.
 
 ### Arcade
 - Default `ARCADE` core is `fbneo`.

@@ -64,6 +64,7 @@ recentRun*.log
 !/public/gamepads/controllercons.2.1/svg/outline/
 !/public/gamepads/controllercons.2.1/svg/outline/arcade.svg
 !/public/gamepads/controllercons.2.1/svg/outline/dreamcast.svg
+!/public/gamepads/controllercons.2.1/svg/outline/gamecube.svg
 !/public/gamepads/controllercons.2.1/svg/outline/gb.svg
 !/public/gamepads/controllercons.2.1/svg/outline/gba.svg
 !/public/gamepads/controllercons.2.1/svg/outline/mega-drive.svg
@@ -78,6 +79,7 @@ recentRun*.log
 !/public/gamepads/hotspots/outline/
 !/public/gamepads/hotspots/outline/arcade.hotspots.svg
 !/public/gamepads/hotspots/outline/dreamcast.hotspots.svg
+!/public/gamepads/hotspots/outline/gamecube.hotspots.svg
 !/public/gamepads/hotspots/outline/gb.hotspots.svg
 !/public/gamepads/hotspots/outline/gba.hotspots.svg
 !/public/gamepads/hotspots/outline/genesis.hotspots.svg

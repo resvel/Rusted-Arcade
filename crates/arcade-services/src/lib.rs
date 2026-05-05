@@ -8,14 +8,14 @@ use std::time::Duration;
 use anyhow::{anyhow, Result};
 use arcade_data::{DataError, Database, ScanUpsertOutcome, ScannedRomInput};
 use arcade_domain::{
-    default_gamepad_mapping_for_system, get_arcade_compatibility, resolve_core,
-    resolve_effective_core_override, resolve_path_from_root, AppConfig, CoverScrapePlatformIds,
-    CoverScrapeRunOptions, CoverScrapeSettingsInput, CoverScrapingConfig, DetectedPadIdentity,
-    LocalCoverRelinkRunOptions, ManageOperationKind, ManageOperationSummary, ManageProgressEvent,
-    ManageRomStatus, ManageScope, ManagementConfig, N64CpuCoreMode, N64PrimaryStick, PathsConfig,
-    RomCard, RomQuery, SaveLimits, SaveSlotData, SaveSlotSummary, SavedGamepadMappingSummary,
-    StoredGamepadMapping, PCECD_ACCEPTED_BIOS_FILES, SATURN_ACCEPTED_BIOS_FILES,
-    SYSTEM_DEFAULT_MAPPING_KEY,
+    default_gamepad_mapping_for_system, get_arcade_compatibility, get_dolphin_sys_directory,
+    resolve_core, resolve_effective_core_override, resolve_path_from_root, AppConfig,
+    CoverScrapePlatformIds, CoverScrapeRunOptions, CoverScrapeSettingsInput, CoverScrapingConfig,
+    DetectedPadIdentity, LocalCoverRelinkRunOptions, ManageOperationKind, ManageOperationSummary,
+    ManageProgressEvent, ManageRomStatus, ManageScope, ManagementConfig, N64CpuCoreMode,
+    N64PrimaryStick, PathsConfig, RomCard, RomQuery, SaveLimits, SaveSlotData, SaveSlotSummary,
+    SavedGamepadMappingSummary, StoredGamepadMapping, PCECD_ACCEPTED_BIOS_FILES,
+    SATURN_ACCEPTED_BIOS_FILES, SYSTEM_DEFAULT_MAPPING_KEY,
 };
 use sha1::{Digest, Sha1};
 use tracing::warn;
@@ -314,6 +314,7 @@ impl NativeServices {
             psx: input.psx_platform_ids,
             ps2: input.ps2_platform_ids,
             dreamcast: input.dreamcast_platform_ids,
+            gamecube: input.gamecube_platform_ids,
             saturn: input.saturn_platform_ids,
             dos: input.dos_platform_ids,
             pcecd: input.pcecd_platform_ids,
@@ -791,6 +792,20 @@ fn ensure_system_launch_dependencies(
         ));
     }
 
+    if system.eq_ignore_ascii_case("GAMECUBE") {
+        if arcade_domain::find_dolphin_sys_directory(&paths.rom_root, Some(&paths.bios_root))
+            .is_some()
+        {
+            return Ok(());
+        }
+
+        let preferred_sys_dir = get_dolphin_sys_directory(&paths.rom_root, Some(&paths.bios_root));
+        return Err(anyhow!(
+            "Missing Dolphin Sys folder in {}. Place Dolphin's Data/Sys folder at bios/dolphin-emu/Sys.",
+            preferred_sys_dir.display()
+        ));
+    }
+
     Ok(())
 }
 
@@ -812,7 +827,7 @@ struct ScanTarget {
     max_bytes: Option<u64>,
 }
 
-const SCAN_TARGETS: [ScanTarget; 14] = [
+const SCAN_TARGETS: [ScanTarget; 15] = [
     ScanTarget {
         folder: "nes",
         system: "NES",
@@ -888,6 +903,13 @@ const SCAN_TARGETS: [ScanTarget; 14] = [
         system: "DREAMCAST",
         emulator_core: "dreamcast",
         extensions: &[".cdi", ".gdi", ".chd"],
+        max_bytes: None,
+    },
+    ScanTarget {
+        folder: "gamecube",
+        system: "GAMECUBE",
+        emulator_core: "dolphin",
+        extensions: &[".iso", ".gcm", ".rvz", ".gcz", ".wbfs", ".ciso", ".tgc"],
         max_bytes: None,
     },
     ScanTarget {
@@ -1414,6 +1436,7 @@ fn platform_ids_for_system<'a>(config: &'a CoverScrapingConfig, system: &str) ->
         "PSX" => &config.platform_ids.psx,
         "PS2" => &config.platform_ids.ps2,
         "DREAMCAST" => &config.platform_ids.dreamcast,
+        "GAMECUBE" => &config.platform_ids.gamecube,
         "SATURN" => &config.platform_ids.saturn,
         "DOS" => &config.platform_ids.dos,
         "PCECD" => &config.platform_ids.pcecd,
@@ -1672,6 +1695,15 @@ mod tests {
         .expect("insert saturn rom");
     }
 
+    fn seed_gamecube_rom(config: &AppConfig) {
+        let conn = rusqlite::Connection::open(&config.paths.db_path).expect("open sqlite");
+        conn.execute(
+            "INSERT INTO \"Rom\" (id, system, slug, title, filePath, updatedAt)\n             VALUES ('rom-gamecube-1', 'GAMECUBE', 'f-zero-gx', 'F-Zero GX', 'roms/gamecube/F-Zero GX.rvz', ?1)",
+            params![Utc::now().format("%Y-%m-%d %H:%M:%S").to_string()],
+        )
+        .expect("insert gamecube rom");
+    }
+
     #[test]
     fn prepare_launch_allows_local_launches() {
         let tmp = TempDir::new().expect("tempdir");
@@ -1832,6 +1864,64 @@ mod tests {
             .expect("launch should pass with bios");
         assert_eq!(plan.system, "SATURN");
         assert_eq!(plan.resolved_core_name, "mednafen_saturn");
+    }
+
+    #[test]
+    fn prepare_launch_blocks_gamecube_without_dolphin_sys() {
+        let tmp = TempDir::new().expect("tempdir");
+        let config = make_config(&tmp);
+        let db = Database::open(&config).expect("open db");
+        seed_gamecube_rom(&config);
+        let rom_path = config.paths.rom_root.join("gamecube").join("F-Zero GX.rvz");
+        std::fs::create_dir_all(rom_path.parent().expect("rom parent")).expect("create rom dir");
+        std::fs::write(&rom_path, b"rom").expect("write rom");
+
+        let services = NativeServices::bootstrap(config.clone(), config_path_for(&config), db)
+            .expect("bootstrap");
+
+        let err = services
+            .prepare_launch("rom-gamecube-1")
+            .expect_err("launch should fail without Dolphin Sys");
+        assert!(err.to_string().contains("Missing Dolphin Sys folder"));
+        assert!(err.to_string().contains("bios/dolphin-emu/Sys"));
+    }
+
+    #[test]
+    fn prepare_launch_allows_gamecube_with_dolphin_sys() {
+        let tmp = TempDir::new().expect("tempdir");
+        let config = make_config(&tmp);
+        let db = Database::open(&config).expect("open db");
+        seed_gamecube_rom(&config);
+        let rom_path = config.paths.rom_root.join("gamecube").join("F-Zero GX.rvz");
+        std::fs::create_dir_all(rom_path.parent().expect("rom parent")).expect("create rom dir");
+        std::fs::write(&rom_path, b"rom").expect("write rom");
+        std::fs::create_dir_all(
+            config
+                .paths
+                .bios_root
+                .join("dolphin-emu")
+                .join("Sys")
+                .join("GC"),
+        )
+        .expect("create Dolphin GC dir");
+        std::fs::create_dir_all(
+            config
+                .paths
+                .bios_root
+                .join("dolphin-emu")
+                .join("Sys")
+                .join("GameSettings"),
+        )
+        .expect("create Dolphin GameSettings dir");
+
+        let services = NativeServices::bootstrap(config.clone(), config_path_for(&config), db)
+            .expect("bootstrap");
+
+        let plan = services
+            .prepare_launch("rom-gamecube-1")
+            .expect("launch should pass with Dolphin Sys");
+        assert_eq!(plan.system, "GAMECUBE");
+        assert_eq!(plan.resolved_core_name, "dolphin");
     }
 
     #[test]
@@ -2011,6 +2101,7 @@ mod tests {
                 psx_platform_ids: vec![10],
                 ps2_platform_ids: vec![11],
                 dreamcast_platform_ids: vec![16],
+                gamecube_platform_ids: vec![2],
                 saturn_platform_ids: vec![22],
                 dos_platform_ids: vec![1],
                 pcecd_platform_ids: vec![4955],
@@ -2032,6 +2123,10 @@ mod tests {
         assert_eq!(
             saved.management.cover_scraping.platform_ids.saturn,
             vec![22]
+        );
+        assert_eq!(
+            saved.management.cover_scraping.platform_ids.gamecube,
+            vec![2]
         );
     }
 
@@ -2391,6 +2486,46 @@ mod tests {
             .expect("scanned rom");
         assert_eq!(scanned.rom.system, "PCECD");
         assert_eq!(scanned.rom.file_path, "pcecd/Dracula X.chd");
+    }
+
+    #[test]
+    fn smart_scan_imports_gamecube_images_and_skips_wii_homebrew_formats() {
+        let tmp = TempDir::new().expect("tempdir");
+        let config = make_config(&tmp);
+        let db = Database::open(&config).expect("open db");
+        let rom_dir = config.paths.rom_root.join("gamecube");
+        std::fs::create_dir_all(&rom_dir).expect("create rom dir");
+        for name in ["F-Zero GX.rvz", "Mario Sunshine.iso", "Metroid Prime.gcm"] {
+            std::fs::write(rom_dir.join(name), b"gamecube-rom").expect("write gamecube rom");
+        }
+        std::fs::write(rom_dir.join("Wii Homebrew.dol"), b"wii-homebrew").expect("write dol");
+
+        let services = NativeServices::bootstrap(config.clone(), config_path_for(&config), db)
+            .expect("bootstrap");
+
+        let summary = services
+            .smart_scan_roms(&ManageScope::System(String::from("GAMECUBE")), |_| {})
+            .expect("smart scan");
+        assert_eq!(summary.kind, Some(ManageOperationKind::SmartScan));
+        assert_eq!(summary.created, 3);
+        assert_eq!(summary.skipped, 1);
+
+        let cards = services
+            .list_roms(&RomQuery {
+                system: Some(String::from("GAMECUBE")),
+                ..RomQuery::default()
+            })
+            .expect("list roms");
+        assert_eq!(cards.len(), 3);
+        assert!(cards
+            .iter()
+            .any(|card| card.rom.file_path == "gamecube/F-Zero GX.rvz"));
+        assert!(cards
+            .iter()
+            .any(|card| card.rom.file_path == "gamecube/Mario Sunshine.iso"));
+        assert!(cards
+            .iter()
+            .any(|card| card.rom.file_path == "gamecube/Metroid Prime.gcm"));
     }
 
     #[test]

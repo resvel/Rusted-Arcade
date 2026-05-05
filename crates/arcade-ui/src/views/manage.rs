@@ -21,8 +21,9 @@ const TGDB_PLATFORM_IDS_N64: &[u32] = &[3];
 const TGDB_PLATFORM_IDS_ARCADE: &[u32] = &[23];
 // Additional platform IDs used for cover scraping
 const TGDB_PLATFORM_IDS_PSX: &[u32] = &[1];
-const TGDB_PLATFORM_IDS_PS2: &[u32] = &[2];
+const TGDB_PLATFORM_IDS_PS2: &[u32] = &[11];
 const TGDB_PLATFORM_IDS_DREAMCAST: &[u32] = &[8];
+const TGDB_PLATFORM_IDS_GAMECUBE: &[u32] = &[2];
 const TGDB_PLATFORM_IDS_SATURN: &[u32] = &[22];
 const TGDB_PLATFORM_IDS_DOS: &[u32] = &[9];
 const TGDB_PLATFORM_IDS_PCECD: &[u32] = &[4955];
@@ -951,6 +952,7 @@ impl NativeArcadeUiApp {
             psx_platform_ids: TGDB_PLATFORM_IDS_PSX.to_vec(),
             ps2_platform_ids: TGDB_PLATFORM_IDS_PS2.to_vec(),
             dreamcast_platform_ids: TGDB_PLATFORM_IDS_DREAMCAST.to_vec(),
+            gamecube_platform_ids: TGDB_PLATFORM_IDS_GAMECUBE.to_vec(),
             saturn_platform_ids: TGDB_PLATFORM_IDS_SATURN.to_vec(),
             dos_platform_ids: TGDB_PLATFORM_IDS_DOS.to_vec(),
             pcecd_platform_ids: TGDB_PLATFORM_IDS_PCECD.to_vec(),

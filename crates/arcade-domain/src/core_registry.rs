@@ -79,10 +79,160 @@ pub fn core_profiles() -> Vec<CoreProfile> {
         pcsx2_profile(),
         play_profile(),
         flycast_profile(),
+        dolphin_profile(),
         mednafen_saturn_profile(),
         mednafen_pce_fast_profile(),
         dosbox_pure_profile(),
     ]
+}
+
+// ---------------------------------------------------------------------------
+// GameCube: dolphin
+// ---------------------------------------------------------------------------
+
+fn dolphin_profile() -> CoreProfile {
+    CoreProfile {
+        core_name: "dolphin",
+        display_name: "GameCube",
+        system: "GAMECUBE",
+        variables: vec![
+            var(
+                "dolphin_renderer",
+                "Renderer",
+                "Display",
+                vec![opt("Hardware"), opt("Software")],
+            ),
+            var(
+                "dolphin_efb_scale",
+                "Internal Resolution",
+                "Display",
+                vec![
+                    opt_d("x1 (640 x 528)", "1x Native"),
+                    opt_d("x2 (1280 x 1056)", "2x"),
+                    opt_d("x3 (1920 x 1584)", "3x"),
+                    opt_d("x4 (2560 x 2112)", "4x"),
+                    opt_d("x5 (3200 x 2640)", "5x"),
+                    opt_d("x6 (3840 x 3168)", "6x"),
+                ],
+            ),
+            var(
+                "dolphin_widescreen_hack",
+                "Widescreen Hack",
+                "Display",
+                vec![opt("OFF"), opt("ON")],
+            ),
+            var(
+                "dolphin_shader_compilation_mode",
+                "Shader Compilation",
+                "Display",
+                vec![
+                    opt("sync"),
+                    opt("a-sync Skip Rendering"),
+                    opt("sync UberShaders"),
+                    opt("a-sync UberShaders"),
+                ],
+            ),
+            var(
+                "dolphin_wait_for_shaders",
+                "Wait for Shaders",
+                "Display",
+                vec![opt("OFF"), opt("ON")],
+            ),
+            var(
+                "dolphin_progressive_scan",
+                "Progressive Scan",
+                "Video",
+                vec![opt("ON"), opt("OFF")],
+            ),
+            var(
+                "dolphin_pal60",
+                "PAL60",
+                "Video",
+                vec![opt("ON"), opt("OFF")],
+            ),
+            var(
+                "dolphin_max_anisotropy",
+                "Max Anisotropy",
+                "Video",
+                vec![opt("1x"), opt("2x"), opt("4x"), opt("8x"), opt("16x")],
+            ),
+            var(
+                "dolphin_efb_scaled_copy",
+                "Scaled EFB Copy",
+                "Video",
+                vec![opt("ON"), opt("OFF")],
+            ),
+            var(
+                "dolphin_texture_cache_accuracy",
+                "Texture Cache Accuracy",
+                "Video",
+                vec![opt("Fast"), opt("Middle"), opt("Safe")],
+            ),
+            var(
+                "dolphin_gpu_texture_decoding",
+                "GPU Texture Decoding",
+                "Video",
+                vec![opt("OFF"), opt("ON")],
+            ),
+            var(
+                "dolphin_fast_depth_calculation",
+                "Fast Depth Calculation",
+                "Video",
+                vec![opt("ON"), opt("OFF")],
+            ),
+            var(
+                "dolphin_cpu_core",
+                "CPU Core",
+                "Performance",
+                vec![
+                    opt("JIT64/JITARM64"),
+                    opt("Interpreter"),
+                    opt("Cached Interpreter"),
+                ],
+            ),
+            var(
+                "dolphin_fastmem",
+                "Fastmem",
+                "Performance",
+                vec![opt("ON"), opt("OFF")],
+            ),
+            var(
+                "dolphin_mixer_rate",
+                "Audio Mixer Rate",
+                "Audio",
+                vec![opt("32000"), opt("48000")],
+            ),
+            var(
+                "dolphin_dsp_hle",
+                "DSP HLE",
+                "Audio",
+                vec![opt("ON"), opt("OFF")],
+            ),
+            var(
+                "dolphin_dsp_jit",
+                "DSP JIT",
+                "Audio",
+                vec![opt("ON"), opt("OFF")],
+            ),
+            var(
+                "dolphin_language",
+                "Language",
+                "System",
+                vec![
+                    opt("English"),
+                    opt("Japanese"),
+                    opt("German"),
+                    opt("French"),
+                    opt("Spanish"),
+                    opt("Italian"),
+                    opt("Dutch"),
+                    opt("Simplified Chinese"),
+                    opt("Traditional Chinese"),
+                    opt("Korean"),
+                ],
+            ),
+        ],
+    }
 }
 
 /// Look up the profile for a specific core.
@@ -1587,6 +1737,7 @@ mod tests {
         assert!(core_profile_for("play").is_some());
         assert!(core_profile_for("mednafen_saturn").is_some());
         assert!(core_profile_for("mednafen_pce_fast").is_some());
+        assert!(core_profile_for("dolphin").is_some());
         assert!(core_profile_for("nonexistent").is_none());
     }
 

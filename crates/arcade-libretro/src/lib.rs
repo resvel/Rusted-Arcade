@@ -2297,6 +2297,25 @@ mod tests {
     }
 
     #[test]
+    fn resolve_core_candidates_include_dolphin_default_filename() {
+        let dir = tempdir().expect("tempdir");
+        let host = LibretroHost::new(
+            dir.path().join("cores"),
+            dir.path().join("bios"),
+            dir.path().join("saves"),
+            EmulationConfig::default(),
+        );
+
+        let candidates = host.resolve_core_candidates("dolphin");
+        let file_names = candidates
+            .iter()
+            .map(|path| path.file_name().and_then(|f| f.to_str()).unwrap_or(""))
+            .collect::<Vec<_>>();
+
+        assert_eq!(file_names, vec!["dolphin_libretro.dylib"]);
+    }
+
+    #[test]
     fn resolve_core_path_prefers_existing_candidate() {
         let dir = tempdir().expect("tempdir");
         let core_root = dir.path().join("cores");

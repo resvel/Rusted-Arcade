@@ -567,10 +567,12 @@ pub struct CoverScrapePlatformIds {
     // New platform IDs for additional consoles
     #[serde(default)]
     pub psx: Vec<u32>,
-    #[serde(default)]
+    #[serde(default = "default_cover_scrape_platform_ps2")]
     pub ps2: Vec<u32>,
     #[serde(default)]
     pub dreamcast: Vec<u32>,
+    #[serde(default = "default_cover_scrape_platform_gamecube")]
+    pub gamecube: Vec<u32>,
     #[serde(default = "default_cover_scrape_platform_saturn")]
     pub saturn: Vec<u32>,
     #[serde(default)]
@@ -590,8 +592,9 @@ impl Default for CoverScrapePlatformIds {
             n64: default_cover_scrape_platform_n64(),
             arcade: default_cover_scrape_platform_arcade(),
             psx: Vec::new(),
-            ps2: Vec::new(),
+            ps2: default_cover_scrape_platform_ps2(),
             dreamcast: Vec::new(),
+            gamecube: default_cover_scrape_platform_gamecube(),
             saturn: default_cover_scrape_platform_saturn(),
             dos: Vec::new(),
             pcecd: default_cover_scrape_platform_pcecd(),
@@ -626,6 +629,10 @@ fn default_cover_scrape_platform_n64() -> Vec<u32> {
     vec![3]
 }
 
+fn default_cover_scrape_platform_ps2() -> Vec<u32> {
+    vec![11]
+}
+
 fn default_cover_scrape_platform_arcade() -> Vec<u32> {
     vec![23]
 }
@@ -636,6 +643,10 @@ fn default_cover_scrape_platform_pcecd() -> Vec<u32> {
 
 fn default_cover_scrape_platform_saturn() -> Vec<u32> {
     vec![22]
+}
+
+fn default_cover_scrape_platform_gamecube() -> Vec<u32> {
+    vec![2]
 }
 
 impl Default for AppConfig {
@@ -919,6 +930,7 @@ mod tests {
             config.management.cover_scraping.platform_ids.arcade,
             vec![23]
         );
+        assert_eq!(config.management.cover_scraping.platform_ids.ps2, vec![11]);
         assert_eq!(
             config.management.cover_scraping.platform_ids.pcecd,
             vec![4955]
@@ -926,6 +938,10 @@ mod tests {
         assert_eq!(
             config.management.cover_scraping.platform_ids.saturn,
             vec![22]
+        );
+        assert_eq!(
+            config.management.cover_scraping.platform_ids.gamecube,
+            vec![2]
         );
     }
 

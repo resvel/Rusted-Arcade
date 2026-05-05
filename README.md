@@ -148,6 +148,7 @@ See [CORES.md](CORES.md) for core distribution policy and platform-specific note
 | PlayStation | `mednafen_psx_hw` |
 | PlayStation 2 | `play` on Apple Silicon macOS |
 | Dreamcast | `flycast` |
+| GameCube | `dolphin` |
 | Sega Saturn | `mednafen_saturn` |
 | PC Engine / TurboGrafx-16 | `mednafen_pce_fast` |
 | DOS | `dosbox_pure` |

@@ -2698,6 +2698,64 @@ fn action_to_retro_binding(
         };
     }
 
+    if normalized_system == "GAMECUBE" {
+        return match action {
+            "Up" => Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_UP)),
+            "Down" => Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_DOWN)),
+            "Left" => Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_LEFT)),
+            "Right" => Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_RIGHT)),
+            "A" => Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_A)),
+            "B" => Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_B)),
+            "X" => Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_X)),
+            "Y" => Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_Y)),
+            "Z" => Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_L2)),
+            "L" => Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_L)),
+            "R" => Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_R)),
+            "Start" => Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_START)),
+            "Main Stick Up" => Some(RetroActionBinding::Analog {
+                index: RETRO_DEVICE_INDEX_ANALOG_LEFT,
+                axis_id: RETRO_DEVICE_ID_ANALOG_Y,
+                value: -1.0,
+            }),
+            "Main Stick Down" => Some(RetroActionBinding::Analog {
+                index: RETRO_DEVICE_INDEX_ANALOG_LEFT,
+                axis_id: RETRO_DEVICE_ID_ANALOG_Y,
+                value: 1.0,
+            }),
+            "Main Stick Left" => Some(RetroActionBinding::Analog {
+                index: RETRO_DEVICE_INDEX_ANALOG_LEFT,
+                axis_id: RETRO_DEVICE_ID_ANALOG_X,
+                value: -1.0,
+            }),
+            "Main Stick Right" => Some(RetroActionBinding::Analog {
+                index: RETRO_DEVICE_INDEX_ANALOG_LEFT,
+                axis_id: RETRO_DEVICE_ID_ANALOG_X,
+                value: 1.0,
+            }),
+            "C Stick Up" => Some(RetroActionBinding::Analog {
+                index: RETRO_DEVICE_INDEX_ANALOG_RIGHT,
+                axis_id: RETRO_DEVICE_ID_ANALOG_Y,
+                value: -1.0,
+            }),
+            "C Stick Down" => Some(RetroActionBinding::Analog {
+                index: RETRO_DEVICE_INDEX_ANALOG_RIGHT,
+                axis_id: RETRO_DEVICE_ID_ANALOG_Y,
+                value: 1.0,
+            }),
+            "C Stick Left" => Some(RetroActionBinding::Analog {
+                index: RETRO_DEVICE_INDEX_ANALOG_RIGHT,
+                axis_id: RETRO_DEVICE_ID_ANALOG_X,
+                value: -1.0,
+            }),
+            "C Stick Right" => Some(RetroActionBinding::Analog {
+                index: RETRO_DEVICE_INDEX_ANALOG_RIGHT,
+                axis_id: RETRO_DEVICE_ID_ANALOG_X,
+                value: 1.0,
+            }),
+            _ => None,
+        };
+    }
+
     if normalized_system == "SATURN" {
         return match action {
             "Up" => Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_UP)),
@@ -3297,6 +3355,8 @@ fn runtime_input_policy_for_system(
 ) -> RuntimeInputPolicy {
     let normalized_system = normalize_system_name(system);
     let uses_primary_stick_selector = matches!(normalized_system.as_str(), "N64" | "DREAMCAST");
+    let supports_native_analog =
+        matches!(normalized_system.as_str(), "N64" | "DREAMCAST" | "GAMECUBE");
     RuntimeInputPolicy {
         keyboard_routing: if has_keyboard_callback && normalized_system == "DOS" {
             RetroKeyboardRouting::Passthrough
@@ -3304,7 +3364,7 @@ fn runtime_input_policy_for_system(
             RetroKeyboardRouting::SystemMapping
         },
         uses_primary_stick_selector,
-        supports_native_analog: uses_primary_stick_selector,
+        supports_native_analog,
         shortcut_directional_guard_enabled: false,
     }
 }
@@ -4635,6 +4695,8 @@ mod tests {
         assert!(runtime_input_policy_for_system("DREAMCAST", false).supports_native_analog);
         assert!(runtime_input_policy_for_system("DREAMCAST", false).uses_primary_stick_selector);
         assert!(runtime_input_policy_for_system("dreamcast", false).supports_native_analog);
+        assert!(runtime_input_policy_for_system("GAMECUBE", false).supports_native_analog);
+        assert!(!runtime_input_policy_for_system("GAMECUBE", false).uses_primary_stick_selector);
         assert!(!runtime_input_policy_for_system("SATURN", false).supports_native_analog);
         assert!(!runtime_input_policy_for_system("SATURN", false).uses_primary_stick_selector);
         assert!(!runtime_input_policy_for_system("PCECD", false).supports_native_analog);
@@ -4823,6 +4885,54 @@ mod tests {
                 index: RETRO_DEVICE_INDEX_ANALOG_RIGHT,
                 axis_id: RETRO_DEVICE_ID_ANALOG_X,
                 value: -1.0,
+            })
+        );
+    }
+
+    #[test]
+    fn gamecube_action_bindings_map_faces_shoulders_and_sticks_to_retropad() {
+        assert_eq!(
+            action_to_retro_binding("GAMECUBE", "A", None),
+            Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_A))
+        );
+        assert_eq!(
+            action_to_retro_binding("GAMECUBE", "B", None),
+            Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_B))
+        );
+        assert_eq!(
+            action_to_retro_binding("GAMECUBE", "X", None),
+            Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_X))
+        );
+        assert_eq!(
+            action_to_retro_binding("GAMECUBE", "Y", None),
+            Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_Y))
+        );
+        assert_eq!(
+            action_to_retro_binding("GAMECUBE", "Z", None),
+            Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_L2))
+        );
+        assert_eq!(
+            action_to_retro_binding("GAMECUBE", "L", None),
+            Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_L))
+        );
+        assert_eq!(
+            action_to_retro_binding("GAMECUBE", "R", None),
+            Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_R))
+        );
+        assert_eq!(
+            action_to_retro_binding("GAMECUBE", "Main Stick Up", None),
+            Some(RetroActionBinding::Analog {
+                index: RETRO_DEVICE_INDEX_ANALOG_LEFT,
+                axis_id: RETRO_DEVICE_ID_ANALOG_Y,
+                value: -1.0,
+            })
+        );
+        assert_eq!(
+            action_to_retro_binding("GAMECUBE", "C Stick Right", None),
+            Some(RetroActionBinding::Analog {
+                index: RETRO_DEVICE_INDEX_ANALOG_RIGHT,
+                axis_id: RETRO_DEVICE_ID_ANALOG_X,
+                value: 1.0,
             })
         );
     }

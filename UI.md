@@ -100,6 +100,7 @@ System logo assignments:
 | PSX | `Playstation_logo_colour.png` |
 | PS2 | `PlayStation_2_logo.png` |
 | DREAMCAST | `Dreamcast_logo_Japan.png` |
+| GAMECUBE | `gamecube.svg` |
 | SATURN | `SegaSaturn_logo.png` |
 | PCECD | `pcecd_logo.png` |
 | DOS | `Msdos.png` |
@@ -118,6 +119,7 @@ System controller mapper assignments:
 | PSX | `gamepads/controllercons.2.1/svg/outline/ps1.svg` | `gamepads/hotspots/outline/psx.hotspots.svg` |
 | PS2 | `gamepads/controllercons.2.1/svg/outline/ps2.svg` | `gamepads/hotspots/outline/ps2.hotspots.svg` |
 | DREAMCAST | `gamepads/controllercons.2.1/svg/outline/dreamcast.svg` | `gamepads/hotspots/outline/dreamcast.hotspots.svg` |
+| GAMECUBE | `gamepads/controllercons.2.1/svg/outline/gamecube.svg` | `gamepads/hotspots/outline/gamecube.hotspots.svg` |
 | SATURN | `gamepads/controllercons.2.1/svg/outline/sega-saturn.svg` | `gamepads/hotspots/outline/saturn.hotspots.svg` |
 | PCECD | `gamepads/controllercons.2.1/svg/outline/pc-engine.svg` | `gamepads/hotspots/outline/pc-engine.hotspots.svg` |
 

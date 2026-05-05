@@ -61,6 +61,7 @@ pub struct CoverScrapeSettingsInput {
     pub psx_platform_ids: Vec<u32>,
     pub ps2_platform_ids: Vec<u32>,
     pub dreamcast_platform_ids: Vec<u32>,
+    pub gamecube_platform_ids: Vec<u32>,
     pub saturn_platform_ids: Vec<u32>,
     pub dos_platform_ids: Vec<u32>,
     pub pcecd_platform_ids: Vec<u32>,
@@ -433,6 +434,34 @@ const DREAMCAST_GAMEPAD_ACTIONS: [&str; 14] = [
     RESET_ACTION,
 ];
 
+const GAMECUBE_GAMEPAD_ACTIONS: [&str; 25] = [
+    "Up",
+    "Down",
+    "Left",
+    "Right",
+    "A",
+    "B",
+    "X",
+    "Y",
+    "Z",
+    "L",
+    "R",
+    "Start",
+    "Main Stick Up",
+    "Main Stick Down",
+    "Main Stick Left",
+    "Main Stick Right",
+    "C Stick Up",
+    "C Stick Down",
+    "C Stick Left",
+    "C Stick Right",
+    EXIT_ACTION,
+    QUICK_SAVE_ACTION,
+    QUICK_LOAD_ACTION,
+    NEXT_SAVE_SLOT_ACTION,
+    RESET_ACTION,
+];
+
 const DOS_GAMEPAD_ACTIONS: [&str; 17] = [
     "Up",
     "Down",
@@ -502,6 +531,7 @@ pub fn supported_gamepad_actions(system: &str) -> &'static [&'static str] {
         "PSX" => &PSX_GAMEPAD_ACTIONS,
         "PS2" => &PS2_GAMEPAD_ACTIONS,
         "DREAMCAST" => &DREAMCAST_GAMEPAD_ACTIONS,
+        "GAMECUBE" => &GAMECUBE_GAMEPAD_ACTIONS,
         "SATURN" => &SATURN_GAMEPAD_ACTIONS,
         "PCECD" => &PCECD_GAMEPAD_ACTIONS,
         "DOS" => &DOS_GAMEPAD_ACTIONS,
@@ -645,6 +675,39 @@ pub fn default_gamepad_mapping_for_system(system: &str) -> StoredGamepadMapping 
             insert_button(&mut actions, "X", CanonicalButton::West);
             insert_button(&mut actions, "Y", CanonicalButton::North);
             insert_button(&mut actions, "Start", CanonicalButton::Start);
+        }
+        "GAMECUBE" => {
+            insert_button(&mut actions, "A", CanonicalButton::South);
+            insert_button(&mut actions, "B", CanonicalButton::East);
+            insert_button(&mut actions, "X", CanonicalButton::West);
+            insert_button(&mut actions, "Y", CanonicalButton::North);
+            insert_axis(&mut actions, "Z", CanonicalAxis::LeftTrigger, 1);
+            insert_button(&mut actions, "L", CanonicalButton::LeftShoulder);
+            insert_button(&mut actions, "R", CanonicalButton::RightShoulder);
+            insert_button(&mut actions, "Start", CanonicalButton::Start);
+            insert_axis(&mut actions, "Main Stick Up", CanonicalAxis::LeftStickY, -1);
+            insert_axis(
+                &mut actions,
+                "Main Stick Down",
+                CanonicalAxis::LeftStickY,
+                1,
+            );
+            insert_axis(
+                &mut actions,
+                "Main Stick Left",
+                CanonicalAxis::LeftStickX,
+                -1,
+            );
+            insert_axis(
+                &mut actions,
+                "Main Stick Right",
+                CanonicalAxis::LeftStickX,
+                1,
+            );
+            insert_axis(&mut actions, "C Stick Up", CanonicalAxis::RightStickY, -1);
+            insert_axis(&mut actions, "C Stick Down", CanonicalAxis::RightStickY, 1);
+            insert_axis(&mut actions, "C Stick Left", CanonicalAxis::RightStickX, -1);
+            insert_axis(&mut actions, "C Stick Right", CanonicalAxis::RightStickX, 1);
         }
         "SATURN" => {
             insert_button(&mut actions, "A", CanonicalButton::South);
@@ -857,6 +920,65 @@ mod tests {
         assert!(actions.contains(&"R"));
         assert!(actions.contains(&"Start"));
         assert!(actions.contains(&EXIT_ACTION));
+    }
+
+    #[test]
+    fn gamecube_actions_include_faces_shoulders_and_sticks() {
+        let actions = supported_gamepad_actions("GAMECUBE");
+        for action in [
+            "A",
+            "B",
+            "X",
+            "Y",
+            "Z",
+            "L",
+            "R",
+            "Start",
+            "Main Stick Up",
+            "C Stick Right",
+            EXIT_ACTION,
+        ] {
+            assert!(actions.contains(&action));
+        }
+    }
+
+    #[test]
+    fn gamecube_default_mapping_assigns_faces_shoulders_and_sticks() {
+        let mapping = default_gamepad_mapping_for_system("GAMECUBE");
+
+        assert_eq!(
+            mapping.actions.get("A"),
+            Some(&Some(MappingEntry::Button {
+                button: CanonicalButton::South,
+            }))
+        );
+        assert_eq!(
+            mapping.actions.get("B"),
+            Some(&Some(MappingEntry::Button {
+                button: CanonicalButton::East,
+            }))
+        );
+        assert_eq!(
+            mapping.actions.get("Z"),
+            Some(&Some(MappingEntry::Axis {
+                axis: CanonicalAxis::LeftTrigger,
+                direction: 1,
+            }))
+        );
+        assert_eq!(
+            mapping.actions.get("Main Stick Up"),
+            Some(&Some(MappingEntry::Axis {
+                axis: CanonicalAxis::LeftStickY,
+                direction: -1,
+            }))
+        );
+        assert_eq!(
+            mapping.actions.get("C Stick Right"),
+            Some(&Some(MappingEntry::Axis {
+                axis: CanonicalAxis::RightStickX,
+                direction: 1,
+            }))
+        );
     }
 
     #[test]

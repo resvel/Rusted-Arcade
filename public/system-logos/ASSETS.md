@@ -23,6 +23,7 @@ Used as full-bleed backgrounds in each non-play view.
 
 - `Game_Boy_logo.png` — Game Boy logo
 - `Game_Boy_Advance_logo.png` — Game Boy Advance logo
+- `gamecube.svg` — Nintendo GameCube official logo SVG from Wikimedia Commons. Source: https://commons.wikimedia.org/wiki/File:Nintendo_GameCube_Official_Logo.svg. License/source note: public domain logo image, with trademark restrictions still applying to the mark.
 - `Msdos.png` — MS-DOS logo
 - `n64logo.png` — Nintendo 64 logo
 - `nintendo.svg` — Nintendo wordmark (SVG)

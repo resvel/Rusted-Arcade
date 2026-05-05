@@ -168,6 +168,13 @@ pub fn get_saturn_bios_directory(rom_root: &Path, bios_root: Option<&Path>) -> P
         .unwrap_or_else(|| rom_root.join("saturn"))
 }
 
+pub fn get_dolphin_sys_directory(rom_root: &Path, bios_root: Option<&Path>) -> PathBuf {
+    candidate_dolphin_sys_directories(rom_root, bios_root)
+        .into_iter()
+        .find(|path| path.exists())
+        .unwrap_or_else(|| rom_root.join("dolphin-emu").join("Sys"))
+}
+
 pub fn find_pcecd_bios_file(rom_root: &Path, bios_root: Option<&Path>) -> Option<PathBuf> {
     let accepted = PCECD_ACCEPTED_BIOS_FILES
         .iter()
@@ -224,6 +231,12 @@ pub fn find_saturn_bios_file(rom_root: &Path, bios_root: Option<&Path>) -> Optio
     None
 }
 
+pub fn find_dolphin_sys_directory(rom_root: &Path, bios_root: Option<&Path>) -> Option<PathBuf> {
+    candidate_dolphin_sys_directories(rom_root, bios_root)
+        .into_iter()
+        .find(|path| dolphin_sys_directory_is_plausible(path))
+}
+
 fn candidate_pcecd_bios_directories(rom_root: &Path, bios_root: Option<&Path>) -> Vec<PathBuf> {
     let mut candidates = Vec::new();
     let mut push_unique = |path: PathBuf| {
@@ -258,6 +271,29 @@ fn candidate_saturn_bios_directories(rom_root: &Path, bios_root: Option<&Path>) 
     push_unique(rom_root.join("saturn"));
     push_unique(rom_root.join("roms").join("saturn"));
     candidates
+}
+
+fn candidate_dolphin_sys_directories(rom_root: &Path, bios_root: Option<&Path>) -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+    let mut push_unique = |path: PathBuf| {
+        if !candidates.iter().any(|existing| existing == &path) {
+            candidates.push(path);
+        }
+    };
+
+    if let Some(bios_root) = bios_root {
+        push_unique(bios_root.join("dolphin-emu").join("Sys"));
+        push_unique(bios_root.join("roms").join("dolphin-emu").join("Sys"));
+    }
+    push_unique(rom_root.join("dolphin-emu").join("Sys"));
+    push_unique(rom_root.join("roms").join("dolphin-emu").join("Sys"));
+    candidates
+}
+
+fn dolphin_sys_directory_is_plausible(path: &Path) -> bool {
+    path.is_dir()
+        && path.join("GC").is_dir()
+        && (path.join("GameSettings").is_dir() || path.join("Resources").is_dir())
 }
 
 pub fn is_arcade_cps3_blocked_title(title: Option<&str>) -> bool {
@@ -564,5 +600,29 @@ mod tests {
 
         let preferred = get_saturn_bios_directory(&rom_root, Some(&bios_root));
         assert_eq!(preferred, bios_root);
+    }
+
+    #[test]
+    fn dolphin_sys_lookup_accepts_plausible_sys_directory_without_ipl_bios() {
+        let dir = tempdir().unwrap();
+        let rom_root = dir.path().join("roms");
+        let bios_root = dir.path().join("bios");
+        let sys_root = bios_root.join("dolphin-emu").join("Sys");
+        fs::create_dir_all(sys_root.join("GC")).unwrap();
+        fs::create_dir_all(sys_root.join("GameSettings")).unwrap();
+
+        let found = find_dolphin_sys_directory(&rom_root, Some(&bios_root));
+        assert_eq!(found, Some(sys_root));
+    }
+
+    #[test]
+    fn dolphin_sys_lookup_rejects_incomplete_sys_directory() {
+        let dir = tempdir().unwrap();
+        let rom_root = dir.path().join("roms");
+        let bios_root = dir.path().join("bios");
+        let sys_root = bios_root.join("dolphin-emu").join("Sys");
+        fs::create_dir_all(sys_root.join("GC")).unwrap();
+
+        assert!(find_dolphin_sys_directory(&rom_root, Some(&bios_root)).is_none());
     }
 }

@@ -542,6 +542,28 @@ mod tests {
         assert_eq!(cable_type.to_str().expect("utf8"), "VGA(RGB)");
     }
 
+    #[test]
+    fn default_core_variables_apply_dolphin_profile_defaults() {
+        let variables = default_core_variables_for(
+            "dolphin",
+            VideoBackendKind::Vulkan,
+            &EmulationConfig::default(),
+        );
+        let renderer = variables
+            .get("dolphin_renderer")
+            .expect("dolphin renderer default");
+        let efb_scale = variables
+            .get("dolphin_efb_scale")
+            .expect("dolphin efb scale default");
+        let cpu_core = variables
+            .get("dolphin_cpu_core")
+            .expect("dolphin cpu core default");
+
+        assert_eq!(renderer.to_str().expect("utf8"), "Hardware");
+        assert_eq!(efb_scale.to_str().expect("utf8"), "x1 (640 x 528)");
+        assert_eq!(cpu_core.to_str().expect("utf8"), "JIT64/JITARM64");
+    }
+
     #[cfg(target_os = "macos")]
     #[test]
     fn default_core_variables_force_parallel_n64_macos_opengl_to_angrylion() {

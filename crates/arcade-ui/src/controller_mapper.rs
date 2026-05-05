@@ -26,6 +26,7 @@ pub(crate) enum SystemControllerLayout {
     Psx,
     Ps2,
     Dreamcast,
+    GameCube,
     Saturn,
 }
 
@@ -1013,6 +1014,50 @@ const DREAMCAST_SYSTEM_HOTSPOTS: [SystemActionHotspot; 13] = [
     system_rect("Start", "Start", 0.525, 0.630, 0.110, 0.046),
 ];
 
+const GAMECUBE_SYSTEM_HOTSPOTS: [SystemActionHotspot; 20] = [
+    system_circle("Up", "Up", 0.341, 0.535, 0.026),
+    system_circle("Down", "Down", 0.341, 0.657, 0.026),
+    system_circle("Left", "Left", 0.280, 0.596, 0.026),
+    system_circle("Right", "Right", 0.402, 0.596, 0.026),
+    system_rect("Main Stick Up", "Main Stick Up", 0.190, 0.303, 0.091, 0.031),
+    system_rect(
+        "Main Stick Down",
+        "Main Stick Down",
+        0.190,
+        0.443,
+        0.091,
+        0.031,
+    ),
+    system_rect(
+        "Main Stick Left",
+        "Main Stick Left",
+        0.112,
+        0.373,
+        0.031,
+        0.091,
+    ),
+    system_rect(
+        "Main Stick Right",
+        "Main Stick Right",
+        0.268,
+        0.373,
+        0.031,
+        0.091,
+    ),
+    system_rect("C Stick Up", "C Stick Up", 0.660, 0.520, 0.091, 0.031),
+    system_rect("C Stick Down", "C Stick Down", 0.660, 0.661, 0.091, 0.031),
+    system_rect("C Stick Left", "C Stick Left", 0.580, 0.591, 0.031, 0.091),
+    system_rect("C Stick Right", "C Stick Right", 0.740, 0.591, 0.031, 0.091),
+    system_circle("A", "A", 0.660, 0.591, 0.050),
+    system_circle("B", "B", 0.687, 0.435, 0.043),
+    system_circle("X", "X", 0.800, 0.385, 0.052),
+    system_circle("Y", "Y", 0.795, 0.250, 0.040),
+    system_rect("Z", "Z", 0.805, 0.193, 0.140, 0.050),
+    system_rect("L", "L", 0.230, 0.180, 0.155, 0.050),
+    system_rect("R", "R", 0.790, 0.180, 0.155, 0.050),
+    system_circle("Start", "Start", 0.499, 0.382, 0.030),
+];
+
 const SATURN_SYSTEM_HOTSPOTS: [SystemActionHotspot; 13] = [
     system_circle("Up", "Up", 0.217, 0.411, 0.031),
     system_circle("Down", "Down", 0.217, 0.547, 0.031),
@@ -1079,6 +1124,7 @@ pub(crate) fn system_controller_layout_for_system(system: &str) -> Option<System
         "PSX" => Some(SystemControllerLayout::Psx),
         "PS2" => Some(SystemControllerLayout::Ps2),
         "DREAMCAST" => Some(SystemControllerLayout::Dreamcast),
+        "GAMECUBE" => Some(SystemControllerLayout::GameCube),
         "SATURN" => Some(SystemControllerLayout::Saturn),
         _ => None,
     }
@@ -1105,6 +1151,7 @@ pub(crate) fn system_controller_mapper_art_asset(layout: SystemControllerLayout)
         SystemControllerLayout::Dreamcast => {
             "/gamepads/controllercons.2.1/svg/outline/dreamcast.svg"
         }
+        SystemControllerLayout::GameCube => "/gamepads/controllercons.2.1/svg/outline/gamecube.svg",
         SystemControllerLayout::Saturn => {
             "/gamepads/controllercons.2.1/svg/outline/sega-saturn.svg"
         }
@@ -1126,6 +1173,7 @@ pub(crate) fn system_controller_hotspot_overlay_asset(
         SystemControllerLayout::Psx => "/gamepads/hotspots/outline/psx.hotspots.svg",
         SystemControllerLayout::Ps2 => "/gamepads/hotspots/outline/ps2.hotspots.svg",
         SystemControllerLayout::Dreamcast => "/gamepads/hotspots/outline/dreamcast.hotspots.svg",
+        SystemControllerLayout::GameCube => "/gamepads/hotspots/outline/gamecube.hotspots.svg",
         SystemControllerLayout::Saturn => "/gamepads/hotspots/outline/saturn.hotspots.svg",
     }
 }
@@ -1145,6 +1193,7 @@ pub(crate) fn system_controller_hotspots(
         SystemControllerLayout::Psx => &PSX_SYSTEM_HOTSPOTS,
         SystemControllerLayout::Ps2 => &PS2_SYSTEM_HOTSPOTS,
         SystemControllerLayout::Dreamcast => &DREAMCAST_SYSTEM_HOTSPOTS,
+        SystemControllerLayout::GameCube => &GAMECUBE_SYSTEM_HOTSPOTS,
         SystemControllerLayout::Saturn => &SATURN_SYSTEM_HOTSPOTS,
     }
 }
@@ -2128,8 +2177,8 @@ mod tests {
             Some(SystemControllerLayout::Saturn)
         );
         assert_eq!(
-            system_controller_layout_for_system("GBA"),
-            Some(SystemControllerLayout::GameBoyAdvance)
+            system_controller_layout_for_system("GAMECUBE"),
+            Some(SystemControllerLayout::GameCube)
         );
         assert_eq!(system_controller_layout_for_system("DOS"), None);
     }
@@ -2148,6 +2197,7 @@ mod tests {
         assert!(system_action_is_native("GBA", "L"));
         assert!(system_action_is_native("PS2", "Right Stick Left"));
         assert!(system_action_is_native("N64", "C-Up"));
+        assert!(system_action_is_native("GAMECUBE", "C Stick Right"));
         assert!(!system_action_is_native("NES", "Quick Save"));
         assert!(!system_action_is_native("DOS", "A"));
     }
@@ -2270,6 +2320,10 @@ mod tests {
             (
                 SystemControllerLayout::Dreamcast,
                 include_str!("../../../public/gamepads/hotspots/outline/dreamcast.hotspots.svg"),
+            ),
+            (
+                SystemControllerLayout::GameCube,
+                include_str!("../../../public/gamepads/hotspots/outline/gamecube.hotspots.svg"),
             ),
             (
                 SystemControllerLayout::Saturn,
