@@ -467,7 +467,19 @@ impl NativeServices {
             let title = title_from_path(path);
             let slug = unique_slug_for_scan(existing_slug, &title, &mut slug_set);
             path_to_slug.insert(stored_file_path.clone(), slug.clone());
-            let checksum = hash_file(path)?;
+            let checksum = match hash_file(path) {
+                Ok(checksum) => checksum,
+                Err(err) => {
+                    summary.failed += 1;
+                    progress(ManageProgressEvent {
+                        kind: ManageOperationKind::SmartScan,
+                        processed: index + 1,
+                        total: Some(total),
+                        message: format!("Failed to scan {}: {err}", path.display()),
+                    });
+                    continue;
+                }
+            };
             let cover_path = resolve_local_cover_path_for_scan(
                 &local_cover_index,
                 &arcade_cover_index,
@@ -501,8 +513,8 @@ impl NativeServices {
         }
 
         summary.message = format!(
-            "Smart scan complete: {} created, {} updated, {} unchanged, {} skipped.",
-            summary.created, summary.updated, summary.unchanged, summary.skipped
+            "Smart scan complete: {} created, {} updated, {} unchanged, {} skipped, {} failed.",
+            summary.created, summary.updated, summary.unchanged, summary.skipped, summary.failed
         );
         Ok(summary)
     }
@@ -2410,6 +2422,36 @@ mod tests {
             .expect("scanned rom");
         assert_eq!(scanned.rom.system, "PCECD");
         assert_eq!(scanned.rom.file_path, "pcecd/Bonk.pce");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn smart_scan_counts_unreadable_supported_files_as_failed() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let tmp = TempDir::new().expect("tempdir");
+        let config = make_config(&tmp);
+        let db = Database::open(&config).expect("open db");
+        let rom_dir = config.paths.rom_root.join("pcecd");
+        std::fs::create_dir_all(&rom_dir).expect("create rom dir");
+        let readable_rom = rom_dir.join("Bonk.pce");
+        let unreadable_rom = rom_dir.join("Unreadable.cue");
+        std::fs::write(&readable_rom, b"pce-hucard-rom").expect("write readable rom");
+        std::fs::write(&unreadable_rom, b"cue-rom").expect("write unreadable rom");
+        std::fs::set_permissions(&unreadable_rom, std::fs::Permissions::from_mode(0o000))
+            .expect("remove read permission");
+        let services = NativeServices::bootstrap(config.clone(), config_path_for(&config), db)
+            .expect("bootstrap");
+
+        let summary = services
+            .smart_scan_roms(&ManageScope::System(String::from("PCECD")), |_| {})
+            .expect("smart scan should continue past unreadable files");
+        assert_eq!(summary.created, 1);
+        assert_eq!(summary.failed, 1);
+        assert!(summary.message.contains("1 failed"));
+
+        std::fs::set_permissions(&unreadable_rom, std::fs::Permissions::from_mode(0o644))
+            .expect("restore read permission for temp cleanup");
     }
 
     #[test]
