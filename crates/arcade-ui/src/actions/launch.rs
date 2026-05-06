@@ -87,6 +87,10 @@ impl NativeArcadeUiApp {
                         );
                         self.assets.last_frame_texture = None;
                         self.assets.last_gl_texture_frame = None;
+                        #[cfg(target_os = "macos")]
+                        {
+                            self.assets.last_macos_iosurface_frame = None;
+                        }
                         self.show_play_bar();
                     }
                     Err(err) => {

@@ -359,6 +359,8 @@ impl NativeArcadeUiApp {
             match frame {
                 FrameOutput::Cpu(frame) => self.update_frame_texture(ctx, frame),
                 FrameOutput::GlTexture(frame) => self.update_gl_texture_frame(frame),
+                #[cfg(target_os = "macos")]
+                FrameOutput::MacosIosurface(frame) => self.update_macos_iosurface_frame(frame),
             }
         }
         let tick_work = tick_started_at.elapsed();
@@ -492,6 +494,10 @@ impl NativeArcadeUiApp {
         self.state.play.clear_session();
         self.assets.last_frame_texture = None;
         self.assets.last_gl_texture_frame = None;
+        #[cfg(target_os = "macos")]
+        {
+            self.assets.last_macos_iosurface_frame = None;
+        }
         self.reset_play_clock();
         if self.state.current_view != return_view {
             self.state.current_view = return_view;

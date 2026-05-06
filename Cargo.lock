@@ -233,12 +233,14 @@ dependencies = [
  "egui",
  "gilrs",
  "image",
+ "metal",
  "raw-window-handle",
  "resvg",
  "rfd",
  "roxmltree",
  "serde_json",
  "tracing",
+ "wgpu-hal",
 ]
 
 [[package]]

@@ -5,6 +5,8 @@ use std::sync::Arc;
 
 use arcade_domain::RomCard;
 use arcade_libretro::GlTextureFrame;
+#[cfg(target_os = "macos")]
+use arcade_libretro::MacosIosurfaceFrame;
 use eframe::egui;
 use egui::{Color32, ColorImage, TextureHandle, Vec2};
 
@@ -33,6 +35,8 @@ pub(crate) struct AssetCache {
     pub(crate) controller_mapper_overlay_failures: HashSet<PathBuf>,
     pub(crate) last_frame_texture: Option<TextureHandle>,
     pub(crate) last_gl_texture_frame: Option<GlTextureFrame>,
+    #[cfg(target_os = "macos")]
+    pub(crate) last_macos_iosurface_frame: Option<MacosIosurfaceFrame>,
     pub(crate) play_frame_rgba: Vec<u8>,
     pub(crate) cover_load_budget: usize,
 }
@@ -51,9 +55,33 @@ impl AssetCache {
             controller_mapper_overlay_failures: HashSet::new(),
             last_frame_texture: None,
             last_gl_texture_frame: None,
+            #[cfg(target_os = "macos")]
+            last_macos_iosurface_frame: None,
             play_frame_rgba: Vec::new(),
             cover_load_budget: 0,
         }
+    }
+
+    pub(crate) fn clear_for_cpu_frame(&mut self) {
+        self.last_gl_texture_frame = None;
+        #[cfg(target_os = "macos")]
+        {
+            self.last_macos_iosurface_frame = None;
+        }
+    }
+
+    pub(crate) fn clear_for_gl_texture_frame(&mut self) {
+        self.last_frame_texture = None;
+        #[cfg(target_os = "macos")]
+        {
+            self.last_macos_iosurface_frame = None;
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    pub(crate) fn clear_for_macos_iosurface_frame(&mut self) {
+        self.last_frame_texture = None;
+        self.last_gl_texture_frame = None;
     }
 }
 
@@ -619,6 +647,46 @@ impl NativeArcadeUiApp {
         );
         cache.insert(cache_key, texture.clone());
         Some(texture)
+    }
+}
+
+#[cfg(test)]
+mod delivery_tests {
+    use super::*;
+    use eframe::glow;
+    use std::num::NonZeroU32;
+
+    fn cache() -> AssetCache {
+        AssetCache::new(std::env::temp_dir().as_path())
+    }
+
+    #[test]
+    fn cpu_frame_delivery_clears_stale_gl_frame() {
+        let mut cache = cache();
+        cache.last_gl_texture_frame = Some(GlTextureFrame {
+            texture: glow::NativeTexture(NonZeroU32::new(1).unwrap()),
+            width: 640,
+            height: 448,
+            bottom_left_origin: true,
+            generation: 7,
+        });
+
+        cache.clear_for_cpu_frame();
+
+        assert!(cache.last_gl_texture_frame.is_none());
+    }
+
+    #[test]
+    fn gl_frame_delivery_clears_stale_cpu_texture() {
+        let mut cache = cache();
+        let ctx = egui::Context::default();
+        let image = egui::ColorImage::from_rgba_unmultiplied([1, 1], &[255, 255, 255, 255]);
+        cache.last_frame_texture =
+            Some(ctx.load_texture("stale-cpu-frame", image, egui::TextureOptions::NEAREST));
+
+        cache.clear_for_gl_texture_frame();
+
+        assert!(cache.last_frame_texture.is_none());
     }
 }
 

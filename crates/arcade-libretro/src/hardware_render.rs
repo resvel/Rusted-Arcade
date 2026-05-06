@@ -24,6 +24,168 @@ pub(super) fn make_gl_ctx_current(ctx_id: usize) -> bool {
     unsafe { CGLSetCurrentContext(ctx_id as *const std::ffi::c_void) == 0 }
 }
 
+#[cfg(target_os = "macos")]
+unsafe extern "C" {
+    fn CGLChoosePixelFormat(
+        attribs: *const i32,
+        pix: *mut *mut std::ffi::c_void,
+        npix: *mut i32,
+    ) -> i32;
+    fn CGLCreateContext(
+        pix: *mut std::ffi::c_void,
+        share: *mut std::ffi::c_void,
+        ctx: *mut *mut std::ffi::c_void,
+    ) -> i32;
+    fn CGLSetCurrentContext(ctx: *const std::ffi::c_void) -> i32;
+    fn CGLGetCurrentContext() -> *const std::ffi::c_void;
+    fn CGLTexImageIOSurface2D(
+        ctx: *const std::ffi::c_void,
+        target: u32,
+        internal_format: u32,
+        width: usize,
+        height: usize,
+        format: u32,
+        ty: u32,
+        io_surface: *mut std::ffi::c_void,
+        plane: u32,
+    ) -> i32;
+    fn IOSurfaceCreate(properties: *const std::ffi::c_void) -> *mut std::ffi::c_void;
+
+    static kIOSurfaceWidth: *mut Object;
+    static kIOSurfaceHeight: *mut Object;
+    static kIOSurfacePixelFormat: *mut Object;
+    static kIOSurfaceBytesPerElement: *mut Object;
+}
+
+#[cfg(target_os = "macos")]
+const MACOS_GL_TEXTURE_RECTANGLE: u32 = 0x84F5;
+
+#[cfg(target_os = "macos")]
+const MACOS_GL_TEXTURE_BINDING_RECTANGLE: u32 = 0x84F6;
+
+#[cfg(target_os = "macos")]
+const MACOS_IOSURFACE_RING_SIZE: usize = 2;
+
+#[cfg(target_os = "macos")]
+pub(super) fn ensure_private_play_gl_context_for_wgpu(runtime: &HostRuntime) -> Result<()> {
+    let capabilities = runtime
+        .video_coordinator
+        .lock()
+        .frontend_capabilities()
+        .clone();
+    if capabilities.gl_context.is_some() || !capabilities.supports_private_macos_play_gl_bridge() {
+        return Ok(());
+    }
+    if runtime
+        .hw_render_state
+        .lock()
+        .private_play_gl_context
+        .is_some()
+    {
+        return Ok(());
+    }
+
+    let context = create_private_play_gl_context()
+        .context("failed to set up private macOS Play OpenGL bridge context")?;
+    let raw_context = context.raw_context;
+    let gl = context.gl.clone();
+    {
+        let mut state = runtime.hw_render_state.lock();
+        state.frontend_gl_context = Some(gl);
+        state.eframe_gl_ctx_id = raw_context;
+        state.private_play_gl_context = Some(context);
+        state.using_private_play_gl_context = true;
+    }
+    info!(
+        target: "arcade_libretro::core_loader",
+        "Play macOS private GL bridge initialized CGL context=0x{raw_context:x}"
+    );
+    Ok(())
+}
+
+#[cfg(not(target_os = "macos"))]
+pub(super) fn ensure_private_play_gl_context_for_wgpu(_runtime: &HostRuntime) -> Result<()> {
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn create_private_play_gl_context() -> Result<MacosPrivateGlContext> {
+    const KCGL_PFA_ACCELERATED: i32 = 73;
+    const KCGL_PFA_OPENGL_PROFILE: i32 = 99;
+    const KCGL_PFA_COLOR_SIZE: i32 = 8;
+    const KCGL_PFA_DEPTH_SIZE: i32 = 12;
+    const KCGL_PFA_STENCIL_SIZE: i32 = 13;
+    const KCGLOGLP_VERSION_3_2_CORE: i32 = 0x3200;
+
+    let attrs = [
+        KCGL_PFA_OPENGL_PROFILE,
+        KCGLOGLP_VERSION_3_2_CORE,
+        KCGL_PFA_ACCELERATED,
+        KCGL_PFA_COLOR_SIZE,
+        24,
+        KCGL_PFA_DEPTH_SIZE,
+        24,
+        KCGL_PFA_STENCIL_SIZE,
+        8,
+        0,
+    ];
+    let mut pixel_format = std::ptr::null_mut();
+    let mut pixel_format_count = 0;
+    let choose_status =
+        unsafe { CGLChoosePixelFormat(attrs.as_ptr(), &mut pixel_format, &mut pixel_format_count) };
+    if choose_status != 0 || pixel_format.is_null() || pixel_format_count <= 0 {
+        return Err(anyhow!(
+            "CGLChoosePixelFormat failed for private Play bridge (status={choose_status}, count={pixel_format_count})"
+        ));
+    }
+
+    let mut raw_context = std::ptr::null_mut();
+    let create_status =
+        unsafe { CGLCreateContext(pixel_format, std::ptr::null_mut(), &mut raw_context) };
+    if create_status != 0 || raw_context.is_null() {
+        unsafe {
+            CGLReleasePixelFormat(pixel_format);
+        }
+        return Err(anyhow!(
+            "CGLCreateContext failed for private Play bridge (status={create_status})"
+        ));
+    }
+    let current_status = unsafe { CGLSetCurrentContext(raw_context.cast_const()) };
+    if current_status != 0 {
+        unsafe {
+            let _ = CGLDestroyContext(raw_context);
+            CGLReleasePixelFormat(pixel_format);
+        }
+        return Err(anyhow!(
+            "CGLSetCurrentContext failed for private Play bridge (status={current_status})"
+        ));
+    }
+
+    let opengl_library =
+        unsafe { Library::new("/System/Library/Frameworks/OpenGL.framework/OpenGL") }
+            .context("failed to open OpenGL.framework for private Play bridge")?;
+    let gl = unsafe {
+        glow::Context::from_loader_function(|name| {
+            let Ok(symbol_name) = CString::new(name) else {
+                return std::ptr::null();
+            };
+            opengl_library
+                .get::<*const std::ffi::c_void>(symbol_name.as_bytes_with_nul())
+                .map(|symbol| *symbol)
+                .unwrap_or(std::ptr::null())
+        })
+    };
+    let gl = Arc::new(gl);
+    log_frontend_gl_context(&gl);
+
+    Ok(MacosPrivateGlContext {
+        raw_context: raw_context as usize,
+        raw_pixel_format: pixel_format as usize,
+        gl,
+        _opengl_library: opengl_library,
+    })
+}
+
 #[cfg(not(target_os = "macos"))]
 pub(super) fn current_gl_ctx_id() -> usize {
     0
@@ -130,12 +292,7 @@ pub(super) fn hardware_render_frontend_available() -> bool {
 }
 
 pub(super) fn hardware_render_frontend_available_for(runtime: &HostRuntime) -> bool {
-    runtime
-        .video_coordinator
-        .lock()
-        .frontend_capabilities()
-        .gl_context
-        .is_some()
+    runtime.hw_render_state.lock().frontend_gl_context.is_some()
 }
 
 pub(super) fn hardware_render_preflight_available_for_core(
@@ -269,16 +426,13 @@ pub(super) fn release_hw_render_target(state: &mut HardwareRenderState) {
     let Some(target) = state.target.take() else {
         return;
     };
-    let Some(runtime) = active_runtime() else {
-        return;
-    };
-    let Some(gl) = runtime
-        .video_coordinator
-        .lock()
-        .frontend_capabilities()
-        .gl_context
-        .clone()
-    else {
+    #[cfg(target_os = "macos")]
+    if state.using_private_play_gl_context {
+        if let Some(context) = state.private_play_gl_context.as_ref() {
+            let _ = make_gl_ctx_current(context.raw_context);
+        }
+    }
+    let Some(gl) = state.frontend_gl_context.clone() else {
         return;
     };
 
@@ -288,6 +442,11 @@ pub(super) fn release_hw_render_target(state: &mut HardwareRenderState) {
         gl.delete_framebuffer(target.framebuffer);
         gl.delete_texture(target.play_present_texture);
         gl.delete_framebuffer(target.play_present_framebuffer);
+        #[cfg(target_os = "macos")]
+        for iosurface_target in target.play_iosurface_targets {
+            gl.delete_texture(iosurface_target.texture);
+            gl.delete_framebuffer(iosurface_target.framebuffer);
+        }
     }
 }
 
@@ -381,6 +540,24 @@ pub(super) fn ensure_hw_render_target(target_size: (u32, u32)) -> Result<()> {
     let Some(runtime) = active_runtime() else {
         return Err(anyhow!("hardware-render core requires an active runtime"));
     };
+    #[cfg(target_os = "macos")]
+    {
+        let state = runtime.hw_render_state.lock();
+        if state.using_private_play_gl_context {
+            let raw_context = state
+                .private_play_gl_context
+                .as_ref()
+                .map(|context| context.raw_context)
+                .ok_or_else(|| {
+                    anyhow!("private Play GL bridge was selected but no CGL context is available")
+                })?;
+            if !make_gl_ctx_current(raw_context) {
+                return Err(anyhow!(
+                    "failed to make private Play CGL context current before hardware target setup"
+                ));
+            }
+        }
+    }
     let Some(gl) = runtime.hw_render_state.lock().frontend_gl_context.clone() else {
         return Err(anyhow!(
             "hardware-render core requires an active GL context"
@@ -586,6 +763,17 @@ pub(super) fn ensure_hw_render_target(target_size: (u32, u32)) -> Result<()> {
         target.play_present_width = width;
         target.play_present_height = height;
         target.play_present_generation = 0;
+        #[cfg(target_os = "macos")]
+        {
+            for iosurface_target in target.play_iosurface_targets.drain(..) {
+                unsafe {
+                    gl.delete_texture(iosurface_target.texture);
+                    gl.delete_framebuffer(iosurface_target.framebuffer);
+                }
+            }
+            target.play_iosurface_index = 0;
+            target.play_iosurface_generation = 0;
+        }
         // Invalidate the emu-side FBO: it has a depth-stencil renderbuffer at the old size
         // and must be recreated in the emu thread's context at the new size.
         target.emu_ctx_framebuffer = None;
@@ -603,6 +791,12 @@ pub(super) fn ensure_hw_render_target(target_size: (u32, u32)) -> Result<()> {
             play_present_width: width,
             play_present_height: height,
             play_present_generation: 0,
+            #[cfg(target_os = "macos")]
+            play_iosurface_targets: Vec::new(),
+            #[cfg(target_os = "macos")]
+            play_iosurface_index: 0,
+            #[cfg(target_os = "macos")]
+            play_iosurface_generation: 0,
             emu_game_texture: None,
             play_texture_cache_score: f32::INFINITY,
             play_blank_frame_streak: 0,
@@ -1392,6 +1586,308 @@ pub(super) fn take_play_direct_gl_texture_frame(
         bottom_left_origin: pending.bottom_left_origin,
         generation: target.play_present_generation,
     }))
+}
+
+#[cfg(target_os = "macos")]
+pub(super) fn using_private_play_gl_bridge(runtime: &HostRuntime) -> bool {
+    let state = runtime.hw_render_state.lock();
+    state.using_private_play_gl_context && is_play_core(runtime)
+}
+
+#[cfg(not(target_os = "macos"))]
+pub(super) fn using_private_play_gl_bridge(_runtime: &HostRuntime) -> bool {
+    false
+}
+
+#[cfg(target_os = "macos")]
+pub(super) fn take_play_macos_iosurface_frame(
+    runtime: &HostRuntime,
+    pending: PendingHardwareFrame,
+) -> Result<Option<MacosIosurfaceFrame>> {
+    if !using_private_play_gl_bridge(runtime) || !should_use_play_direct_gl_texture(runtime) {
+        return Ok(None);
+    }
+
+    let (gl, raw_context) = {
+        let state = runtime.hw_render_state.lock();
+        let gl = state.frontend_gl_context.clone().ok_or_else(|| {
+            anyhow!("Play IOSurface bridge frame requested without a private GL context")
+        })?;
+        let raw_context = state
+            .private_play_gl_context
+            .as_ref()
+            .map(|context| context.raw_context)
+            .ok_or_else(|| {
+                anyhow!("Play IOSurface bridge selected but private CGL context is missing")
+            })?;
+        (gl, raw_context)
+    };
+    if !make_gl_ctx_current(raw_context) {
+        return Err(anyhow!(
+            "failed to make private Play CGL context current before IOSurface blit"
+        ));
+    }
+
+    let mut state = runtime.hw_render_state.lock();
+    let Some(target) = state.target.as_mut() else {
+        return Ok(None);
+    };
+    let source_framebuffer = pending.callback_framebuffer.unwrap_or_else(|| {
+        if std::env::var_os("LIBRETRO_TRACE_GL_READBACK").is_some() {
+            eprintln!("play iosurface bridge: no callback FBO; using host render target FBO");
+        }
+        target.framebuffer
+    });
+    if !unsafe { gl.is_framebuffer(source_framebuffer) } {
+        return Ok(None);
+    }
+
+    ensure_macos_iosurface_targets(&gl, target, pending.width, pending.height)?;
+
+    let surface_index = target.play_iosurface_index % target.play_iosurface_targets.len();
+    target.play_iosurface_index = (surface_index + 1) % target.play_iosurface_targets.len();
+    let draw_framebuffer = target.play_iosurface_targets[surface_index].framebuffer;
+
+    let previous_read_framebuffer = unsafe { gl.get_parameter_i32(glow::READ_FRAMEBUFFER_BINDING) };
+    let previous_draw_framebuffer = unsafe { gl.get_parameter_i32(glow::DRAW_FRAMEBUFFER_BINDING) };
+    let previous_read_buffer = unsafe { gl.get_parameter_i32(glow::READ_BUFFER) };
+    let previous_draw_buffer = unsafe { gl.get_parameter_i32(glow::DRAW_BUFFER) };
+    let scissor_was_enabled = unsafe { gl.is_enabled(glow::SCISSOR_TEST) };
+    let previous_read_framebuffer =
+        NonZeroU32::new(previous_read_framebuffer as u32).map(glow::NativeFramebuffer);
+    let previous_draw_framebuffer =
+        NonZeroU32::new(previous_draw_framebuffer as u32).map(glow::NativeFramebuffer);
+
+    unsafe {
+        gl.bind_framebuffer(glow::READ_FRAMEBUFFER, Some(source_framebuffer));
+        gl.read_buffer(glow::COLOR_ATTACHMENT0);
+        let read_status = gl.check_framebuffer_status(glow::READ_FRAMEBUFFER);
+        if read_status != glow::FRAMEBUFFER_COMPLETE {
+            gl.bind_framebuffer(glow::READ_FRAMEBUFFER, previous_read_framebuffer);
+            gl.bind_framebuffer(glow::DRAW_FRAMEBUFFER, previous_draw_framebuffer);
+            gl.read_buffer(previous_read_buffer as u32);
+            gl.draw_buffer(previous_draw_buffer as u32);
+            return Ok(None);
+        }
+
+        gl.bind_framebuffer(glow::DRAW_FRAMEBUFFER, Some(draw_framebuffer));
+        gl.draw_buffer(glow::COLOR_ATTACHMENT0);
+        let draw_status = gl.check_framebuffer_status(glow::DRAW_FRAMEBUFFER);
+        if draw_status != glow::FRAMEBUFFER_COMPLETE {
+            gl.bind_framebuffer(glow::READ_FRAMEBUFFER, previous_read_framebuffer);
+            gl.bind_framebuffer(glow::DRAW_FRAMEBUFFER, previous_draw_framebuffer);
+            gl.read_buffer(previous_read_buffer as u32);
+            gl.draw_buffer(previous_draw_buffer as u32);
+            return Err(anyhow!(
+                "Play IOSurface bridge framebuffer incomplete (status=0x{draw_status:04x})"
+            ));
+        }
+
+        if scissor_was_enabled {
+            gl.disable(glow::SCISSOR_TEST);
+        }
+        gl.blit_framebuffer(
+            0,
+            0,
+            pending.width as i32,
+            pending.height as i32,
+            0,
+            0,
+            pending.width as i32,
+            pending.height as i32,
+            glow::COLOR_BUFFER_BIT,
+            glow::NEAREST,
+        );
+        if scissor_was_enabled {
+            gl.enable(glow::SCISSOR_TEST);
+        }
+        gl.finish();
+        gl.bind_framebuffer(glow::READ_FRAMEBUFFER, previous_read_framebuffer);
+        gl.bind_framebuffer(glow::DRAW_FRAMEBUFFER, previous_draw_framebuffer);
+        gl.read_buffer(previous_read_buffer as u32);
+        gl.draw_buffer(previous_draw_buffer as u32);
+    }
+
+    target.play_iosurface_generation = target.play_iosurface_generation.saturating_add(1);
+    let surface = target.play_iosurface_targets[surface_index].surface.clone();
+    if std::env::var_os("LIBRETRO_TRACE_GL_READBACK").is_some() {
+        eprintln!(
+            "play iosurface bridge: delivered surface={:?} size={}x{} generation={} bottom_left_origin={}",
+            surface.as_ptr(),
+            pending.width,
+            pending.height,
+            target.play_iosurface_generation,
+            pending.bottom_left_origin
+        );
+    }
+
+    Ok(Some(MacosIosurfaceFrame {
+        surface,
+        width: pending.width,
+        height: pending.height,
+        bottom_left_origin: pending.bottom_left_origin,
+        generation: target.play_iosurface_generation,
+    }))
+}
+
+#[cfg(target_os = "macos")]
+fn ensure_macos_iosurface_targets(
+    gl: &glow::Context,
+    target: &mut HardwareRenderTarget,
+    width: u32,
+    height: u32,
+) -> Result<()> {
+    if target.play_iosurface_targets.len() == MACOS_IOSURFACE_RING_SIZE
+        && target
+            .play_iosurface_targets
+            .iter()
+            .all(|surface| surface.width == width && surface.height == height)
+    {
+        return Ok(());
+    }
+
+    unsafe {
+        for existing in target.play_iosurface_targets.drain(..) {
+            gl.delete_texture(existing.texture);
+            gl.delete_framebuffer(existing.framebuffer);
+        }
+    }
+    target.play_iosurface_index = 0;
+    target.play_iosurface_generation = 0;
+
+    for _ in 0..MACOS_IOSURFACE_RING_SIZE {
+        target
+            .play_iosurface_targets
+            .push(create_macos_iosurface_target(gl, width, height)?);
+    }
+    info!(
+        target: "arcade_libretro::core_loader",
+        "Play IOSurface bridge targets initialized ring={} size={}x{}",
+        MACOS_IOSURFACE_RING_SIZE,
+        width,
+        height
+    );
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn create_macos_iosurface_target(
+    gl: &glow::Context,
+    width: u32,
+    height: u32,
+) -> Result<MacosPlayIosurfaceTarget> {
+    let surface = unsafe {
+        let properties: *mut Object = msg_send![class!(NSMutableDictionary), dictionary];
+        let width_value: *mut Object =
+            msg_send![class!(NSNumber), numberWithUnsignedLongLong: width as u64];
+        let height_value: *mut Object =
+            msg_send![class!(NSNumber), numberWithUnsignedLongLong: height as u64];
+        let bytes_per_element_value: *mut Object =
+            msg_send![class!(NSNumber), numberWithUnsignedLongLong: 4_u64];
+        let bgra = u32::from_be_bytes(*b"BGRA");
+        let pixel_format_value: *mut Object =
+            msg_send![class!(NSNumber), numberWithUnsignedInt: bgra];
+        let _: () = msg_send![properties, setObject: width_value forKey: kIOSurfaceWidth];
+        let _: () = msg_send![properties, setObject: height_value forKey: kIOSurfaceHeight];
+        let _: () =
+            msg_send![properties, setObject: pixel_format_value forKey: kIOSurfacePixelFormat];
+        let _: () = msg_send![properties, setObject: bytes_per_element_value forKey: kIOSurfaceBytesPerElement];
+        let surface = IOSurfaceCreate(properties.cast_const().cast());
+        if surface.is_null() {
+            return Err(anyhow!(
+                "IOSurfaceCreate failed for Play bridge target {}x{}",
+                width,
+                height
+            ));
+        }
+        MacosIosurfaceHandle::from_retained(surface)
+    };
+
+    let texture = unsafe { gl.create_texture() }
+        .map_err(|err| anyhow!("failed to create Play IOSurface GL texture: {err}"))?;
+    let framebuffer = unsafe { gl.create_framebuffer() }
+        .map_err(|err| anyhow!("failed to create Play IOSurface GL framebuffer: {err}"))?;
+
+    unsafe {
+        let previous_texture =
+            NonZeroU32::new(gl.get_parameter_i32(MACOS_GL_TEXTURE_BINDING_RECTANGLE) as u32)
+                .map(glow::NativeTexture);
+        let previous_framebuffer =
+            NonZeroU32::new(gl.get_parameter_i32(glow::FRAMEBUFFER_BINDING) as u32)
+                .map(glow::NativeFramebuffer);
+
+        gl.bind_texture(MACOS_GL_TEXTURE_RECTANGLE, Some(texture));
+        gl.tex_parameter_i32(
+            MACOS_GL_TEXTURE_RECTANGLE,
+            glow::TEXTURE_MIN_FILTER,
+            glow::LINEAR as i32,
+        );
+        gl.tex_parameter_i32(
+            MACOS_GL_TEXTURE_RECTANGLE,
+            glow::TEXTURE_MAG_FILTER,
+            glow::LINEAR as i32,
+        );
+        gl.tex_parameter_i32(
+            MACOS_GL_TEXTURE_RECTANGLE,
+            glow::TEXTURE_WRAP_S,
+            glow::CLAMP_TO_EDGE as i32,
+        );
+        gl.tex_parameter_i32(
+            MACOS_GL_TEXTURE_RECTANGLE,
+            glow::TEXTURE_WRAP_T,
+            glow::CLAMP_TO_EDGE as i32,
+        );
+        let cgl_context = CGLGetCurrentContext();
+        let bind_status = CGLTexImageIOSurface2D(
+            cgl_context,
+            MACOS_GL_TEXTURE_RECTANGLE,
+            glow::RGBA8,
+            width as usize,
+            height as usize,
+            glow::BGRA,
+            glow::UNSIGNED_INT_8_8_8_8_REV,
+            surface.as_ptr(),
+            0,
+        );
+        if bind_status != 0 {
+            gl.delete_texture(texture);
+            gl.delete_framebuffer(framebuffer);
+            return Err(anyhow!(
+                "CGLTexImageIOSurface2D failed for Play bridge target (status={bind_status})"
+            ));
+        }
+
+        gl.bind_framebuffer(glow::FRAMEBUFFER, Some(framebuffer));
+        gl.framebuffer_texture_2d(
+            glow::FRAMEBUFFER,
+            glow::COLOR_ATTACHMENT0,
+            MACOS_GL_TEXTURE_RECTANGLE,
+            Some(texture),
+            0,
+        );
+        gl.draw_buffer(glow::COLOR_ATTACHMENT0);
+        gl.read_buffer(glow::COLOR_ATTACHMENT0);
+        let status = gl.check_framebuffer_status(glow::FRAMEBUFFER);
+
+        gl.bind_framebuffer(glow::FRAMEBUFFER, previous_framebuffer);
+        gl.bind_texture(MACOS_GL_TEXTURE_RECTANGLE, previous_texture);
+
+        if status != glow::FRAMEBUFFER_COMPLETE {
+            gl.delete_texture(texture);
+            gl.delete_framebuffer(framebuffer);
+            return Err(anyhow!(
+                "Play IOSurface GL framebuffer incomplete (status=0x{status:04x})"
+            ));
+        }
+    }
+
+    Ok(MacosPlayIosurfaceTarget {
+        surface,
+        texture,
+        framebuffer,
+        width,
+        height,
+    })
 }
 
 const PLAY_TEXTURE_REVALIDATE_INTERVAL_FRAMES: u64 = 120;

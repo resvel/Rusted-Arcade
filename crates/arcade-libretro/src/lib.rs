@@ -56,6 +56,14 @@ unsafe extern "C" {
     fn arcade_libretro_log_printf(level: i32, fmt: *const c_char, ...);
 }
 
+#[cfg(target_os = "macos")]
+unsafe extern "C" {
+    fn CFRetain(cf: *const c_void) -> *const c_void;
+    fn CFRelease(cf: *const c_void);
+    fn CGLDestroyContext(ctx: *mut c_void) -> i32;
+    fn CGLReleasePixelFormat(pixel_format: *mut c_void);
+}
+
 const VULKAN_PRESENT_VERT_SPV: &[u8] =
     include_bytes!(concat!(env!("OUT_DIR"), "/vulkan_present.vert.spv"));
 const VULKAN_PRESENT_FRAG_SPV: &[u8] =
@@ -85,10 +93,64 @@ pub struct GlTextureFrame {
     pub generation: u64,
 }
 
+#[cfg(target_os = "macos")]
+#[derive(Debug)]
+pub struct MacosIosurfaceHandle {
+    ptr: *mut c_void,
+}
+
+#[cfg(target_os = "macos")]
+impl MacosIosurfaceHandle {
+    pub(crate) unsafe fn from_retained(ptr: *mut c_void) -> Self {
+        Self { ptr }
+    }
+
+    pub fn as_ptr(&self) -> *mut c_void {
+        self.ptr
+    }
+}
+
+#[cfg(target_os = "macos")]
+impl Clone for MacosIosurfaceHandle {
+    fn clone(&self) -> Self {
+        unsafe {
+            CFRetain(self.ptr.cast_const());
+        }
+        Self { ptr: self.ptr }
+    }
+}
+
+#[cfg(target_os = "macos")]
+impl Drop for MacosIosurfaceHandle {
+    fn drop(&mut self) {
+        unsafe {
+            CFRelease(self.ptr.cast_const());
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+unsafe impl Send for MacosIosurfaceHandle {}
+
+#[cfg(target_os = "macos")]
+unsafe impl Sync for MacosIosurfaceHandle {}
+
+#[cfg(target_os = "macos")]
+#[derive(Debug, Clone)]
+pub struct MacosIosurfaceFrame {
+    pub surface: MacosIosurfaceHandle,
+    pub width: u32,
+    pub height: u32,
+    pub bottom_left_origin: bool,
+    pub generation: u64,
+}
+
 #[derive(Debug, Clone)]
 pub enum FrameOutput {
     Cpu(FrameBuffer),
     GlTexture(GlTextureFrame),
+    #[cfg(target_os = "macos")]
+    MacosIosurface(MacosIosurfaceFrame),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -366,6 +428,12 @@ struct HardwareRenderTarget {
     play_present_width: u32,
     play_present_height: u32,
     play_present_generation: u64,
+    #[cfg(target_os = "macos")]
+    play_iosurface_targets: Vec<MacosPlayIosurfaceTarget>,
+    #[cfg(target_os = "macos")]
+    play_iosurface_index: usize,
+    #[cfg(target_os = "macos")]
+    play_iosurface_generation: u64,
     /// Discovered game-frame texture handle.  When a core (mupen64plus-next/GLideN64) renders
     /// into its own internal texture via a shared GL context, textures from that context are
     /// visible here (textures ARE shared; FBOs are NOT).  We scan texture handles once on the
@@ -387,6 +455,40 @@ struct HardwareRenderTarget {
     play_texture_last_scan_frame: u64,
     /// Frame counter value when the cached texture last switched.
     play_texture_last_switch_frame: u64,
+}
+
+#[cfg(target_os = "macos")]
+struct MacosPrivateGlContext {
+    raw_context: usize,
+    raw_pixel_format: usize,
+    gl: Arc<glow::Context>,
+    _opengl_library: Library,
+}
+
+#[cfg(target_os = "macos")]
+unsafe impl Send for MacosPrivateGlContext {}
+
+#[cfg(target_os = "macos")]
+impl Drop for MacosPrivateGlContext {
+    fn drop(&mut self) {
+        unsafe {
+            if self.raw_context != 0 {
+                let _ = CGLDestroyContext(self.raw_context as *mut c_void);
+            }
+            if self.raw_pixel_format != 0 {
+                CGLReleasePixelFormat(self.raw_pixel_format as *mut c_void);
+            }
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+struct MacosPlayIosurfaceTarget {
+    surface: MacosIosurfaceHandle,
+    texture: glow::NativeTexture,
+    framebuffer: glow::NativeFramebuffer,
+    width: u32,
+    height: u32,
 }
 
 #[derive(Clone)]
@@ -558,6 +660,10 @@ unsafe impl Send for VulkanInterfaceState {}
 struct HardwareRenderState {
     external_vulkan_probe_logged: bool,
     frontend_gl_context: Option<Arc<glow::Context>>,
+    #[cfg(target_os = "macos")]
+    private_play_gl_context: Option<MacosPrivateGlContext>,
+    #[cfg(target_os = "macos")]
+    using_private_play_gl_context: bool,
     context_type: Option<u32>,
     callbacks: Option<HardwareRenderCallbacks>,
     context_ready: bool,
@@ -1165,7 +1271,22 @@ impl LibretroHost {
             .video_coordinator
             .lock()
             .apply_frontend_capabilities(&self.runtime, capabilities.clone());
-        self.runtime.hw_render_state.lock().frontend_gl_context = capabilities.gl_context.clone();
+        {
+            let mut state = self.runtime.hw_render_state.lock();
+            #[cfg(target_os = "macos")]
+            let private_gl_context = state
+                .using_private_play_gl_context
+                .then(|| {
+                    state
+                        .private_play_gl_context
+                        .as_ref()
+                        .map(|context| context.gl.clone())
+                })
+                .flatten();
+            #[cfg(not(target_os = "macos"))]
+            let private_gl_context: Option<Arc<glow::Context>> = None;
+            state.frontend_gl_context = capabilities.gl_context.clone().or(private_gl_context);
+        }
         if capabilities.gl_context.is_some() {
             let mut state = self.runtime.hw_render_state.lock();
             if state.eframe_gl_ctx_id == 0 {
@@ -1295,11 +1416,14 @@ impl LibretroHost {
                 .video_coordinator
                 .lock()
                 .frontend_capabilities()
-                .supports_gl_backend()
+                .supports_play_gl_backend()
         {
             return Err(anyhow!(
-                "Play native PS2 requires the OpenGL renderer in this frontend. Restart with ARCADE_MACOS_RENDERER=glow or leave the macOS renderer on auto."
+                "Play native PS2 requires either ARCADE_MACOS_RENDERER=glow or the macOS wgpu private GL bridge; current frontend cannot provide an OpenGL hardware context."
             ));
+        }
+        if core_name.eq_ignore_ascii_case("play") {
+            ensure_private_play_gl_context_for_wgpu(&self.runtime)?;
         }
         let candidates = self.resolve_core_candidates(&core_name);
         let core_path = candidates
@@ -1915,6 +2039,10 @@ impl LibretroHost {
         let delivery = match &frame {
             Ok(FrameDelivery::CpuFrame(frame)) => FrameDelivery::CpuFrame(frame.clone()),
             Ok(FrameDelivery::GlTexture(frame)) => FrameDelivery::GlTexture(*frame),
+            #[cfg(target_os = "macos")]
+            Ok(FrameDelivery::MacosIosurface(frame)) => {
+                FrameDelivery::MacosIosurface(frame.clone())
+            }
             Ok(FrameDelivery::ExternalPresent) => FrameDelivery::ExternalPresent,
             Ok(FrameDelivery::NoFrame) => FrameDelivery::NoFrame,
             Ok(FrameDelivery::Error(err)) => FrameDelivery::Error(err.clone()),
@@ -1947,6 +2075,16 @@ impl LibretroHost {
                     Ok(FrameDelivery::GlTexture(frame)) => info!(
                         target: "arcade_libretro::vulkan_debug",
                         "run_frame step={} hw frame result=gl_texture {}x{} generation={} present_ms={:.3}",
+                        debug_step,
+                        frame.width,
+                        frame.height,
+                        frame.generation,
+                        present_duration.as_secs_f64() * 1000.0
+                    ),
+                    #[cfg(target_os = "macos")]
+                    Ok(FrameDelivery::MacosIosurface(frame)) => info!(
+                        target: "arcade_libretro::vulkan_debug",
+                        "run_frame step={} hw frame result=macos_iosurface {}x{} generation={} present_ms={:.3}",
                         debug_step,
                         frame.width,
                         frame.height,
@@ -2014,6 +2152,10 @@ impl LibretroHost {
         match frame {
             Ok(FrameDelivery::CpuFrame(frame)) => Ok(Some(FrameOutput::Cpu(frame))),
             Ok(FrameDelivery::GlTexture(frame)) => Ok(Some(FrameOutput::GlTexture(frame))),
+            #[cfg(target_os = "macos")]
+            Ok(FrameDelivery::MacosIosurface(frame)) => {
+                Ok(Some(FrameOutput::MacosIosurface(frame)))
+            }
             Ok(FrameDelivery::ExternalPresent | FrameDelivery::NoFrame) => Ok(None),
             Ok(FrameDelivery::Error(err)) => Err(anyhow!(err)),
             Err(err) => Err(err),

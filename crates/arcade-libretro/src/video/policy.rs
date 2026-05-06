@@ -247,6 +247,16 @@ mod tests {
         }
     }
 
+    #[cfg(target_os = "macos")]
+    fn macos_wgpu_frontend() -> FrontendCapabilities {
+        FrontendCapabilities {
+            renderer_name: Some(String::from("eframe_wgpu")),
+            gl_context: None,
+            window_handle_kind: Some(String::from("AppKit")),
+            display_handle_kind: Some(String::from("AppKit")),
+        }
+    }
+
     #[test]
     fn gl_hardware_core_uses_opengl_when_frontend_gl_exists() {
         let selection = select_backend(BackendPolicyInput {
@@ -313,6 +323,25 @@ mod tests {
             requires_hw_render: false,
             requested_hw_context_type: None,
             frontend_capabilities: &frontend(false, false),
+        });
+
+        assert_eq!(selection.chosen, VideoBackendKind::OpenGl);
+        assert!(selection.fallbacks.is_empty());
+        assert!(!selection.allows_external_present);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn play_core_accepts_wgpu_frontend_via_private_gl_bridge_capability() {
+        let frontend = macos_wgpu_frontend();
+        assert!(frontend.supports_play_gl_backend());
+        assert!(frontend.supports_private_macos_play_gl_bridge());
+
+        let selection = select_backend(BackendPolicyInput {
+            core_name: "play",
+            requires_hw_render: false,
+            requested_hw_context_type: None,
+            frontend_capabilities: &frontend,
         });
 
         assert_eq!(selection.chosen, VideoBackendKind::OpenGl);

@@ -40,6 +40,8 @@ pub struct NativeArcadeUiApp {
     pub(crate) host: LibretroHost,
     pub(crate) state: ArcadeUiState,
     pub(crate) assets: AssetCache,
+    #[cfg(target_os = "macos")]
+    pub(crate) wgpu_target_format: Option<eframe::wgpu::TextureFormat>,
     pub(crate) manage_job_rx: Option<Receiver<ManageUiMessage>>,
     #[cfg(feature = "gamepad")]
     pub(crate) gilrs: Option<Gilrs>,
@@ -223,6 +225,8 @@ impl NativeArcadeUiApp {
             host,
             state: ArcadeUiState::new(),
             assets,
+            #[cfg(target_os = "macos")]
+            wgpu_target_format: None,
             manage_job_rx: None,
             #[cfg(feature = "gamepad")]
             gilrs,
@@ -366,6 +370,10 @@ fn frontend_capabilities(frame: &eframe::Frame) -> FrontendCapabilities {
 
 impl eframe::App for NativeArcadeUiApp {
     fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+        #[cfg(target_os = "macos")]
+        {
+            self.wgpu_target_format = frame.wgpu_render_state().map(|state| state.target_format);
+        }
         self.host
             .set_frontend_capabilities(frontend_capabilities(frame));
         let session_active = self.host.is_loaded();

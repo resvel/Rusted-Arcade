@@ -220,6 +220,10 @@ pub(super) fn record_frame_delivery_metrics(
         FrameDelivery::GlTexture(_) => {
             state.gl_texture_deliveries = state.gl_texture_deliveries.saturating_add(1);
         }
+        #[cfg(target_os = "macos")]
+        FrameDelivery::MacosIosurface(_) => {
+            state.gl_texture_deliveries = state.gl_texture_deliveries.saturating_add(1);
+        }
         FrameDelivery::NoFrame | FrameDelivery::Error(_) => {}
     }
 }

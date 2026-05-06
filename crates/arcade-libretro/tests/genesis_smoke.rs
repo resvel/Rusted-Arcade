@@ -144,6 +144,10 @@ fn genesis_plus_gx_smoke_runs_frames() {
             Some(FrameOutput::GlTexture(frame)) => {
                 panic!("Genesis smoke test produced unexpected GL texture frame: {frame:?}");
             }
+            #[cfg(target_os = "macos")]
+            Some(FrameOutput::MacosIosurface(frame)) => {
+                panic!("Genesis smoke test produced unexpected IOSurface frame: {frame:?}");
+            }
             None => empty_frames += 1,
         }
     }

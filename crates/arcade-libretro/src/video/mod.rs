@@ -35,6 +35,21 @@ impl FrontendCapabilities {
         self.has_gl_context() || self.renderer_name.as_deref() == Some("eframe_glow")
     }
 
+    pub fn supports_play_gl_backend(&self) -> bool {
+        self.supports_gl_backend() || self.supports_private_macos_play_gl_bridge()
+    }
+
+    pub fn supports_private_macos_play_gl_bridge(&self) -> bool {
+        #[cfg(target_os = "macos")]
+        {
+            return self.renderer_name.as_deref() == Some("eframe_wgpu");
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            false
+        }
+    }
+
     pub fn has_windowing_probe(&self) -> bool {
         self.window_handle_kind.is_some() && self.display_handle_kind.is_some()
     }
@@ -51,6 +66,8 @@ pub struct BackendSelection {
 pub(super) enum FrameDelivery {
     CpuFrame(FrameBuffer),
     GlTexture(GlTextureFrame),
+    #[cfg(target_os = "macos")]
+    MacosIosurface(MacosIosurfaceFrame),
     ExternalPresent,
     NoFrame,
     Error(String),

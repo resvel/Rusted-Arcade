@@ -73,14 +73,7 @@ fn load_app_icon() -> Result<egui::IconData> {
     })
 }
 
-#[cfg(target_os = "macos")]
-fn should_auto_select_glow_renderer(effective_core_root: Option<&Path>) -> bool {
-    effective_core_root
-        .map(|root| root.join("play_libretro.dylib").is_file())
-        .unwrap_or(false)
-}
-
-fn select_native_renderer(effective_core_root: Option<&Path>) -> eframe::Renderer {
+fn select_native_renderer(_effective_core_root: Option<&Path>) -> eframe::Renderer {
     #[cfg(target_os = "macos")]
     {
         let requested = std::env::var("ARCADE_MACOS_RENDERER")
@@ -92,12 +85,6 @@ fn select_native_renderer(effective_core_root: Option<&Path>) -> eframe::Rendere
                 eframe::Renderer::Glow
             }
             None | Some("") | Some("wgpu") | Some("metal") => {
-                if requested.is_none() && should_auto_select_glow_renderer(effective_core_root) {
-                    info!(
-                        "Using macOS auto renderer: glow (OpenGL) because play_libretro.dylib was detected. Set ARCADE_MACOS_RENDERER=wgpu to force Metal."
-                    );
-                    return eframe::Renderer::Glow;
-                }
                 if std::env::var_os("WGPU_BACKEND").is_none() {
                     std::env::set_var("WGPU_BACKEND", "metal");
                 }
@@ -177,4 +164,48 @@ fn main() -> Result<()> {
     .map_err(|err| anyhow::anyhow!(err.to_string()))?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_default_renderer_stays_wgpu_even_when_play_core_exists() {
+        let previous = std::env::var_os("ARCADE_MACOS_RENDERER");
+        std::env::remove_var("ARCADE_MACOS_RENDERER");
+        let core_root =
+            std::env::temp_dir().join(format!("arcade-renderer-test-{}", std::process::id()));
+        std::fs::create_dir_all(&core_root).expect("create core root");
+        std::fs::write(core_root.join("play_libretro.dylib"), b"core").expect("write core marker");
+
+        assert!(matches!(
+            select_native_renderer(Some(&core_root)),
+            eframe::Renderer::Wgpu
+        ));
+
+        let _ = std::fs::remove_dir_all(&core_root);
+        match previous {
+            Some(value) => std::env::set_var("ARCADE_MACOS_RENDERER", value),
+            None => std::env::remove_var("ARCADE_MACOS_RENDERER"),
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_explicit_glow_renderer_override_still_works() {
+        let previous = std::env::var_os("ARCADE_MACOS_RENDERER");
+        std::env::set_var("ARCADE_MACOS_RENDERER", "glow");
+
+        assert!(matches!(
+            select_native_renderer(None),
+            eframe::Renderer::Glow
+        ));
+
+        match previous {
+            Some(value) => std::env::set_var("ARCADE_MACOS_RENDERER", value),
+            None => std::env::remove_var("ARCADE_MACOS_RENDERER"),
+        }
+    }
 }

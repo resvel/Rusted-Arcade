@@ -43,6 +43,14 @@ impl VideoBackend for OpenGlBackend {
         };
 
         if should_use_play_direct_gl_texture(runtime) {
+            #[cfg(target_os = "macos")]
+            if using_private_play_gl_bridge(runtime) {
+                return take_play_macos_iosurface_frame(runtime, pending).map(|frame| {
+                    frame
+                        .map(FrameDelivery::MacosIosurface)
+                        .unwrap_or(FrameDelivery::NoFrame)
+                });
+            }
             return take_play_direct_gl_texture_frame(runtime, pending).map(|frame| {
                 frame
                     .map(FrameDelivery::GlTexture)

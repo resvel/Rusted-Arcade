@@ -1,7 +1,17 @@
+#[cfg(target_os = "macos")]
+use arcade_libretro::MacosIosurfaceFrame;
 use arcade_libretro::{FrameBuffer, GlTextureFrame, PixelFormat};
 use eframe::egui;
 use eframe::glow::{self, HasContext};
+#[cfg(target_os = "macos")]
+use eframe::wgpu;
 use egui::{ColorImage, Vec2};
+#[cfg(target_os = "macos")]
+use metal::foreign_types::ForeignType;
+#[cfg(target_os = "macos")]
+use metal::objc::runtime::Object;
+#[cfg(target_os = "macos")]
+use metal::objc::{msg_send, sel, sel_impl};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use tracing::info;
@@ -11,6 +21,10 @@ use crate::play_session::{frame_has_sampled_luma, is_dolphin_core};
 
 static UI_FRAME_UPLOAD_DEBUG_COUNTER: AtomicU64 = AtomicU64::new(0);
 static PLAY_GL_PAINTER: OnceLock<Mutex<Option<PlayGlPainter>>> = OnceLock::new();
+#[cfg(target_os = "macos")]
+static PLAY_WGPU_IOSURFACE_PAINTER: OnceLock<Mutex<PlayWgpuIosurfacePainter>> = OnceLock::new();
+#[cfg(target_os = "macos")]
+static PLAY_WGPU_IOSURFACE_ERROR: OnceLock<Mutex<Option<String>>> = OnceLock::new();
 
 struct PlayGlPainter {
     program: glow::NativeProgram,
@@ -19,6 +33,394 @@ struct PlayGlPainter {
     pos_attr: u32,
     texture_uniform: Option<glow::NativeUniformLocation>,
     bottom_left_origin_uniform: Option<glow::NativeUniformLocation>,
+}
+
+#[cfg(target_os = "macos")]
+#[derive(Default)]
+struct PlayWgpuIosurfacePainter {
+    target_format: Option<wgpu::TextureFormat>,
+    pipeline: Option<wgpu::RenderPipeline>,
+    bind_group_layout: Option<wgpu::BindGroupLayout>,
+    sampler: Option<wgpu::Sampler>,
+    uniform_buffer: Option<wgpu::Buffer>,
+    texture: Option<wgpu::Texture>,
+    texture_view: Option<wgpu::TextureView>,
+    bind_group: Option<wgpu::BindGroup>,
+    size: Option<(u32, u32)>,
+    last_generation: Option<u64>,
+}
+
+#[cfg(target_os = "macos")]
+struct PlayWgpuIosurfaceCallback {
+    frame: MacosIosurfaceFrame,
+    target_format: wgpu::TextureFormat,
+}
+
+#[cfg(target_os = "macos")]
+impl PlayWgpuIosurfacePainter {
+    fn ensure_pipeline(&mut self, device: &wgpu::Device, target_format: wgpu::TextureFormat) {
+        if self.pipeline.is_some() && self.target_format == Some(target_format) {
+            return;
+        }
+
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("play-iosurface-shader"),
+            source: wgpu::ShaderSource::Wgsl(
+                r#"
+struct Params {
+    bottom_left_origin: u32,
+    _pad0: u32,
+    _pad1: u32,
+    _pad2: u32,
+};
+
+struct VertexOutput {
+    @builtin(position) position: vec4<f32>,
+    @location(0) uv: vec2<f32>,
+};
+
+@group(0) @binding(0) var present_sampler: sampler;
+@group(0) @binding(1) var present_texture: texture_2d<f32>;
+@group(0) @binding(2) var<uniform> params: Params;
+
+@vertex
+fn vs_main(@builtin(vertex_index) vertex_index: u32) -> VertexOutput {
+    var positions = array<vec2<f32>, 4>(
+        vec2<f32>(-1.0, -1.0),
+        vec2<f32>( 1.0, -1.0),
+        vec2<f32>(-1.0,  1.0),
+        vec2<f32>( 1.0,  1.0)
+    );
+    var uvs = array<vec2<f32>, 4>(
+        vec2<f32>(0.0, 1.0),
+        vec2<f32>(1.0, 1.0),
+        vec2<f32>(0.0, 0.0),
+        vec2<f32>(1.0, 0.0)
+    );
+    var output: VertexOutput;
+    output.position = vec4<f32>(positions[vertex_index], 0.0, 1.0);
+    output.uv = uvs[vertex_index];
+    if (params.bottom_left_origin == 1u) {
+        output.uv.y = 1.0 - output.uv.y;
+    }
+    return output;
+}
+
+@fragment
+fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
+    let color = textureSample(present_texture, present_sampler, input.uv);
+    return vec4<f32>(color.rgb, 1.0);
+}
+"#
+                .into(),
+            ),
+        });
+        let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("play-iosurface-bind-group-layout"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::VERTEX,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
+        });
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("play-iosurface-pipeline-layout"),
+            bind_group_layouts: &[&bind_group_layout],
+            push_constant_ranges: &[],
+        });
+        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("play-iosurface-pipeline"),
+            layout: Some(&pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs_main"),
+                buffers: &[],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: target_format,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleStrip,
+                ..Default::default()
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth24PlusStencil8,
+                depth_write_enabled: false,
+                depth_compare: wgpu::CompareFunction::Always,
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+            cache: None,
+        });
+        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("play-iosurface-sampler"),
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::FilterMode::Nearest,
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            ..Default::default()
+        });
+        let uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("play-iosurface-uniforms"),
+            size: 16,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        self.target_format = Some(target_format);
+        self.pipeline = Some(pipeline);
+        self.bind_group_layout = Some(bind_group_layout);
+        self.sampler = Some(sampler);
+        self.uniform_buffer = Some(uniform_buffer);
+        self.texture = None;
+        self.texture_view = None;
+        self.bind_group = None;
+        self.size = None;
+    }
+
+    fn ensure_texture(&mut self, device: &wgpu::Device, width: u32, height: u32) {
+        if self.texture.is_some() && self.size == Some((width, height)) {
+            return;
+        }
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("play-iosurface-wgpu-texture"),
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Bgra8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::COPY_DST
+                | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let texture_view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("play-iosurface-bind-group"),
+            layout: self
+                .bind_group_layout
+                .as_ref()
+                .expect("pipeline before texture"),
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::Sampler(
+                        self.sampler.as_ref().expect("pipeline before texture"),
+                    ),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(&texture_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: self
+                        .uniform_buffer
+                        .as_ref()
+                        .expect("pipeline before texture")
+                        .as_entire_binding(),
+                },
+            ],
+        });
+
+        self.texture = Some(texture);
+        self.texture_view = Some(texture_view);
+        self.bind_group = Some(bind_group);
+        self.size = Some((width, height));
+        self.last_generation = None;
+    }
+}
+
+#[cfg(target_os = "macos")]
+impl eframe::egui_wgpu::CallbackTrait for PlayWgpuIosurfaceCallback {
+    fn prepare(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        _screen_descriptor: &eframe::egui_wgpu::ScreenDescriptor,
+        _egui_encoder: &mut wgpu::CommandEncoder,
+        _callback_resources: &mut eframe::egui_wgpu::CallbackResources,
+    ) -> Vec<wgpu::CommandBuffer> {
+        let state = PLAY_WGPU_IOSURFACE_PAINTER
+            .get_or_init(|| Mutex::new(PlayWgpuIosurfacePainter::default()));
+        let mut painter = match state.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        painter.ensure_pipeline(device, self.target_format);
+        painter.ensure_texture(device, self.frame.width, self.frame.height);
+        if let Some(uniform_buffer) = painter.uniform_buffer.as_ref() {
+            let mut params = [0_u32; 4];
+            params[0] = u32::from(self.frame.bottom_left_origin);
+            let bytes = unsafe {
+                std::slice::from_raw_parts(
+                    params.as_ptr().cast::<u8>(),
+                    std::mem::size_of_val(&params),
+                )
+            };
+            queue.write_buffer(uniform_buffer, 0, bytes);
+        }
+        if painter.last_generation != Some(self.frame.generation) {
+            if let Some(texture) = painter.texture.as_ref() {
+                match copy_iosurface_to_wgpu_texture(device, texture, &self.frame) {
+                    Ok(()) => painter.last_generation = Some(self.frame.generation),
+                    Err(err) => {
+                        tracing::warn!("Play IOSurface Metal blit failed: {err}");
+                        let error = PLAY_WGPU_IOSURFACE_ERROR.get_or_init(|| Mutex::new(None));
+                        let mut guard = match error.lock() {
+                            Ok(guard) => guard,
+                            Err(poisoned) => poisoned.into_inner(),
+                        };
+                        *guard = Some(err);
+                    }
+                }
+            }
+        }
+        Vec::new()
+    }
+
+    fn paint(
+        &self,
+        _info: egui::PaintCallbackInfo,
+        render_pass: &mut wgpu::RenderPass<'static>,
+        _callback_resources: &eframe::egui_wgpu::CallbackResources,
+    ) {
+        let Some(state) = PLAY_WGPU_IOSURFACE_PAINTER.get() else {
+            return;
+        };
+        let painter = match state.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        let (Some(pipeline), Some(bind_group)) =
+            (painter.pipeline.as_ref(), painter.bind_group.as_ref())
+        else {
+            return;
+        };
+        render_pass.set_pipeline(pipeline);
+        render_pass.set_bind_group(0, bind_group, &[]);
+        render_pass.draw(0..4, 0..1);
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn copy_iosurface_to_wgpu_texture(
+    device: &wgpu::Device,
+    destination: &wgpu::Texture,
+    frame: &MacosIosurfaceFrame,
+) -> Result<(), String> {
+    let destination_metal_texture = unsafe {
+        destination.as_hal::<wgpu_hal::api::Metal, _, _>(|texture| {
+            texture.map(|texture| texture.raw_handle().to_owned())
+        })
+    }
+    .ok_or_else(|| String::from("wgpu texture is not backed by Metal"))?;
+
+    unsafe {
+        device.as_hal::<wgpu_hal::api::Metal, _, _>(|hal_device| {
+            let Some(hal_device) = hal_device else {
+                return Err(String::from("wgpu device is not backed by Metal"));
+            };
+            let raw_device = hal_device.raw_device().lock();
+            let source_texture = new_metal_texture_from_iosurface(
+                &raw_device,
+                frame.surface.as_ptr(),
+                frame.width,
+                frame.height,
+            )?;
+            let command_queue = raw_device.new_command_queue();
+            let command_buffer = command_queue.new_command_buffer();
+            let blit = command_buffer.new_blit_command_encoder();
+            blit.copy_from_texture(
+                &source_texture,
+                0,
+                0,
+                metal::MTLOrigin { x: 0, y: 0, z: 0 },
+                metal::MTLSize {
+                    width: frame.width as u64,
+                    height: frame.height as u64,
+                    depth: 1,
+                },
+                &destination_metal_texture,
+                0,
+                0,
+                metal::MTLOrigin { x: 0, y: 0, z: 0 },
+            );
+            blit.end_encoding();
+            command_buffer.commit();
+            command_buffer.wait_until_completed();
+            Ok(())
+        })
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn new_metal_texture_from_iosurface(
+    device: &metal::DeviceRef,
+    surface: *mut std::ffi::c_void,
+    width: u32,
+    height: u32,
+) -> Result<metal::Texture, String> {
+    let descriptor = metal::TextureDescriptor::new();
+    descriptor.set_texture_type(metal::MTLTextureType::D2);
+    descriptor.set_pixel_format(metal::MTLPixelFormat::BGRA8Unorm);
+    descriptor.set_width(width as u64);
+    descriptor.set_height(height as u64);
+    descriptor.set_mipmap_level_count(1);
+    descriptor.set_usage(metal::MTLTextureUsage::ShaderRead);
+    let texture: *mut Object = unsafe {
+        msg_send![
+            device,
+            newTextureWithDescriptor: descriptor.as_ref()
+            iosurface: surface as *mut Object
+            plane: 0_usize
+        ]
+    };
+    if texture.is_null() {
+        return Err(format!(
+            "newTextureWithDescriptor:iosurface:plane returned nil for {}x{} IOSurface",
+            width, height
+        ));
+    }
+    Ok(unsafe { metal::Texture::from_ptr(texture.cast()) })
 }
 
 impl PlayGlPainter {
@@ -166,8 +568,44 @@ fn summarize_rgba_debug_pixels(pixels: &[u8]) -> (u64, usize, [u8; 4]) {
 impl NativeArcadeUiApp {
     pub(crate) fn update_gl_texture_frame(&mut self, frame: GlTextureFrame) {
         self.assets.last_gl_texture_frame = Some(frame);
-        self.assets.last_frame_texture = None;
+        self.assets.clear_for_gl_texture_frame();
         self.state.play.last_frame_size = Some((frame.width, frame.height));
+    }
+
+    #[cfg(target_os = "macos")]
+    pub(crate) fn take_macos_iosurface_renderer_error() -> Option<String> {
+        let state = PLAY_WGPU_IOSURFACE_ERROR.get_or_init(|| Mutex::new(None));
+        match state.lock() {
+            Ok(mut guard) => guard.take(),
+            Err(poisoned) => poisoned.into_inner().take(),
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    pub(crate) fn update_macos_iosurface_frame(&mut self, frame: MacosIosurfaceFrame) {
+        self.assets.last_macos_iosurface_frame = Some(frame.clone());
+        self.assets.clear_for_macos_iosurface_frame();
+        self.state.play.last_frame_size = Some((frame.width, frame.height));
+    }
+
+    #[cfg(target_os = "macos")]
+    pub(crate) fn draw_macos_iosurface_frame(
+        &self,
+        ui: &egui::Ui,
+        rect: egui::Rect,
+        frame: MacosIosurfaceFrame,
+    ) {
+        let target_format = self
+            .wgpu_target_format
+            .unwrap_or(wgpu::TextureFormat::Bgra8UnormSrgb);
+        let callback = eframe::egui_wgpu::Callback::new_paint_callback(
+            rect,
+            PlayWgpuIosurfaceCallback {
+                frame,
+                target_format,
+            },
+        );
+        ui.painter().add(callback);
     }
 
     pub(crate) fn draw_gl_texture_frame(
@@ -206,7 +644,7 @@ impl NativeArcadeUiApp {
     }
 
     pub(crate) fn update_frame_texture(&mut self, ctx: &egui::Context, mut frame: FrameBuffer) {
-        self.assets.last_gl_texture_frame = None;
+        self.assets.clear_for_cpu_frame();
         if is_dolphin_core(self.state.play.active_core.as_deref())
             && self.assets.last_frame_texture.is_some()
             && !frame_has_sampled_luma(&frame)

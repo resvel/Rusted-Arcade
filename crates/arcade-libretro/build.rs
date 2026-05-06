@@ -5,6 +5,10 @@ fn main() {
     println!("cargo:rustc-link-lib=framework=AppKit");
     #[cfg(target_os = "macos")]
     println!("cargo:rustc-link-lib=framework=QuartzCore");
+    #[cfg(target_os = "macos")]
+    println!("cargo:rustc-link-lib=framework=IOSurface");
+    #[cfg(target_os = "macos")]
+    println!("cargo:rustc-link-lib=framework=CoreFoundation");
 
     cc::Build::new()
         .file("src/libretro_log_shim.c")
