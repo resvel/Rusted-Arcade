@@ -36,6 +36,7 @@ fn audio_master_frames_to_run(snapshot: Option<AudioQueueSnapshot>) -> Option<u3
 
 fn is_audio_master_pacing_core(core_name: &str) -> bool {
     core_name.eq_ignore_ascii_case("flycast")
+        || core_name.eq_ignore_ascii_case("dolphin")
         || core_name.eq_ignore_ascii_case("mupen64plus_next")
         || core_name.eq_ignore_ascii_case("mednafen_psx_hw")
         || core_name.eq_ignore_ascii_case("mednafen_saturn")
@@ -722,7 +723,8 @@ mod tests {
     }
 
     #[test]
-    fn audio_master_pacing_cores_include_n64_psx_and_ps2() {
+    fn audio_master_pacing_cores_include_external_present_and_heavy_hw_cores() {
+        assert!(is_audio_master_pacing_core("dolphin"));
         assert!(is_audio_master_pacing_core("mupen64plus_next"));
         assert!(is_audio_master_pacing_core("mednafen_psx_hw"));
         assert!(is_audio_master_pacing_core("mednafen_saturn"));

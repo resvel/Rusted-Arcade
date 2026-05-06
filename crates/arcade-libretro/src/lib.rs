@@ -699,6 +699,7 @@ fn target_refresh_rate_hz_for(runtime: Option<&HostRuntime>) -> f32 {
 
 fn is_audio_master_pacing_core_name(core_name: &str) -> bool {
     core_name.eq_ignore_ascii_case("flycast")
+        || core_name.eq_ignore_ascii_case("dolphin")
         || core_name.eq_ignore_ascii_case("mupen64plus_next")
         || core_name.eq_ignore_ascii_case("mednafen_psx_hw")
         || core_name.eq_ignore_ascii_case("mednafen_saturn")
@@ -1998,10 +1999,12 @@ impl LibretroHost {
                     ),
                 }
             }
-            update_external_vulkan_present_state(
-                &self.runtime,
-                matches!(delivery, FrameDelivery::ExternalPresent),
-            );
+            // Keep the external window latched once presentation starts. Some
+            // cores can have occasional no-frame ticks during hand-off/warmup,
+            // and hiding the surface for those ticks causes visible flicker.
+            if matches!(delivery, FrameDelivery::ExternalPresent) {
+                update_external_vulkan_present_state(&self.runtime, true);
+            }
         }
 
         if let Some(error) = vulkan_present_fail_fast_error(&self.runtime) {
@@ -3115,8 +3118,9 @@ mod tests {
     }
 
     #[test]
-    fn audio_master_pacing_core_set_includes_n64_psx_and_ps2() {
+    fn audio_master_pacing_core_set_includes_external_present_and_heavy_hw_cores() {
         assert!(is_audio_master_pacing_core_name("flycast"));
+        assert!(is_audio_master_pacing_core_name("dolphin"));
         assert!(is_audio_master_pacing_core_name("mupen64plus_next"));
         assert!(is_audio_master_pacing_core_name("mednafen_psx_hw"));
         assert!(is_audio_master_pacing_core_name("mednafen_saturn"));
