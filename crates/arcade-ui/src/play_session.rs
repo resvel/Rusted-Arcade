@@ -41,6 +41,7 @@ fn is_audio_master_pacing_core(core_name: &str) -> bool {
         || core_name.eq_ignore_ascii_case("mednafen_psx_hw")
         || core_name.eq_ignore_ascii_case("mednafen_saturn")
         || core_name.eq_ignore_ascii_case("pcsx2")
+        || core_name.eq_ignore_ascii_case("play")
 }
 
 fn play_frames_to_run_for_elapsed(
@@ -735,12 +736,8 @@ mod tests {
         assert!(is_audio_master_pacing_core("mednafen_psx_hw"));
         assert!(is_audio_master_pacing_core("mednafen_saturn"));
         assert!(is_audio_master_pacing_core("pcsx2"));
+        assert!(is_audio_master_pacing_core("play"));
         assert!(!is_audio_master_pacing_core("fceumm"));
-    }
-
-    #[test]
-    fn play_uses_strict_frame_pacing_not_audio_master_pacing() {
-        assert!(!is_audio_master_pacing_core("play"));
     }
 
     #[test]
