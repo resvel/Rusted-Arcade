@@ -10,6 +10,7 @@ impl NativeArcadeUiApp {
         external_present_active: bool,
         _external_present_expected: bool,
         external_window_available: bool,
+        immersive_viewport_allowed: bool,
     ) {
         let external_window_session =
             session_active && (external_present_active || external_window_available);
@@ -40,7 +41,8 @@ impl NativeArcadeUiApp {
 
         // If an external Vulkan window exists for this session, never push the main app
         // into immersive fullscreen; fullscreen can trap the app above the external window.
-        let immersive_session = session_active && !external_window_session;
+        let immersive_session =
+            session_active && !external_window_session && immersive_viewport_allowed;
 
         if immersive_session {
             self.state.play.viewport_restore_stage = 0;

@@ -22,10 +22,12 @@ pub(super) fn configure_environment_context(
         let mut context = runtime.environment_context.lock();
         context.system_dir = StableCStringBuffer::from_path(system_root);
         context.save_dir = StableCStringBuffer::from_path(save_root);
+        context.core_assets_dir = StableCStringBuffer::from_path(system_root);
         context.variables = default_core_variables_for(core_name, backend, emulation);
         context.variables_updated = false;
         context.allow_vfs = !core_name.eq_ignore_ascii_case("fbneo");
         context.controller_info.clear();
+        context.disk_control_ext = None;
         context.requested_hw_render = false;
         context.requested_hw_context_type = None;
         context.last_load_error = None;
@@ -211,20 +213,36 @@ pub(super) unsafe extern "C" fn retro_environment(cmd: u32, data: *mut c_void) -
     const RETRO_ENVIRONMENT_SET_VARIABLES: u32 = 16;
     const RETRO_ENVIRONMENT_GET_VARIABLE_UPDATE: u32 = 17;
     const RETRO_ENVIRONMENT_SET_SUPPORT_NO_GAME: u32 = 18;
+    const RETRO_ENVIRONMENT_GET_INPUT_DEVICE_CAPABILITIES: u32 = 24;
     const RETRO_ENVIRONMENT_SET_FRAME_TIME_CALLBACK: u32 = 21;
     const RETRO_ENVIRONMENT_SET_AUDIO_CALLBACK: u32 = 22;
+    const RETRO_ENVIRONMENT_GET_RUMBLE_INTERFACE: u32 = 23;
     const RETRO_ENVIRONMENT_GET_LOG_INTERFACE: u32 = 27;
+    const RETRO_ENVIRONMENT_GET_CORE_ASSETS_DIRECTORY: u32 = 30;
     const RETRO_ENVIRONMENT_GET_SAVE_DIRECTORY: u32 = 31;
     const RETRO_ENVIRONMENT_SET_SYSTEM_AV_INFO: u32 = 32;
+    const RETRO_ENVIRONMENT_SET_MEMORY_MAPS: u32 = 36 | RETRO_ENVIRONMENT_EXPERIMENTAL;
     const RETRO_ENVIRONMENT_SET_GEOMETRY: u32 = 37;
+    const RETRO_ENVIRONMENT_GET_SENSOR_INTERFACE: u32 = 25 | RETRO_ENVIRONMENT_EXPERIMENTAL;
+    const RETRO_ENVIRONMENT_GET_CAMERA_INTERFACE: u32 = 26 | RETRO_ENVIRONMENT_EXPERIMENTAL;
+    const RETRO_ENVIRONMENT_GET_AUDIO_VIDEO_ENABLE: u32 = 47 | RETRO_ENVIRONMENT_EXPERIMENTAL;
+    const RETRO_ENVIRONMENT_GET_FASTFORWARDING: u32 = 49 | RETRO_ENVIRONMENT_EXPERIMENTAL;
+    const RETRO_ENVIRONMENT_GET_MICROPHONE_INTERFACE: u32 = 75 | RETRO_ENVIRONMENT_EXPERIMENTAL;
     const RETRO_ENVIRONMENT_SET_HW_RENDER_CONTEXT_NEGOTIATION_INTERFACE: u32 =
         43 | RETRO_ENVIRONMENT_EXPERIMENTAL;
+    const RETRO_ENVIRONMENT_SET_HW_SHARED_CONTEXT: u32 = 44 | RETRO_ENVIRONMENT_EXPERIMENTAL;
     const RETRO_ENVIRONMENT_SET_CONTROLLER_INFO: u32 = 35;
     const RETRO_ENVIRONMENT_GET_LANGUAGE: u32 = 39;
     const RETRO_ENVIRONMENT_SET_SUPPORT_ACHIEVEMENTS: u32 = 42 | 0x10000;
+    const RETRO_ENVIRONMENT_SET_SERIALIZATION_QUIRKS: u32 = 44;
     const RETRO_ENVIRONMENT_GET_VFS_INTERFACE: u32 = 45 | 0x10000;
     const RETRO_ENVIRONMENT_GET_INPUT_BITMASKS: u32 = 51 | 0x10000;
+    const RETRO_ENVIRONMENT_GET_CORE_OPTIONS_VERSION: u32 = 52;
+    const RETRO_ENVIRONMENT_GET_PREFERRED_HW_RENDER: u32 = 56;
+    const RETRO_ENVIRONMENT_GET_DISK_CONTROL_INTERFACE_VERSION: u32 = 57;
+    const RETRO_ENVIRONMENT_SET_DISK_CONTROL_EXT_INTERFACE: u32 = 58;
     const RETRO_ENVIRONMENT_GET_MESSAGE_INTERFACE_VERSION: u32 = 59;
+    const RETRO_ENVIRONMENT_GET_INPUT_MAX_USERS: u32 = 61;
     const RETRO_ENVIRONMENT_SET_FASTFORWARDING_OVERRIDE: u32 = 64;
     const RETRO_ENVIRONMENT_SET_CORE_OPTIONS_UPDATE_DISPLAY_CALLBACK: u32 = 69;
     const RETRO_ENVIRONMENT_SET_KEYBOARD_CALLBACK: u32 = 12;
@@ -234,10 +252,68 @@ pub(super) unsafe extern "C" fn retro_environment(cmd: u32, data: *mut c_void) -
     const RETRO_PIXEL_FORMAT_0RGB1555: u32 = 0;
     const RETRO_PIXEL_FORMAT_XRGB8888: u32 = 1;
     const RETRO_PIXEL_FORMAT_RGB565: u32 = 2;
+    const RETRO_HW_CONTEXT_NONE: u32 = 0;
+    const RETRO_HW_CONTEXT_OPENGL_CORE: u32 = 3;
     const RETRO_HW_RENDER_CONTEXT_NEGOTIATION_INTERFACE_VULKAN: u32 = 0;
+    const RETRO_DEVICE_JOYPAD: u32 = 1;
+    const RETRO_DEVICE_ANALOG: u32 = 5;
 
     if std::env::var_os("LIBRETRO_TRACE_ENV").is_some() {
-        eprintln!("libretro env cmd={cmd}");
+        let cmd_name = match cmd {
+            RETRO_ENVIRONMENT_GET_CAN_DUPE => "GET_CAN_DUPE",
+            RETRO_ENVIRONMENT_SHUTDOWN => "SHUTDOWN",
+            RETRO_ENVIRONMENT_SET_PERFORMANCE_LEVEL => "SET_PERFORMANCE_LEVEL",
+            RETRO_ENVIRONMENT_GET_SYSTEM_DIRECTORY => "GET_SYSTEM_DIRECTORY",
+            RETRO_ENVIRONMENT_SET_PIXEL_FORMAT => "SET_PIXEL_FORMAT",
+            RETRO_ENVIRONMENT_SET_INPUT_DESCRIPTORS => "SET_INPUT_DESCRIPTORS",
+            RETRO_ENVIRONMENT_SET_KEYBOARD_CALLBACK => "SET_KEYBOARD_CALLBACK",
+            RETRO_ENVIRONMENT_SET_HW_RENDER => "SET_HW_RENDER",
+            RETRO_ENVIRONMENT_GET_VARIABLE => "GET_VARIABLE",
+            RETRO_ENVIRONMENT_SET_VARIABLES => "SET_VARIABLES",
+            RETRO_ENVIRONMENT_GET_VARIABLE_UPDATE => "GET_VARIABLE_UPDATE",
+            RETRO_ENVIRONMENT_SET_SUPPORT_NO_GAME => "SET_SUPPORT_NO_GAME",
+            RETRO_ENVIRONMENT_SET_FRAME_TIME_CALLBACK => "SET_FRAME_TIME_CALLBACK",
+            RETRO_ENVIRONMENT_SET_AUDIO_CALLBACK => "SET_AUDIO_CALLBACK",
+            RETRO_ENVIRONMENT_GET_RUMBLE_INTERFACE => "GET_RUMBLE_INTERFACE",
+            RETRO_ENVIRONMENT_GET_INPUT_DEVICE_CAPABILITIES => "GET_INPUT_DEVICE_CAPABILITIES",
+            RETRO_ENVIRONMENT_GET_LOG_INTERFACE => "GET_LOG_INTERFACE",
+            RETRO_ENVIRONMENT_GET_CORE_ASSETS_DIRECTORY => "GET_CORE_ASSETS_DIRECTORY",
+            RETRO_ENVIRONMENT_GET_SAVE_DIRECTORY => "GET_SAVE_DIRECTORY",
+            RETRO_ENVIRONMENT_SET_SYSTEM_AV_INFO => "SET_SYSTEM_AV_INFO",
+            RETRO_ENVIRONMENT_SET_CONTROLLER_INFO => "SET_CONTROLLER_INFO",
+            RETRO_ENVIRONMENT_SET_MEMORY_MAPS => "SET_MEMORY_MAPS",
+            RETRO_ENVIRONMENT_SET_GEOMETRY => "SET_GEOMETRY",
+            RETRO_ENVIRONMENT_GET_SENSOR_INTERFACE => "GET_SENSOR_INTERFACE",
+            RETRO_ENVIRONMENT_GET_CAMERA_INTERFACE => "GET_CAMERA_INTERFACE",
+            RETRO_ENVIRONMENT_GET_LANGUAGE => "GET_LANGUAGE",
+            RETRO_ENVIRONMENT_SET_SUPPORT_ACHIEVEMENTS => "SET_SUPPORT_ACHIEVEMENTS",
+            RETRO_ENVIRONMENT_SET_SERIALIZATION_QUIRKS => "SET_SERIALIZATION_QUIRKS",
+            RETRO_ENVIRONMENT_SET_HW_RENDER_CONTEXT_NEGOTIATION_INTERFACE => {
+                "SET_HW_RENDER_CONTEXT_NEGOTIATION_INTERFACE"
+            }
+            RETRO_ENVIRONMENT_SET_HW_SHARED_CONTEXT => "SET_HW_SHARED_CONTEXT",
+            RETRO_ENVIRONMENT_GET_VFS_INTERFACE => "GET_VFS_INTERFACE",
+            RETRO_ENVIRONMENT_GET_AUDIO_VIDEO_ENABLE => "GET_AUDIO_VIDEO_ENABLE",
+            RETRO_ENVIRONMENT_GET_FASTFORWARDING => "GET_FASTFORWARDING",
+            RETRO_ENVIRONMENT_GET_MICROPHONE_INTERFACE => "GET_MICROPHONE_INTERFACE",
+            RETRO_ENVIRONMENT_GET_TARGET_REFRESH_RATE => "GET_TARGET_REFRESH_RATE",
+            RETRO_ENVIRONMENT_GET_INPUT_BITMASKS => "GET_INPUT_BITMASKS",
+            RETRO_ENVIRONMENT_GET_CORE_OPTIONS_VERSION => "GET_CORE_OPTIONS_VERSION",
+            RETRO_ENVIRONMENT_GET_PREFERRED_HW_RENDER => "GET_PREFERRED_HW_RENDER",
+            RETRO_ENVIRONMENT_GET_DISK_CONTROL_INTERFACE_VERSION => {
+                "GET_DISK_CONTROL_INTERFACE_VERSION"
+            }
+            RETRO_ENVIRONMENT_SET_DISK_CONTROL_EXT_INTERFACE => "SET_DISK_CONTROL_EXT_INTERFACE",
+            RETRO_ENVIRONMENT_GET_MESSAGE_INTERFACE_VERSION => "GET_MESSAGE_INTERFACE_VERSION",
+            RETRO_ENVIRONMENT_GET_INPUT_MAX_USERS => "GET_INPUT_MAX_USERS",
+            RETRO_ENVIRONMENT_SET_FASTFORWARDING_OVERRIDE => "SET_FASTFORWARDING_OVERRIDE",
+            RETRO_ENVIRONMENT_SET_CORE_OPTIONS_UPDATE_DISPLAY_CALLBACK => {
+                "SET_CORE_OPTIONS_UPDATE_DISPLAY_CALLBACK"
+            }
+            RETRO_ENVIRONMENT_SET_VARIABLE => "SET_VARIABLE",
+            _ => "UNKNOWN",
+        };
+        eprintln!("libretro env cmd={cmd} ({cmd_name})");
     }
 
     match cmd {
@@ -264,6 +340,10 @@ pub(super) unsafe extern "C" fn retro_environment(cmd: u32, data: *mut c_void) -
         | RETRO_ENVIRONMENT_SET_SUPPORT_ACHIEVEMENTS
         | RETRO_ENVIRONMENT_SET_FASTFORWARDING_OVERRIDE
         | RETRO_ENVIRONMENT_SET_CORE_OPTIONS_UPDATE_DISPLAY_CALLBACK => true,
+        RETRO_ENVIRONMENT_SET_MEMORY_MAPS => {
+            trace_memory_maps(data);
+            true
+        }
         RETRO_ENVIRONMENT_SET_KEYBOARD_CALLBACK => {
             if data.is_null() {
                 return false;
@@ -345,6 +425,23 @@ pub(super) unsafe extern "C" fn retro_environment(cmd: u32, data: *mut c_void) -
                 "core requested RETRO_ENVIRONMENT_SET_AUDIO_CALLBACK"
             );
             true
+        }
+        RETRO_ENVIRONMENT_GET_INPUT_DEVICE_CAPABILITIES => {
+            if data.is_null() {
+                return false;
+            }
+            let capabilities = (1_u64 << RETRO_DEVICE_JOYPAD) | (1_u64 << RETRO_DEVICE_ANALOG);
+            unsafe {
+                *(data as *mut u64) = capabilities;
+            }
+            true
+        }
+        RETRO_ENVIRONMENT_GET_RUMBLE_INTERFACE
+        | RETRO_ENVIRONMENT_GET_SENSOR_INTERFACE
+        | RETRO_ENVIRONMENT_GET_CAMERA_INTERFACE
+        | RETRO_ENVIRONMENT_GET_MICROPHONE_INTERFACE => {
+            trace_optional_interface_unavailable(cmd);
+            false
         }
         RETRO_ENVIRONMENT_GET_HW_RENDER_INTERFACE => {
             if data.is_null() {
@@ -574,6 +671,28 @@ pub(super) unsafe extern "C" fn retro_environment(cmd: u32, data: *mut c_void) -
             warn!("libretro hw-render: {message}");
             false
         }
+        RETRO_ENVIRONMENT_SET_HW_SHARED_CONTEXT => {
+            if let Some(runtime) = active_runtime() {
+                runtime
+                    .environment_context
+                    .lock()
+                    .requested_hw_shared_context = true;
+            }
+            info!(
+                target: "arcade_libretro::callbacks",
+                "core requested RETRO_ENVIRONMENT_SET_HW_SHARED_CONTEXT; reporting shared GL context support"
+            );
+            true
+        }
+        RETRO_ENVIRONMENT_SET_SERIALIZATION_QUIRKS => {
+            if data.is_null() {
+                return false;
+            }
+            unsafe {
+                *(data as *mut u64) = 0;
+            }
+            true
+        }
         RETRO_ENVIRONMENT_GET_SYSTEM_DIRECTORY => {
             if data.is_null() {
                 return false;
@@ -584,6 +703,24 @@ pub(super) unsafe extern "C" fn retro_environment(cmd: u32, data: *mut c_void) -
             let context = runtime.environment_context.lock();
             let out = data as *mut *const c_char;
             if let Some(path) = context.system_dir.as_ref() {
+                unsafe {
+                    *out = path.as_ptr();
+                }
+                true
+            } else {
+                false
+            }
+        }
+        RETRO_ENVIRONMENT_GET_CORE_ASSETS_DIRECTORY => {
+            if data.is_null() {
+                return false;
+            }
+            let Some(runtime) = active_runtime() else {
+                return false;
+            };
+            let context = runtime.environment_context.lock();
+            let out = data as *mut *const c_char;
+            if let Some(path) = context.core_assets_dir.as_ref() {
                 unsafe {
                     *out = path.as_ptr();
                 }
@@ -796,6 +933,26 @@ pub(super) unsafe extern "C" fn retro_environment(cmd: u32, data: *mut c_void) -
             }
             true
         }
+        RETRO_ENVIRONMENT_GET_AUDIO_VIDEO_ENABLE => {
+            if data.is_null() {
+                return false;
+            }
+            const RETRO_AV_ENABLE_VIDEO: u32 = 1 << 0;
+            const RETRO_AV_ENABLE_AUDIO: u32 = 1 << 1;
+            unsafe {
+                *(data as *mut u32) = RETRO_AV_ENABLE_VIDEO | RETRO_AV_ENABLE_AUDIO;
+            }
+            true
+        }
+        RETRO_ENVIRONMENT_GET_FASTFORWARDING => {
+            if data.is_null() {
+                return false;
+            }
+            unsafe {
+                *(data as *mut bool) = false;
+            }
+            true
+        }
         RETRO_ENVIRONMENT_GET_LOG_INTERFACE => {
             if data.is_null() {
                 return false;
@@ -836,6 +993,74 @@ pub(super) unsafe extern "C" fn retro_environment(cmd: u32, data: *mut c_void) -
             }
             unsafe {
                 *(data as *mut u32) = 0;
+            }
+            true
+        }
+        RETRO_ENVIRONMENT_GET_CORE_OPTIONS_VERSION => {
+            if data.is_null() {
+                return false;
+            }
+            unsafe {
+                *(data as *mut u32) = 0;
+            }
+            true
+        }
+        RETRO_ENVIRONMENT_GET_PREFERRED_HW_RENDER => {
+            if data.is_null() {
+                return false;
+            }
+            let Some(runtime) = active_runtime() else {
+                return false;
+            };
+            let preferred = match runtime.video_coordinator.lock().current_backend_kind() {
+                VideoBackendKind::Vulkan => RETRO_HW_CONTEXT_VULKAN,
+                VideoBackendKind::OpenGl => RETRO_HW_CONTEXT_OPENGL_CORE,
+                VideoBackendKind::Software => RETRO_HW_CONTEXT_NONE,
+            };
+            unsafe {
+                *(data as *mut u32) = preferred;
+            }
+            true
+        }
+        RETRO_ENVIRONMENT_GET_DISK_CONTROL_INTERFACE_VERSION => {
+            if data.is_null() {
+                return false;
+            }
+            unsafe {
+                *(data as *mut u32) = 0;
+            }
+            true
+        }
+        RETRO_ENVIRONMENT_SET_DISK_CONTROL_EXT_INTERFACE => {
+            let Some(runtime) = active_runtime() else {
+                return false;
+            };
+            let callbacks = if data.is_null() {
+                None
+            } else {
+                let disk = unsafe { &*(data as *const RetroDiskControlExtCallback) };
+                Some(DiskControlExtCallbacks {
+                    set_eject_state: disk.set_eject_state,
+                    get_eject_state: disk.get_eject_state,
+                    get_image_index: disk.get_image_index,
+                    set_image_index: disk.set_image_index,
+                    get_num_images: disk.get_num_images,
+                    replace_image_index: disk.replace_image_index,
+                    add_image_index: disk.add_image_index,
+                    set_initial_image: disk.set_initial_image,
+                    get_image_path: disk.get_image_path,
+                    get_image_label: disk.get_image_label,
+                })
+            };
+            runtime.environment_context.lock().disk_control_ext = callbacks;
+            true
+        }
+        RETRO_ENVIRONMENT_GET_INPUT_MAX_USERS => {
+            if data.is_null() {
+                return false;
+            }
+            unsafe {
+                *(data as *mut u32) = 4;
             }
             true
         }
@@ -897,6 +1122,95 @@ pub(super) unsafe extern "C" fn retro_environment(cmd: u32, data: *mut c_void) -
             }
             false
         }
+    }
+}
+
+#[repr(C)]
+pub(super) struct RetroDiskControlExtCallback {
+    pub(super) set_eject_state: Option<RetroSetEjectStateFn>,
+    pub(super) get_eject_state: Option<RetroGetEjectStateFn>,
+    pub(super) get_image_index: Option<RetroGetImageIndexFn>,
+    pub(super) set_image_index: Option<RetroSetImageIndexFn>,
+    pub(super) get_num_images: Option<RetroGetNumImagesFn>,
+    pub(super) replace_image_index: Option<RetroReplaceImageIndexFn>,
+    pub(super) add_image_index: Option<RetroAddImageIndexFn>,
+    pub(super) set_initial_image: Option<RetroSetInitialImageFn>,
+    pub(super) get_image_path: Option<RetroGetImagePathFn>,
+    pub(super) get_image_label: Option<RetroGetImageLabelFn>,
+}
+
+#[repr(C)]
+struct RetroMemoryDescriptor {
+    flags: u64,
+    ptr: *mut c_void,
+    offset: usize,
+    start: usize,
+    select: usize,
+    disconnect: usize,
+    len: usize,
+    addrspace: *const c_char,
+}
+
+#[repr(C)]
+struct RetroMemoryMap {
+    descriptors: *const RetroMemoryDescriptor,
+    num_descriptors: u32,
+}
+
+fn trace_memory_maps(data: *mut c_void) {
+    if std::env::var_os("LIBRETRO_TRACE_ENV").is_none() {
+        return;
+    }
+
+    if data.is_null() {
+        eprintln!("libretro memory_map data=<null>");
+        return;
+    }
+
+    let memory_map = unsafe { &*(data as *const RetroMemoryMap) };
+    eprintln!(
+        "libretro memory_map descriptors={:p} count={}",
+        memory_map.descriptors, memory_map.num_descriptors
+    );
+
+    if memory_map.descriptors.is_null() {
+        return;
+    }
+
+    let count = memory_map.num_descriptors as usize;
+    let logged_count = count.min(32);
+    for index in 0..logged_count {
+        let descriptor = unsafe { &*memory_map.descriptors.add(index) };
+        let addrspace = if descriptor.addrspace.is_null() {
+            ""
+        } else {
+            unsafe { CStr::from_ptr(descriptor.addrspace) }
+                .to_str()
+                .unwrap_or("<invalid>")
+        };
+        eprintln!(
+            "libretro memory_map[{index}] ptr={:p} offset={:#x} start={:#x} select={:#x} disconnect={:#x} len={:#x} flags={:#x} addrspace={:?}",
+            descriptor.ptr,
+            descriptor.offset,
+            descriptor.start,
+            descriptor.select,
+            descriptor.disconnect,
+            descriptor.len,
+            descriptor.flags,
+            addrspace
+        );
+    }
+    if count > logged_count {
+        eprintln!(
+            "libretro memory_map truncated logged={} total={}",
+            logged_count, count
+        );
+    }
+}
+
+fn trace_optional_interface_unavailable(cmd: u32) {
+    if std::env::var_os("LIBRETRO_TRACE_ENV").is_some() {
+        eprintln!("optional libretro environment interface unavailable cmd={cmd}");
     }
 }
 
@@ -963,6 +1277,24 @@ pub(super) unsafe extern "C" fn retro_hw_get_current_framebuffer() -> usize {
         // GL context current.  color_texture is a shared object (textures are shared across
         // contexts in the same share group), so it is valid here even though the FBO that
         // wraps it in the main context is not.
+        let previous_framebuffer =
+            unsafe { gl.get_parameter_i32(glow::FRAMEBUFFER_BINDING) };
+        let previous_read_framebuffer =
+            unsafe { gl.get_parameter_i32(glow::READ_FRAMEBUFFER_BINDING) };
+        let previous_draw_framebuffer =
+            unsafe { gl.get_parameter_i32(glow::DRAW_FRAMEBUFFER_BINDING) };
+        let previous_read_buffer = unsafe { gl.get_parameter_i32(glow::READ_BUFFER) };
+        let previous_draw_buffer = unsafe { gl.get_parameter_i32(glow::DRAW_BUFFER) };
+        let previous_renderbuffer =
+            unsafe { gl.get_parameter_i32(glow::RENDERBUFFER_BINDING) };
+        let previous_framebuffer =
+            NonZeroU32::new(previous_framebuffer as u32).map(glow::NativeFramebuffer);
+        let previous_read_framebuffer =
+            NonZeroU32::new(previous_read_framebuffer as u32).map(glow::NativeFramebuffer);
+        let previous_draw_framebuffer =
+            NonZeroU32::new(previous_draw_framebuffer as u32).map(glow::NativeFramebuffer);
+        let previous_renderbuffer =
+            NonZeroU32::new(previous_renderbuffer as u32).map(glow::NativeRenderbuffer);
         let emu_fbo = match unsafe { gl.create_framebuffer() } {
             Ok(fbo) => fbo,
             Err(err) => {
@@ -1004,7 +1336,12 @@ pub(super) unsafe extern "C" fn retro_hw_get_current_framebuffer() -> usize {
                 gl.bind_renderbuffer(glow::RENDERBUFFER, None);
             }
 
-            gl.bind_framebuffer(glow::FRAMEBUFFER, None);
+            gl.bind_renderbuffer(glow::RENDERBUFFER, previous_renderbuffer);
+            gl.bind_framebuffer(glow::FRAMEBUFFER, previous_framebuffer);
+            gl.bind_framebuffer(glow::READ_FRAMEBUFFER, previous_read_framebuffer);
+            gl.bind_framebuffer(glow::DRAW_FRAMEBUFFER, previous_draw_framebuffer);
+            gl.read_buffer(previous_read_buffer as u32);
+            gl.draw_buffer(previous_draw_buffer as u32);
         }
 
         if std::env::var_os("LIBRETRO_TRACE_GL_READBACK").is_some() {

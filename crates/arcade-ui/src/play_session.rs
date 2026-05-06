@@ -1,7 +1,7 @@
 use eframe::egui;
 use tracing::{info, warn};
 
-use arcade_libretro::{AudioQueueSnapshot, FrameOutput};
+use arcade_libretro::{AudioQueueSnapshot, FrameBuffer, FrameOutput, PixelFormat};
 use arcade_services::SaveOperationError;
 use std::sync::OnceLock;
 
@@ -84,6 +84,71 @@ fn request_play_runner_repaint(ctx: &egui::Context, remaining: std::time::Durati
     }
 }
 
+pub(crate) fn is_dolphin_core(core_name: Option<&str>) -> bool {
+    core_name.is_some_and(|core| core.eq_ignore_ascii_case("dolphin"))
+}
+
+pub(crate) fn frame_has_sampled_luma(frame: &FrameBuffer) -> bool {
+    let width = frame.width as usize;
+    let height = frame.height as usize;
+    if width == 0 || height == 0 || frame.pitch == 0 || frame.data.is_empty() {
+        return false;
+    }
+
+    let samples_x = width.min(8);
+    let samples_y = height.min(8);
+    for sy in 0..samples_y {
+        let y = if samples_y <= 1 {
+            0
+        } else {
+            sy * (height - 1) / (samples_y - 1)
+        };
+        for sx in 0..samples_x {
+            let x = if samples_x <= 1 {
+                0
+            } else {
+                sx * (width - 1) / (samples_x - 1)
+            };
+            let Some(offset) = pixel_offset(frame, x, y) else {
+                continue;
+            };
+            if pixel_has_luma(frame, offset) {
+                return true;
+            }
+        }
+    }
+
+    false
+}
+
+fn pixel_offset(frame: &FrameBuffer, x: usize, y: usize) -> Option<usize> {
+    let bytes_per_pixel = match frame.pixel_format {
+        PixelFormat::Argb1555 | PixelFormat::Rgb565 => 2,
+        PixelFormat::Xrgb8888 | PixelFormat::Rgba8888 => 4,
+    };
+    y.checked_mul(frame.pitch)?
+        .checked_add(x.checked_mul(bytes_per_pixel)?)?
+        .checked_add(bytes_per_pixel)
+        .filter(|end| *end <= frame.data.len())
+        .map(|end| end - bytes_per_pixel)
+}
+
+fn pixel_has_luma(frame: &FrameBuffer, offset: usize) -> bool {
+    match frame.pixel_format {
+        PixelFormat::Rgba8888 => {
+            frame.data[offset] != 0 || frame.data[offset + 1] != 0 || frame.data[offset + 2] != 0
+        }
+        PixelFormat::Xrgb8888 => {
+            frame.data[offset + 1] != 0
+                || frame.data[offset + 2] != 0
+                || frame.data[offset + 3] != 0
+        }
+        PixelFormat::Rgb565 | PixelFormat::Argb1555 => {
+            frame.data[offset] != 0 || frame.data[offset + 1] != 0
+        }
+    }
+}
+
 impl NativeArcadeUiApp {
     const PLAY_OVERLAY_DURATION: std::time::Duration = std::time::Duration::from_millis(1800);
     const PLAY_BAR_DURATION: std::time::Duration = std::time::Duration::from_secs(2);
@@ -122,6 +187,7 @@ impl NativeArcadeUiApp {
             elapsed = frame_interval;
         }
         let active_core = self.state.play.active_core.as_deref();
+        let prefer_visible_cpu_frame = is_dolphin_core(active_core);
         let n64_target_pacing =
             active_core.is_some_and(|core| core.eq_ignore_ascii_case("mupen64plus_next"));
         let arcade_low_latency_pacing = self
@@ -243,7 +309,18 @@ impl NativeArcadeUiApp {
         for _ in 0..frames_to_run {
             frames_executed += 1;
             match self.host.run_frame() {
-                Ok(Some(frame)) => latest_frame = Some(frame),
+                Ok(Some(frame)) => {
+                    if prefer_visible_cpu_frame {
+                        match (&frame, &latest_frame) {
+                            (FrameOutput::Cpu(frame), Some(FrameOutput::Cpu(previous)))
+                                if !frame_has_sampled_luma(frame)
+                                    && frame_has_sampled_luma(previous) => {}
+                            _ => latest_frame = Some(frame),
+                        }
+                    } else {
+                        latest_frame = Some(frame);
+                    }
+                }
                 Ok(None) => {}
                 Err(err) => {
                     let message = err.to_string();
@@ -656,6 +733,34 @@ mod tests {
     #[test]
     fn play_uses_strict_frame_pacing_not_audio_master_pacing() {
         assert!(!is_audio_master_pacing_core("play"));
+    }
+
+    #[test]
+    fn sampled_luma_rejects_blank_rgba_frame() {
+        let frame = FrameBuffer {
+            width: 4,
+            height: 4,
+            pitch: 16,
+            data: vec![0; 4 * 4 * 4],
+            pixel_format: PixelFormat::Rgba8888,
+        };
+
+        assert!(!frame_has_sampled_luma(&frame));
+    }
+
+    #[test]
+    fn sampled_luma_accepts_non_black_rgba_frame() {
+        let mut data = vec![0; 4 * 4 * 4];
+        data[(2 * 16) + (2 * 4)] = 7;
+        let frame = FrameBuffer {
+            width: 4,
+            height: 4,
+            pitch: 16,
+            data,
+            pixel_format: PixelFormat::Rgba8888,
+        };
+
+        assert!(frame_has_sampled_luma(&frame));
     }
 
     #[test]

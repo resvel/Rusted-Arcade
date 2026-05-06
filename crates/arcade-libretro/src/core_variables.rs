@@ -558,10 +558,98 @@ mod tests {
         let cpu_core = variables
             .get("dolphin_cpu_core")
             .expect("dolphin cpu core default");
+        let fastmem = variables
+            .get("dolphin_fastmem")
+            .expect("dolphin fastmem default");
+        let fastmem_arena = variables
+            .get("dolphin_fastmem_arena")
+            .expect("dolphin fastmem arena default");
+        let main_mmu = variables
+            .get("dolphin_main_mmu")
+            .expect("dolphin main MMU default");
+        let skip_gc_bios = variables
+            .get("dolphin_skip_gc_bios")
+            .expect("dolphin skip GameCube BIOS default");
 
         assert_eq!(renderer.to_str().expect("utf8"), "Hardware");
-        assert_eq!(efb_scale.to_str().expect("utf8"), "x1 (640 x 528)");
-        assert_eq!(cpu_core.to_str().expect("utf8"), "JIT64/JITARM64");
+        assert_eq!(efb_scale.to_str().expect("utf8"), "1");
+        #[cfg(target_arch = "aarch64")]
+        assert_eq!(cpu_core.to_str().expect("utf8"), "4");
+        #[cfg(target_arch = "x86_64")]
+        assert_eq!(cpu_core.to_str().expect("utf8"), "1");
+        #[cfg(not(any(target_arch = "aarch64", target_arch = "x86_64")))]
+        assert_eq!(cpu_core.to_str().expect("utf8"), "5");
+        assert_eq!(fastmem.to_str().expect("utf8"), "enabled");
+        assert_eq!(fastmem_arena.to_str().expect("utf8"), "enabled");
+        assert_eq!(main_mmu.to_str().expect("utf8"), "disabled");
+        assert_eq!(skip_gc_bios.to_str().expect("utf8"), "enabled");
+    }
+
+    #[test]
+    fn default_core_variables_honor_dolphin_stability_overrides() {
+        let mut emulation = EmulationConfig::default();
+        emulation
+            .core_settings
+            .entry("dolphin".into())
+            .or_default()
+            .extend([
+                ("dolphin_main_cpu_thread".into(), "disabled".into()),
+                ("dolphin_cpu_core".into(), "5".into()),
+                ("dolphin_fastmem".into(), "disabled".into()),
+                ("dolphin_fastmem_arena".into(), "disabled".into()),
+                ("dolphin_main_mmu".into(), "enabled".into()),
+                ("dolphin_skip_gc_bios".into(), "disabled".into()),
+            ]);
+        let variables = default_core_variables_for("dolphin", VideoBackendKind::OpenGl, &emulation);
+
+        assert_eq!(
+            variables
+                .get("dolphin_main_cpu_thread")
+                .expect("dolphin main cpu thread override")
+                .to_str()
+                .expect("utf8"),
+            "disabled"
+        );
+        assert_eq!(
+            variables
+                .get("dolphin_cpu_core")
+                .expect("dolphin cpu core override")
+                .to_str()
+                .expect("utf8"),
+            "5"
+        );
+        assert_eq!(
+            variables
+                .get("dolphin_fastmem")
+                .expect("dolphin fastmem override")
+                .to_str()
+                .expect("utf8"),
+            "disabled"
+        );
+        assert_eq!(
+            variables
+                .get("dolphin_fastmem_arena")
+                .expect("dolphin fastmem arena override")
+                .to_str()
+                .expect("utf8"),
+            "disabled"
+        );
+        assert_eq!(
+            variables
+                .get("dolphin_main_mmu")
+                .expect("dolphin main MMU override")
+                .to_str()
+                .expect("utf8"),
+            "enabled"
+        );
+        assert_eq!(
+            variables
+                .get("dolphin_skip_gc_bios")
+                .expect("dolphin skip GameCube BIOS override")
+                .to_str()
+                .expect("utf8"),
+            "disabled"
+        );
     }
 
     #[cfg(target_os = "macos")]

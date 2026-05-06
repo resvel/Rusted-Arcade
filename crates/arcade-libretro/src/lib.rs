@@ -65,6 +65,7 @@ const RETRO_ENVIRONMENT_EXPERIMENTAL: u32 = 0x10000;
 const RETRO_ENVIRONMENT_GET_HW_RENDER_INTERFACE: u32 = 41 | RETRO_ENVIRONMENT_EXPERIMENTAL;
 const RETRO_HW_CONTEXT_VULKAN: u32 = 6;
 const RETRO_HW_RENDER_INTERFACE_VULKAN: u32 = 0;
+const DOLPHIN_IPL_REGIONS: [&str; 3] = ["USA", "EUR", "JAP"];
 
 #[derive(Debug, Clone)]
 pub struct FrameBuffer {
@@ -270,17 +271,47 @@ type RetroAudioSetStateCallbackFn = unsafe extern "C" fn(enabled: bool);
 /// Function pointer type for the libretro frame-time callback.
 /// Signature: `void callback(int64_t usec)`
 type RetroFrameTimeCallbackFn = unsafe extern "C" fn(usec: i64);
+type RetroSetEjectStateFn = unsafe extern "C" fn(ejected: bool) -> bool;
+type RetroGetEjectStateFn = unsafe extern "C" fn() -> bool;
+type RetroGetImageIndexFn = unsafe extern "C" fn() -> u32;
+type RetroSetImageIndexFn = unsafe extern "C" fn(index: u32) -> bool;
+type RetroGetNumImagesFn = unsafe extern "C" fn() -> u32;
+type RetroReplaceImageIndexFn =
+    unsafe extern "C" fn(index: u32, info: *const RetroGameInfo) -> bool;
+type RetroAddImageIndexFn = unsafe extern "C" fn() -> bool;
+type RetroSetInitialImageFn = unsafe extern "C" fn(index: u32, path: *const c_char) -> bool;
+type RetroGetImagePathFn = unsafe extern "C" fn(index: u32, path: *mut c_char, len: usize) -> bool;
+type RetroGetImageLabelFn =
+    unsafe extern "C" fn(index: u32, label: *mut c_char, len: usize) -> bool;
+
+#[derive(Clone, Copy, Default)]
+#[allow(dead_code)]
+struct DiskControlExtCallbacks {
+    set_eject_state: Option<RetroSetEjectStateFn>,
+    get_eject_state: Option<RetroGetEjectStateFn>,
+    get_image_index: Option<RetroGetImageIndexFn>,
+    set_image_index: Option<RetroSetImageIndexFn>,
+    get_num_images: Option<RetroGetNumImagesFn>,
+    replace_image_index: Option<RetroReplaceImageIndexFn>,
+    add_image_index: Option<RetroAddImageIndexFn>,
+    set_initial_image: Option<RetroSetInitialImageFn>,
+    get_image_path: Option<RetroGetImagePathFn>,
+    get_image_label: Option<RetroGetImageLabelFn>,
+}
 
 #[derive(Default)]
 struct EnvironmentContext {
     system_dir: Option<StableCStringBuffer>,
     save_dir: Option<StableCStringBuffer>,
+    core_assets_dir: Option<StableCStringBuffer>,
     variables: HashMap<String, CString>,
     variables_updated: bool,
     allow_vfs: bool,
     controller_info: Vec<Vec<u32>>,
+    disk_control_ext: Option<DiskControlExtCallbacks>,
     requested_hw_render: bool,
     requested_hw_context_type: Option<u32>,
+    requested_hw_shared_context: bool,
     last_load_error: Option<String>,
     last_negotiation_interface: Option<(u32, u32)>,
     loaded_core_name: Option<String>,
@@ -580,10 +611,14 @@ struct FrontendGlStateSnapshot {
     vertex_array: Option<glow::VertexArray>,
     array_buffer: Option<glow::Buffer>,
     element_array_buffer: Option<glow::Buffer>,
+    pixel_pack_buffer: Option<glow::Buffer>,
+    pixel_unpack_buffer: Option<glow::Buffer>,
     renderbuffer: Option<glow::Renderbuffer>,
     framebuffer: Option<glow::Framebuffer>,
     read_framebuffer: Option<glow::Framebuffer>,
     draw_framebuffer: Option<glow::Framebuffer>,
+    read_buffer: i32,
+    draw_buffer: i32,
     unpack_alignment: i32,
     pack_alignment: i32,
     unpack_row_length: i32,
@@ -1176,6 +1211,24 @@ impl LibretroHost {
             .unwrap_or(false)
     }
 
+    pub fn should_use_immersive_play_viewport(&self) -> bool {
+        if std::env::var_os("ARCADE_FORCE_SESSION_FULLSCREEN").is_some() {
+            return true;
+        }
+        if std::env::var_os("ARCADE_DISABLE_SESSION_FULLSCREEN").is_some() {
+            return false;
+        }
+
+        let context = self.runtime.environment_context.lock();
+        let is_dolphin = context
+            .loaded_core_name
+            .as_deref()
+            .is_some_and(|core| core.eq_ignore_ascii_case("dolphin"));
+        let is_opengl = context.loaded_backend == Some(VideoBackendKind::OpenGl);
+
+        !(is_dolphin && is_opengl)
+    }
+
     pub fn vulkan_present_test_metrics(&self) -> VulkanPresentTestMetrics {
         let backend_kind = self.runtime.video_coordinator.lock().current_backend_kind();
         let external_window_created = self
@@ -1320,6 +1373,10 @@ impl LibretroHost {
             );
         }
         apply_core_runtime_env_defaults(core_name, selection.chosen);
+        if core_name.eq_ignore_ascii_case("dolphin") {
+            prepare_dolphin_user_bios_links(&self.system_root, &self.save_root)?;
+            prepare_dolphin_user_config(&self.save_root, &self.emulation)?;
+        }
         configure_environment_context(
             &self.runtime,
             &self.system_root,
@@ -1692,6 +1749,9 @@ impl LibretroHost {
                 runtime.hw_render_state.lock().context_type == Some(RETRO_HW_CONTEXT_VULKAN)
             })
             .unwrap_or(false);
+        if uses_hw_render {
+            restore_frontend_gl_context(&self.runtime, "before frontend capture");
+        }
         let run_frame_debug_step = if vulkan_debug_enabled() && using_vulkan_hw_render {
             Some(VULKAN_RUN_FRAME_DEBUG_COUNTER.fetch_add(1, Ordering::Relaxed))
         } else {
@@ -1702,6 +1762,9 @@ impl LibretroHost {
         } else {
             None
         };
+        if uses_hw_render {
+            drain_frontend_gl_errors(&self.runtime, "frontend capture");
+        }
 
         pump_external_vulkan_window_events(&self.runtime);
         if using_vulkan_hw_render {
@@ -1788,6 +1851,7 @@ impl LibretroHost {
         }
         let run_duration = run_started_at.elapsed();
         if uses_hw_render {
+            restore_frontend_gl_context(&self.runtime, "after retro_run");
             drain_frontend_gl_errors(&self.runtime, "retro_run");
         }
         if let Some(debug_step) = run_frame_debug_step.filter(|step| *step < 8) {
@@ -1834,6 +1898,9 @@ impl LibretroHost {
         }
 
         let present_started_at = std::time::Instant::now();
+        if uses_hw_render {
+            restore_frontend_gl_context(&self.runtime, "before frame delivery");
+        }
         let frame = self
             .runtime
             .video_coordinator
@@ -1841,6 +1908,7 @@ impl LibretroHost {
             .consume_frame(&self.runtime);
         let present_duration = present_started_at.elapsed();
         if uses_hw_render {
+            restore_frontend_gl_context(&self.runtime, "after frame delivery");
             drain_frontend_gl_errors(&self.runtime, "frame delivery");
         }
         let delivery = match &frame {
@@ -1854,7 +1922,14 @@ impl LibretroHost {
         record_frame_delivery_metrics(&self.runtime, using_vulkan_hw_render, &delivery);
         record_frame_timing(&self.runtime, run_duration, present_duration);
         if let Some(snapshot) = frontend_gl_state.as_ref() {
+            restore_frontend_gl_context(&self.runtime, "before frontend restore");
             restore_frontend_gl_state(&self.runtime, snapshot);
+            if uses_hw_render {
+                drain_frontend_gl_errors(&self.runtime, "frontend restore");
+            }
+        }
+        if uses_hw_render {
+            restore_frontend_gl_context(&self.runtime, "after frontend restore");
         }
 
         if uses_hw_render {
@@ -2156,6 +2231,271 @@ impl LibretroHost {
     }
 }
 
+fn prepare_dolphin_user_bios_links(system_root: &Path, save_root: &Path) -> Result<()> {
+    let source_gc_root = system_root.join("dolphin-emu").join("User").join("GC");
+    let target_gc_root = save_root.join("User").join("GC");
+
+    for region in DOLPHIN_IPL_REGIONS {
+        let source = source_gc_root.join(region).join("IPL.bin");
+        if !source.is_file() {
+            continue;
+        }
+
+        let target = target_gc_root.join(region).join("IPL.bin");
+        if fs::symlink_metadata(&target).is_ok() {
+            if !dolphin_ipl_target_matches_source(&target, &source) {
+                warn!(
+                    source = %source.display(),
+                    target = %target.display(),
+                    "Dolphin IPL bridge target already exists; leaving it unchanged"
+                );
+            }
+            continue;
+        }
+
+        if let Some(parent) = target.parent() {
+            fs::create_dir_all(parent).with_context(|| {
+                format!(
+                    "failed to create Dolphin IPL bridge directory {}",
+                    parent.display()
+                )
+            })?;
+        }
+        create_file_symlink(&source, &target).with_context(|| {
+            format!(
+                "failed to expose Dolphin IPL from {} at {}",
+                source.display(),
+                target.display()
+            )
+        })?;
+        info!(
+            source = %source.display(),
+            target = %target.display(),
+            "exposed Dolphin IPL from BIOS root to libretro User path"
+        );
+    }
+
+    Ok(())
+}
+
+fn prepare_dolphin_user_config(save_root: &Path, emulation: &EmulationConfig) -> Result<()> {
+    let mut core_values = Vec::new();
+    if let Some(cpu_core) = emulation.get_core_variable("dolphin", "dolphin_cpu_core") {
+        core_values.push(("CPUCore", cpu_core.to_string()));
+    }
+    if let Some(cpu_thread) = emulation
+        .get_core_variable("dolphin", "dolphin_main_cpu_thread")
+        .and_then(dolphin_enabled_value_as_bool)
+    {
+        core_values.push(("CPUThread", cpu_thread.to_string()));
+    }
+    if let Some(fastmem) = emulation
+        .get_core_variable("dolphin", "dolphin_fastmem")
+        .and_then(dolphin_enabled_value_as_bool)
+    {
+        core_values.push(("Fastmem", fastmem.to_string()));
+    }
+    if let Some(fastmem_arena) = emulation
+        .get_core_variable("dolphin", "dolphin_fastmem_arena")
+        .and_then(dolphin_enabled_value_as_bool)
+    {
+        core_values.push(("FastmemArena", fastmem_arena.to_string()));
+    }
+    if let Some(mmu) = emulation
+        .get_core_variable("dolphin", "dolphin_main_mmu")
+        .and_then(dolphin_enabled_value_as_bool)
+    {
+        core_values.push(("MMU", mmu.to_string()));
+    }
+    if let Some(skip_ipl) = emulation
+        .get_core_variable("dolphin", "dolphin_skip_gc_bios")
+        .and_then(dolphin_enabled_value_as_bool)
+    {
+        core_values.push(("SkipIPL", skip_ipl.to_string()));
+    }
+
+    if core_values.is_empty() {
+        return Ok(());
+    }
+
+    let config_path = save_root.join("User").join("Config").join("Dolphin.ini");
+    let raw = match fs::read_to_string(&config_path) {
+        Ok(raw) => raw,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(err) => {
+            return Err(err).with_context(|| {
+                format!("failed to read Dolphin config {}", config_path.display())
+            });
+        }
+    };
+    let updated = upsert_ini_section_values(&raw, "Core", &core_values);
+
+    if let Some(parent) = config_path.parent() {
+        fs::create_dir_all(parent).with_context(|| {
+            format!(
+                "failed to create Dolphin config directory {}",
+                parent.display()
+            )
+        })?;
+    }
+    fs::write(&config_path, updated)
+        .with_context(|| format!("failed to write Dolphin config {}", config_path.display()))?;
+    sync_dolphin_user_game_settings(save_root, &core_values)?;
+
+    Ok(())
+}
+
+fn sync_dolphin_user_game_settings(save_root: &Path, core_values: &[(&str, String)]) -> Result<()> {
+    let game_settings_dir = save_root.join("User").join("GameSettings");
+    let entries = match fs::read_dir(&game_settings_dir) {
+        Ok(entries) => entries,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(err) => {
+            return Err(err).with_context(|| {
+                format!(
+                    "failed to read Dolphin user GameSettings directory {}",
+                    game_settings_dir.display()
+                )
+            });
+        }
+    };
+
+    for entry in entries {
+        let entry = entry.with_context(|| {
+            format!(
+                "failed to read Dolphin user GameSettings entry in {}",
+                game_settings_dir.display()
+            )
+        })?;
+        let path = entry.path();
+        if !path
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("ini"))
+        {
+            continue;
+        }
+
+        let raw = fs::read_to_string(&path)
+            .with_context(|| format!("failed to read Dolphin GameSettings {}", path.display()))?;
+        let updated = upsert_ini_section_values(&raw, "Core", core_values);
+        fs::write(&path, updated)
+            .with_context(|| format!("failed to write Dolphin GameSettings {}", path.display()))?;
+    }
+
+    Ok(())
+}
+
+fn dolphin_enabled_value_as_bool(value: &str) -> Option<&'static str> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "enabled" | "true" | "on" | "1" => Some("True"),
+        "disabled" | "false" | "off" | "0" => Some("False"),
+        _ => None,
+    }
+}
+
+fn upsert_ini_section_values(raw: &str, section: &str, values: &[(&str, String)]) -> String {
+    let mut output = Vec::new();
+    let mut in_target_section = false;
+    let mut saw_target_section = false;
+    let mut updated_keys = HashSet::new();
+
+    for line in raw.lines() {
+        if let Some(header) = ini_section_header(line) {
+            if in_target_section {
+                append_missing_ini_values(&mut output, values, &updated_keys);
+            }
+            in_target_section = header == section;
+            saw_target_section |= in_target_section;
+            output.push(line.to_string());
+            continue;
+        }
+
+        if in_target_section {
+            if let Some((key, _)) = line.split_once('=') {
+                let key = key.trim();
+                if let Some((canonical_key, value)) =
+                    values.iter().find(|(candidate, _)| *candidate == key)
+                {
+                    output.push(format!("{canonical_key} = {value}"));
+                    updated_keys.insert(*canonical_key);
+                    continue;
+                }
+            }
+        }
+
+        output.push(line.to_string());
+    }
+
+    if in_target_section {
+        append_missing_ini_values(&mut output, values, &updated_keys);
+    } else if !saw_target_section {
+        if !output.is_empty() {
+            output.push(String::new());
+        }
+        output.push(format!("[{section}]"));
+        append_missing_ini_values(&mut output, values, &updated_keys);
+    }
+
+    let mut rendered = output.join("\n");
+    rendered.push('\n');
+    rendered
+}
+
+fn ini_section_header(line: &str) -> Option<&str> {
+    let trimmed = line.trim();
+    trimmed
+        .strip_prefix('[')
+        .and_then(|rest| rest.strip_suffix(']'))
+        .map(str::trim)
+}
+
+fn append_missing_ini_values(
+    output: &mut Vec<String>,
+    values: &[(&str, String)],
+    updated_keys: &HashSet<&str>,
+) {
+    for (key, value) in values {
+        if !updated_keys.contains(key) {
+            output.push(format!("{key} = {value}"));
+        }
+    }
+}
+
+fn dolphin_ipl_target_matches_source(target: &Path, source: &Path) -> bool {
+    if let Ok(link_target) = fs::read_link(target) {
+        let absolute_link_target = if link_target.is_absolute() {
+            link_target
+        } else {
+            target
+                .parent()
+                .unwrap_or_else(|| Path::new(""))
+                .join(link_target)
+        };
+        return absolute_link_target == source;
+    }
+
+    match (target.canonicalize(), source.canonicalize()) {
+        (Ok(target), Ok(source)) => target == source,
+        _ => false,
+    }
+}
+
+#[cfg(unix)]
+fn create_file_symlink(source: &Path, target: &Path) -> std::io::Result<()> {
+    std::os::unix::fs::symlink(source, target)
+}
+
+#[cfg(windows)]
+fn create_file_symlink(source: &Path, target: &Path) -> std::io::Result<()> {
+    std::os::windows::fs::symlink_file(source, target)
+}
+
+#[cfg(not(any(unix, windows)))]
+fn create_file_symlink(source: &Path, target: &Path) -> std::io::Result<()> {
+    fs::hard_link(source, target)
+}
+
 impl Drop for LibretroHost {
     fn drop(&mut self) {
         let _ = self.unload();
@@ -2315,6 +2655,136 @@ mod tests {
         assert_eq!(file_names, vec!["dolphin_libretro.dylib"]);
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn dolphin_ipl_bridge_exposes_bios_root_file_to_user_save_path() {
+        let dir = tempdir().expect("tempdir");
+        let system_root = dir.path().join("bios");
+        let save_root = dir.path().join("saves");
+        let source = system_root
+            .join("dolphin-emu")
+            .join("User")
+            .join("GC")
+            .join("USA")
+            .join("IPL.bin");
+        fs::create_dir_all(source.parent().expect("source parent")).expect("create source parent");
+        fs::write(&source, b"ipl").expect("write source IPL");
+
+        prepare_dolphin_user_bios_links(&system_root, &save_root).expect("prepare IPL bridge");
+
+        let target = save_root
+            .join("User")
+            .join("GC")
+            .join("USA")
+            .join("IPL.bin");
+        assert_eq!(fs::read_link(&target).expect("target symlink"), source);
+        assert_eq!(fs::read(&target).expect("read bridged IPL"), b"ipl");
+    }
+
+    #[test]
+    fn dolphin_ipl_bridge_leaves_existing_target_unchanged() {
+        let dir = tempdir().expect("tempdir");
+        let system_root = dir.path().join("bios");
+        let save_root = dir.path().join("saves");
+        let source = system_root
+            .join("dolphin-emu")
+            .join("User")
+            .join("GC")
+            .join("USA")
+            .join("IPL.bin");
+        let target = save_root
+            .join("User")
+            .join("GC")
+            .join("USA")
+            .join("IPL.bin");
+        fs::create_dir_all(source.parent().expect("source parent")).expect("create source parent");
+        fs::create_dir_all(target.parent().expect("target parent")).expect("create target parent");
+        fs::write(&source, b"ipl").expect("write source IPL");
+        fs::write(&target, b"existing").expect("write existing target");
+
+        prepare_dolphin_user_bios_links(&system_root, &save_root).expect("prepare IPL bridge");
+
+        assert_eq!(fs::read(&target).expect("read target"), b"existing");
+    }
+
+    #[test]
+    fn dolphin_user_config_syncs_core_stability_settings() {
+        let dir = tempdir().expect("tempdir");
+        let save_root = dir.path().join("saves");
+        let config_path = save_root.join("User").join("Config").join("Dolphin.ini");
+        let game_settings_path = save_root
+            .join("User")
+            .join("GameSettings")
+            .join("GO7E69.ini");
+        fs::create_dir_all(config_path.parent().expect("config parent"))
+            .expect("create config parent");
+        fs::create_dir_all(game_settings_path.parent().expect("game settings parent"))
+            .expect("create game settings parent");
+        fs::write(
+            &config_path,
+            "[Core]\nCPUCore = 4\nCPUThread = True\nFastmem = True\nFastmemArena = True\nMMU = False\nSkipIPL = True\n[Display]\nFullscreen = False\n",
+        )
+        .expect("write Dolphin.ini");
+        fs::write(
+            &game_settings_path,
+            "[Core]\nCPUCore = 4\nCPUThread = True\nFastmem = True\n[Video]\nProjectionHack = False\n",
+        )
+        .expect("write GameSettings ini");
+
+        let mut emulation = EmulationConfig::default();
+        emulation
+            .core_settings
+            .entry("dolphin".into())
+            .or_default()
+            .extend([
+                ("dolphin_cpu_core".into(), "0".into()),
+                ("dolphin_main_cpu_thread".into(), "disabled".into()),
+                ("dolphin_fastmem".into(), "disabled".into()),
+                ("dolphin_fastmem_arena".into(), "disabled".into()),
+                ("dolphin_main_mmu".into(), "enabled".into()),
+                ("dolphin_skip_gc_bios".into(), "disabled".into()),
+            ]);
+
+        prepare_dolphin_user_config(&save_root, &emulation).expect("sync Dolphin.ini");
+
+        let updated = fs::read_to_string(&config_path).expect("read Dolphin.ini");
+        assert!(updated.contains("CPUCore = 0"));
+        assert!(updated.contains("CPUThread = False"));
+        assert!(updated.contains("Fastmem = False"));
+        assert!(updated.contains("FastmemArena = False"));
+        assert!(updated.contains("MMU = True"));
+        assert!(updated.contains("SkipIPL = False"));
+        assert!(updated.contains("[Display]\nFullscreen = False"));
+
+        let updated_game_settings =
+            fs::read_to_string(&game_settings_path).expect("read GameSettings ini");
+        assert!(updated_game_settings.contains("CPUCore = 0"));
+        assert!(updated_game_settings.contains("CPUThread = False"));
+        assert!(updated_game_settings.contains("Fastmem = False"));
+        assert!(updated_game_settings.contains("FastmemArena = False"));
+        assert!(updated_game_settings.contains("MMU = True"));
+        assert!(updated_game_settings.contains("SkipIPL = False"));
+        assert!(updated_game_settings.contains("[Video]\nProjectionHack = False"));
+    }
+
+    #[test]
+    fn dolphin_user_config_creates_core_section_when_missing() {
+        let dir = tempdir().expect("tempdir");
+        let save_root = dir.path().join("saves");
+        let mut emulation = EmulationConfig::default();
+        emulation
+            .core_settings
+            .entry("dolphin".into())
+            .or_default()
+            .insert("dolphin_cpu_core".into(), "5".into());
+
+        prepare_dolphin_user_config(&save_root, &emulation).expect("write Dolphin.ini");
+
+        let config_path = save_root.join("User").join("Config").join("Dolphin.ini");
+        let updated = fs::read_to_string(&config_path).expect("read Dolphin.ini");
+        assert_eq!(updated, "[Core]\nCPUCore = 5\n");
+    }
+
     #[test]
     fn resolve_core_path_prefers_existing_candidate() {
         let dir = tempdir().expect("tempdir");
@@ -2462,6 +2932,149 @@ mod tests {
         let handled = unsafe { retro_environment(7, std::ptr::null_mut()) };
         assert!(handled);
         assert!(runtime.shutdown_requested.load(Ordering::Relaxed));
+
+        clear_active_runtime(&runtime);
+    }
+
+    #[test]
+    fn environment_reports_joypad_and_analog_input_capabilities() {
+        const RETRO_ENVIRONMENT_GET_INPUT_DEVICE_CAPABILITIES: u32 = 24;
+        const RETRO_DEVICE_JOYPAD: u32 = 1;
+        const RETRO_DEVICE_ANALOG: u32 = 5;
+
+        let mut capabilities = 0_u64;
+        let handled = unsafe {
+            retro_environment(
+                RETRO_ENVIRONMENT_GET_INPUT_DEVICE_CAPABILITIES,
+                (&mut capabilities as *mut u64).cast::<c_void>(),
+            )
+        };
+
+        assert!(handled);
+        assert_ne!(capabilities & (1_u64 << RETRO_DEVICE_JOYPAD), 0);
+        assert_ne!(capabilities & (1_u64 << RETRO_DEVICE_ANALOG), 0);
+    }
+
+    #[test]
+    fn environment_zeros_unsupported_serialization_quirks() {
+        const RETRO_ENVIRONMENT_SET_SERIALIZATION_QUIRKS: u32 = 44;
+
+        let mut quirks = u64::MAX;
+        let handled = unsafe {
+            retro_environment(
+                RETRO_ENVIRONMENT_SET_SERIALIZATION_QUIRKS,
+                (&mut quirks as *mut u64).cast::<c_void>(),
+            )
+        };
+
+        assert!(handled);
+        assert_eq!(quirks, 0);
+    }
+
+    #[test]
+    fn environment_reports_legacy_core_options_and_disk_control_versions() {
+        const RETRO_ENVIRONMENT_GET_CORE_OPTIONS_VERSION: u32 = 52;
+        const RETRO_ENVIRONMENT_GET_DISK_CONTROL_INTERFACE_VERSION: u32 = 57;
+
+        let mut core_options_version = u32::MAX;
+        let handled_core_options = unsafe {
+            retro_environment(
+                RETRO_ENVIRONMENT_GET_CORE_OPTIONS_VERSION,
+                (&mut core_options_version as *mut u32).cast::<c_void>(),
+            )
+        };
+
+        let mut disk_control_version = u32::MAX;
+        let handled_disk_control = unsafe {
+            retro_environment(
+                RETRO_ENVIRONMENT_GET_DISK_CONTROL_INTERFACE_VERSION,
+                (&mut disk_control_version as *mut u32).cast::<c_void>(),
+            )
+        };
+
+        assert!(handled_core_options);
+        assert_eq!(core_options_version, 0);
+        assert!(handled_disk_control);
+        assert_eq!(disk_control_version, 0);
+    }
+
+    #[test]
+    fn environment_handles_dolphin_optional_frontend_contract() {
+        const RETRO_ENVIRONMENT_GET_CORE_ASSETS_DIRECTORY: u32 = 30;
+        const RETRO_ENVIRONMENT_SET_DISK_CONTROL_EXT_INTERFACE: u32 = 58;
+        const RETRO_ENVIRONMENT_GET_INPUT_MAX_USERS: u32 = 61;
+        const RETRO_ENVIRONMENT_GET_MICROPHONE_INTERFACE: u32 = 75 | RETRO_ENVIRONMENT_EXPERIMENTAL;
+
+        let _guard = ACTIVE_RUNTIME_TEST_LOCK.lock();
+        *ACTIVE_RUNTIME.lock() = None;
+        let dir = tempdir().expect("tempdir");
+        let system_root = dir.path().join("bios");
+        let save_root = dir.path().join("saves");
+        let runtime = Arc::new(HostRuntime::default());
+        configure_environment_context(
+            &runtime,
+            &system_root,
+            &save_root,
+            "dolphin",
+            VideoBackendKind::Software,
+            &EmulationConfig::default(),
+        );
+        register_active_runtime(&runtime);
+
+        let mut core_assets_dir: *const c_char = std::ptr::null();
+        let handled_core_assets = unsafe {
+            retro_environment(
+                RETRO_ENVIRONMENT_GET_CORE_ASSETS_DIRECTORY,
+                (&mut core_assets_dir as *mut *const c_char).cast::<c_void>(),
+            )
+        };
+        assert!(handled_core_assets);
+        assert!(!core_assets_dir.is_null());
+        let core_assets_dir = unsafe { CStr::from_ptr(core_assets_dir) }.to_string_lossy();
+        assert_eq!(core_assets_dir, system_root.to_string_lossy());
+
+        let disk_callbacks = RetroDiskControlExtCallback {
+            set_eject_state: None,
+            get_eject_state: None,
+            get_image_index: None,
+            set_image_index: None,
+            get_num_images: None,
+            replace_image_index: None,
+            add_image_index: None,
+            set_initial_image: None,
+            get_image_path: None,
+            get_image_label: None,
+        };
+        let handled_disk_ext = unsafe {
+            retro_environment(
+                RETRO_ENVIRONMENT_SET_DISK_CONTROL_EXT_INTERFACE,
+                &disk_callbacks as *const RetroDiskControlExtCallback as *mut c_void,
+            )
+        };
+        assert!(handled_disk_ext);
+        assert!(runtime
+            .environment_context
+            .lock()
+            .disk_control_ext
+            .is_some());
+
+        let mut max_users = 0_u32;
+        let handled_max_users = unsafe {
+            retro_environment(
+                RETRO_ENVIRONMENT_GET_INPUT_MAX_USERS,
+                (&mut max_users as *mut u32).cast::<c_void>(),
+            )
+        };
+        assert!(handled_max_users);
+        assert_eq!(max_users, 4);
+
+        let handled_microphone = unsafe {
+            retro_environment(
+                RETRO_ENVIRONMENT_GET_MICROPHONE_INTERFACE,
+                std::ptr::null_mut(),
+            )
+        };
+        assert!(!handled_microphone);
 
         clear_active_runtime(&runtime);
     }

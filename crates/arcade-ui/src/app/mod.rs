@@ -379,6 +379,7 @@ impl eframe::App for NativeArcadeUiApp {
             session_active && self.host.expects_external_vulkan_present_window();
         let external_window_available =
             session_active && self.host.has_external_vulkan_present_window();
+        let immersive_viewport_allowed = self.host.should_use_immersive_play_viewport();
         let viewport_width = NativeArcadeUiApp::viewport_width(ctx);
         let central_margin = NativeArcadeUiApp::central_margin_for_width(viewport_width);
         self.sync_session_viewport(
@@ -387,6 +388,7 @@ impl eframe::App for NativeArcadeUiApp {
             external_present_active,
             external_present_expected,
             external_window_available,
+            immersive_viewport_allowed,
         );
 
         if !session_active {

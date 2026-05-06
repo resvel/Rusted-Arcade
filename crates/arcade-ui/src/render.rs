@@ -7,6 +7,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use tracing::info;
 
 use crate::app::NativeArcadeUiApp;
+use crate::play_session::{frame_has_sampled_luma, is_dolphin_core};
 
 static UI_FRAME_UPLOAD_DEBUG_COUNTER: AtomicU64 = AtomicU64::new(0);
 static PLAY_GL_PAINTER: OnceLock<Mutex<Option<PlayGlPainter>>> = OnceLock::new();
@@ -206,6 +207,13 @@ impl NativeArcadeUiApp {
 
     pub(crate) fn update_frame_texture(&mut self, ctx: &egui::Context, mut frame: FrameBuffer) {
         self.assets.last_gl_texture_frame = None;
+        if is_dolphin_core(self.state.play.active_core.as_deref())
+            && self.assets.last_frame_texture.is_some()
+            && !frame_has_sampled_luma(&frame)
+        {
+            return;
+        }
+
         let size = [frame.width as usize, frame.height as usize];
         let required_len = size[0].saturating_mul(size[1]).saturating_mul(4);
         let direct_rgba = matches!(frame.pixel_format, PixelFormat::Rgba8888)

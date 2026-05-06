@@ -19,6 +19,7 @@ recentRun*.log
 
 # Local content/runtime folders (not source-controlled)
 /bios/
+/cheats/
 /cores/
 /data/
 /roms/
@@ -95,3 +96,4 @@ recentRun*.log
 /third_party/mupen64plus-libretro-nx/
 /third_party/*-backup-*/
 /third_party/beetle-psx-libretro/
+/third_party/dolphin/

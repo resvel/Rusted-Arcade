@@ -13,9 +13,47 @@ pub(super) fn current_gl_ctx_id() -> usize {
     unsafe { CGLGetCurrentContext() as usize }
 }
 
+#[cfg(target_os = "macos")]
+pub(super) fn make_gl_ctx_current(ctx_id: usize) -> bool {
+    if ctx_id == 0 {
+        return false;
+    }
+    extern "C" {
+        fn CGLSetCurrentContext(ctx: *const std::ffi::c_void) -> i32;
+    }
+    unsafe { CGLSetCurrentContext(ctx_id as *const std::ffi::c_void) == 0 }
+}
+
 #[cfg(not(target_os = "macos"))]
 pub(super) fn current_gl_ctx_id() -> usize {
     0
+}
+
+#[cfg(not(target_os = "macos"))]
+pub(super) fn make_gl_ctx_current(_ctx_id: usize) -> bool {
+    false
+}
+
+pub(super) fn restore_frontend_gl_context(runtime: &HostRuntime, stage: &str) {
+    let expected_ctx = runtime.hw_render_state.lock().eframe_gl_ctx_id;
+    if expected_ctx == 0 {
+        return;
+    }
+
+    let current_ctx = current_gl_ctx_id();
+    if current_ctx == expected_ctx {
+        return;
+    }
+
+    let restored = make_gl_ctx_current(expected_ctx);
+    if std::env::var_os("LIBRETRO_TRACE_GL_CONTEXT").is_some()
+        || std::env::var_os("LIBRETRO_TRACE_GL_FRAMEBUFFER").is_some()
+    {
+        let after_ctx = current_gl_ctx_id();
+        eprintln!(
+            "frontend GL context restore stage={stage} before=0x{current_ctx:x} expected=0x{expected_ctx:x} after=0x{after_ctx:x} restored={restored}"
+        );
+    }
 }
 
 pub(super) fn log_frontend_gl_context(gl: &glow::Context) {
@@ -53,6 +91,7 @@ pub(super) fn trace_frontend_gl_framebuffer(gl: &glow::Context, stage: &str) {
     }
 
     unsafe {
+        let current_ctx = current_gl_ctx_id();
         let framebuffer = gl.get_parameter_i32(glow::FRAMEBUFFER_BINDING);
         let draw_framebuffer = gl.get_parameter_i32(glow::DRAW_FRAMEBUFFER_BINDING);
         let read_framebuffer = gl.get_parameter_i32(glow::READ_FRAMEBUFFER_BINDING);
@@ -60,7 +99,7 @@ pub(super) fn trace_frontend_gl_framebuffer(gl: &glow::Context, stage: &str) {
         let read_buffer = gl.get_parameter_i32(glow::READ_BUFFER);
         let status = gl.check_framebuffer_status(glow::FRAMEBUFFER);
         eprintln!(
-            "frontend GL framebuffer stage={stage} framebuffer={framebuffer} draw_framebuffer={draw_framebuffer} read_framebuffer={read_framebuffer} draw_buffer=0x{draw_buffer:x} read_buffer=0x{read_buffer:x} status=0x{status:x}"
+            "frontend GL framebuffer stage={stage} ctx=0x{current_ctx:x} framebuffer={framebuffer} draw_framebuffer={draw_framebuffer} read_framebuffer={read_framebuffer} draw_buffer=0x{draw_buffer:x} read_buffer=0x{read_buffer:x} status=0x{status:x}"
         );
     }
 }
@@ -391,11 +430,19 @@ pub(super) fn ensure_hw_render_target(target_size: (u32, u32)) -> Result<()> {
     unsafe {
         let previous_texture = gl.get_parameter_i32(glow::TEXTURE_BINDING_2D);
         let previous_framebuffer = gl.get_parameter_i32(glow::FRAMEBUFFER_BINDING);
+        let previous_read_framebuffer = gl.get_parameter_i32(glow::READ_FRAMEBUFFER_BINDING);
+        let previous_draw_framebuffer = gl.get_parameter_i32(glow::DRAW_FRAMEBUFFER_BINDING);
+        let previous_read_buffer = gl.get_parameter_i32(glow::READ_BUFFER);
+        let previous_draw_buffer = gl.get_parameter_i32(glow::DRAW_BUFFER);
         let previous_renderbuffer = gl.get_parameter_i32(glow::RENDERBUFFER_BINDING);
 
         let previous_texture = NonZeroU32::new(previous_texture as u32).map(glow::NativeTexture);
         let previous_framebuffer =
             NonZeroU32::new(previous_framebuffer as u32).map(glow::NativeFramebuffer);
+        let previous_read_framebuffer =
+            NonZeroU32::new(previous_read_framebuffer as u32).map(glow::NativeFramebuffer);
+        let previous_draw_framebuffer =
+            NonZeroU32::new(previous_draw_framebuffer as u32).map(glow::NativeFramebuffer);
         let previous_renderbuffer =
             NonZeroU32::new(previous_renderbuffer as u32).map(glow::NativeRenderbuffer);
 
@@ -505,6 +552,10 @@ pub(super) fn ensure_hw_render_target(target_size: (u32, u32)) -> Result<()> {
 
         gl.bind_renderbuffer(glow::RENDERBUFFER, previous_renderbuffer);
         gl.bind_framebuffer(glow::FRAMEBUFFER, previous_framebuffer);
+        gl.bind_framebuffer(glow::READ_FRAMEBUFFER, previous_read_framebuffer);
+        gl.bind_framebuffer(glow::DRAW_FRAMEBUFFER, previous_draw_framebuffer);
+        gl.read_buffer(previous_read_buffer as u32);
+        gl.draw_buffer(previous_draw_buffer as u32);
         gl.bind_texture(glow::TEXTURE_2D, previous_texture);
 
         if status != glow::FRAMEBUFFER_COMPLETE || play_present_status != glow::FRAMEBUFFER_COMPLETE
@@ -961,6 +1012,14 @@ pub(super) fn capture_frontend_gl_state(runtime: &HostRuntime) -> Option<Fronten
                 gl.get_parameter_i32(glow::ELEMENT_ARRAY_BUFFER_BINDING) as u32,
             )
             .map(glow::NativeBuffer),
+            pixel_pack_buffer: NonZeroU32::new(
+                gl.get_parameter_i32(glow::PIXEL_PACK_BUFFER_BINDING) as u32,
+            )
+            .map(glow::NativeBuffer),
+            pixel_unpack_buffer: NonZeroU32::new(
+                gl.get_parameter_i32(glow::PIXEL_UNPACK_BUFFER_BINDING) as u32,
+            )
+            .map(glow::NativeBuffer),
             renderbuffer: NonZeroU32::new(gl.get_parameter_i32(glow::RENDERBUFFER_BINDING) as u32)
                 .map(glow::NativeRenderbuffer),
             framebuffer: NonZeroU32::new(gl.get_parameter_i32(glow::FRAMEBUFFER_BINDING) as u32)
@@ -973,6 +1032,8 @@ pub(super) fn capture_frontend_gl_state(runtime: &HostRuntime) -> Option<Fronten
                 gl.get_parameter_i32(glow::DRAW_FRAMEBUFFER_BINDING) as u32
             )
             .map(glow::NativeFramebuffer),
+            read_buffer: gl.get_parameter_i32(glow::READ_BUFFER),
+            draw_buffer: gl.get_parameter_i32(glow::DRAW_BUFFER),
             unpack_alignment: gl.get_parameter_i32(glow::UNPACK_ALIGNMENT),
             pack_alignment: gl.get_parameter_i32(glow::PACK_ALIGNMENT),
             unpack_row_length: gl.get_parameter_i32(glow::UNPACK_ROW_LENGTH),
@@ -1015,10 +1076,14 @@ pub(super) fn restore_frontend_gl_state(runtime: &HostRuntime, snapshot: &Fronte
         gl.bind_vertex_array(snapshot.vertex_array);
         gl.bind_buffer(glow::ARRAY_BUFFER, snapshot.array_buffer);
         gl.bind_buffer(glow::ELEMENT_ARRAY_BUFFER, snapshot.element_array_buffer);
+        gl.bind_buffer(glow::PIXEL_PACK_BUFFER, snapshot.pixel_pack_buffer);
+        gl.bind_buffer(glow::PIXEL_UNPACK_BUFFER, snapshot.pixel_unpack_buffer);
         gl.bind_renderbuffer(glow::RENDERBUFFER, snapshot.renderbuffer);
         gl.bind_framebuffer(glow::FRAMEBUFFER, snapshot.framebuffer);
         gl.bind_framebuffer(glow::READ_FRAMEBUFFER, snapshot.read_framebuffer);
         gl.bind_framebuffer(glow::DRAW_FRAMEBUFFER, snapshot.draw_framebuffer);
+        gl.read_buffer(snapshot.read_buffer as u32);
+        gl.draw_buffer(snapshot.draw_buffer as u32);
         gl.pixel_store_i32(glow::UNPACK_ALIGNMENT, snapshot.unpack_alignment);
         gl.pixel_store_i32(glow::PACK_ALIGNMENT, snapshot.pack_alignment);
         gl.pixel_store_i32(glow::UNPACK_ROW_LENGTH, snapshot.unpack_row_length);
@@ -1121,6 +1186,15 @@ fn should_allow_default_gl_fallback(runtime: &HostRuntime) -> bool {
         .is_some_and(|core| core.eq_ignore_ascii_case("play"))
 }
 
+fn should_allow_generic_gl_texture_scan(runtime: &HostRuntime) -> bool {
+    let core_name = runtime.environment_context.lock().loaded_core_name.clone();
+    core_name_allows_generic_gl_texture_scan(core_name.as_deref())
+}
+
+fn core_name_allows_generic_gl_texture_scan(core_name: Option<&str>) -> bool {
+    !core_name.is_some_and(|core| core.eq_ignore_ascii_case("dolphin"))
+}
+
 fn is_play_core(runtime: &HostRuntime) -> bool {
     runtime
         .environment_context
@@ -1130,6 +1204,15 @@ fn is_play_core(runtime: &HostRuntime) -> bool {
         .is_some_and(|core| {
             core.eq_ignore_ascii_case("play") || core.eq_ignore_ascii_case("flycast")
         })
+}
+
+fn is_dolphin_core(runtime: &HostRuntime) -> bool {
+    runtime
+        .environment_context
+        .lock()
+        .loaded_core_name
+        .as_deref()
+        .is_some_and(|core| core.eq_ignore_ascii_case("dolphin"))
 }
 
 fn sampled_non_black_pixels(pixels: &[u8], width: u32, height: u32) -> usize {
@@ -1163,7 +1246,11 @@ fn read_gl_framebuffer_rgba(
 }
 
 pub(super) fn should_use_play_direct_gl_texture(runtime: &HostRuntime) -> bool {
-    is_play_core(runtime) && std::env::var_os("ARCADE_PLAY_GL_CPU_READBACK").is_none()
+    let play_direct =
+        is_play_core(runtime) && std::env::var_os("ARCADE_PLAY_GL_CPU_READBACK").is_none();
+    let dolphin_direct =
+        is_dolphin_core(runtime) && std::env::var_os("ARCADE_DOLPHIN_GL_CPU_READBACK").is_none();
+    play_direct || dolphin_direct
 }
 
 pub(super) fn take_play_direct_gl_texture_frame(
@@ -1196,6 +1283,8 @@ pub(super) fn take_play_direct_gl_texture_frame(
 
     let previous_read_framebuffer = unsafe { gl.get_parameter_i32(glow::READ_FRAMEBUFFER_BINDING) };
     let previous_draw_framebuffer = unsafe { gl.get_parameter_i32(glow::DRAW_FRAMEBUFFER_BINDING) };
+    let previous_read_buffer = unsafe { gl.get_parameter_i32(glow::READ_BUFFER) };
+    let previous_draw_buffer = unsafe { gl.get_parameter_i32(glow::DRAW_BUFFER) };
     let previous_texture = unsafe { gl.get_parameter_i32(glow::TEXTURE_BINDING_2D) };
     let scissor_was_enabled = unsafe { gl.is_enabled(glow::SCISSOR_TEST) };
     let previous_read_framebuffer =
@@ -1231,6 +1320,8 @@ pub(super) fn take_play_direct_gl_texture_frame(
         if read_status != glow::FRAMEBUFFER_COMPLETE {
             gl.bind_framebuffer(glow::READ_FRAMEBUFFER, previous_read_framebuffer);
             gl.bind_framebuffer(glow::DRAW_FRAMEBUFFER, previous_draw_framebuffer);
+            gl.read_buffer(previous_read_buffer as u32);
+            gl.draw_buffer(previous_draw_buffer as u32);
             gl.bind_texture(glow::TEXTURE_2D, previous_texture);
             if std::env::var_os("LIBRETRO_TRACE_GL_READBACK").is_some() {
                 eprintln!(
@@ -1249,6 +1340,8 @@ pub(super) fn take_play_direct_gl_texture_frame(
         if draw_status != glow::FRAMEBUFFER_COMPLETE {
             gl.bind_framebuffer(glow::READ_FRAMEBUFFER, previous_read_framebuffer);
             gl.bind_framebuffer(glow::DRAW_FRAMEBUFFER, previous_draw_framebuffer);
+            gl.read_buffer(previous_read_buffer as u32);
+            gl.draw_buffer(previous_draw_buffer as u32);
             gl.bind_texture(glow::TEXTURE_2D, previous_texture);
             return Err(anyhow!(
                 "Play presentation framebuffer incomplete (status=0x{draw_status:04x})"
@@ -1275,6 +1368,8 @@ pub(super) fn take_play_direct_gl_texture_frame(
         }
         gl.bind_framebuffer(glow::READ_FRAMEBUFFER, previous_read_framebuffer);
         gl.bind_framebuffer(glow::DRAW_FRAMEBUFFER, previous_draw_framebuffer);
+        gl.read_buffer(previous_read_buffer as u32);
+        gl.draw_buffer(previous_draw_buffer as u32);
         gl.bind_texture(glow::TEXTURE_2D, previous_texture);
     }
 
@@ -1554,6 +1649,7 @@ pub(super) fn read_opengl_render_frame(
     let is_play = is_play_core(runtime);
     let strict_texture_match = should_use_strict_gl_texture_match(runtime);
     let allow_default_fallback = should_allow_default_gl_fallback(runtime);
+    let allow_generic_texture_scan = should_allow_generic_gl_texture_scan(runtime);
     let (
         gl,
         framebuffer,
@@ -1918,7 +2014,10 @@ pub(super) fn read_opengl_render_frame(
         play_texture_last_scan_frame = play_texture_frame_counter;
     }
     let should_texture_scan = force_play_texture_scan
-        || (allow_texture_scan && non_black_pixels == 0 && emu_game_texture.is_none());
+        || (allow_generic_texture_scan
+            && allow_texture_scan
+            && non_black_pixels == 0
+            && emu_game_texture.is_none());
 
     // Texture scan: when the dedicated FBO (texture 33) is empty and the core hasn't left a
     // useful FBO bound, scan visible texture handles for game content.  When mupen64plus-next
@@ -2156,14 +2255,17 @@ pub(super) fn read_opengl_render_frame(
                 play_texture_frame_counter
             );
         }
-    } else if non_black_pixels == 0
-        && emu_game_texture.is_none()
-        && is_play
-        && std::env::var_os("LIBRETRO_TRACE_GL_READBACK").is_some()
-    {
-        eprintln!(
-            "gl readback: play warmup waiting for core-linked output (blank_streak={play_blank_frame_streak}/{PLAY_TEXTURE_SCAN_WARMUP_FRAMES}), skipping texture scan fallback"
-        );
+    } else if non_black_pixels == 0 && emu_game_texture.is_none() {
+        let trace = std::env::var_os("LIBRETRO_TRACE_GL_READBACK").is_some();
+        if trace && is_play {
+            eprintln!(
+                "gl readback: play warmup waiting for core-linked output (blank_streak={play_blank_frame_streak}/{PLAY_TEXTURE_SCAN_WARMUP_FRAMES}), skipping texture scan fallback"
+            );
+        } else if trace && !allow_generic_texture_scan {
+            eprintln!(
+                "gl readback: skipping generic texture scan for this core; host framebuffer remains black"
+            );
+        }
     }
 
     non_black_pixels = sampled_non_black_pixels(&pixels, pending.width, pending.height);
@@ -2351,8 +2453,9 @@ pub(super) fn read_opengl_render_frame(
 #[cfg(test)]
 mod tests {
     use super::{
-        next_play_stale_signature_streak, should_run_play_periodic_rescan,
-        should_switch_play_texture_candidate, PlayTextureSignature,
+        core_name_allows_generic_gl_texture_scan, next_play_stale_signature_streak,
+        should_run_play_periodic_rescan, should_switch_play_texture_candidate,
+        PlayTextureSignature,
     };
 
     fn signature(seed: u64) -> PlayTextureSignature {
@@ -2427,5 +2530,15 @@ mod tests {
     #[test]
     fn switch_decision_allows_force_due_to_stale() {
         assert!(should_switch_play_texture_candidate(true, 1.0, 10.0, 5, 4));
+    }
+
+    #[test]
+    fn generic_texture_scan_is_disabled_for_dolphin() {
+        assert!(!core_name_allows_generic_gl_texture_scan(Some("dolphin")));
+        assert!(!core_name_allows_generic_gl_texture_scan(Some("DOLPHIN")));
+        assert!(core_name_allows_generic_gl_texture_scan(Some(
+            "mupen64plus_next"
+        )));
+        assert!(core_name_allows_generic_gl_texture_scan(None));
     }
 }

@@ -182,7 +182,7 @@ fn select_dolphin_backend(input: BackendPolicyInput<'_>) -> BackendSelection {
             return BackendSelection {
                 chosen: VideoBackendKind::Vulkan,
                 fallbacks: vec![VideoBackendKind::Software],
-                allows_external_present: false,
+                allows_external_present: true,
             };
         }
 
@@ -208,10 +208,18 @@ fn select_dolphin_backend(input: BackendPolicyInput<'_>) -> BackendSelection {
         };
     }
 
+    if input.frontend_capabilities.supports_gl_backend() {
+        return BackendSelection {
+            chosen: VideoBackendKind::OpenGl,
+            fallbacks: vec![VideoBackendKind::Software],
+            allows_external_present: false,
+        };
+    }
+
     BackendSelection {
         chosen: VideoBackendKind::Vulkan,
         fallbacks: vec![VideoBackendKind::Software],
-        allows_external_present: false,
+        allows_external_present: true,
     }
 }
 
@@ -327,6 +335,20 @@ mod tests {
     }
 
     #[test]
+    fn dolphin_uses_external_present_when_core_requests_vulkan() {
+        let selection = select_backend(BackendPolicyInput {
+            core_name: "dolphin",
+            requires_hw_render: true,
+            requested_hw_context_type: Some(6),
+            frontend_capabilities: &frontend(true, true),
+        });
+
+        assert_eq!(selection.chosen, VideoBackendKind::Vulkan);
+        assert_eq!(selection.fallbacks, vec![VideoBackendKind::Software]);
+        assert!(selection.allows_external_present);
+    }
+
+    #[test]
     fn flycast_still_defaults_to_vulkan_when_glow_frontend_is_available() {
         let selection = select_backend(BackendPolicyInput {
             core_name: "flycast",
@@ -353,7 +375,7 @@ mod tests {
     }
 
     #[test]
-    fn dolphin_defaults_to_vulkan_without_external_present() {
+    fn dolphin_defaults_to_opengl_when_glow_frontend_is_available() {
         let selection = select_backend(BackendPolicyInput {
             core_name: "dolphin",
             requires_hw_render: false,
@@ -361,9 +383,23 @@ mod tests {
             frontend_capabilities: &frontend(true, true),
         });
 
-        assert_eq!(selection.chosen, VideoBackendKind::Vulkan);
+        assert_eq!(selection.chosen, VideoBackendKind::OpenGl);
         assert_eq!(selection.fallbacks, vec![VideoBackendKind::Software]);
         assert!(!selection.allows_external_present);
+    }
+
+    #[test]
+    fn dolphin_defaults_to_vulkan_without_glow_frontend() {
+        let selection = select_backend(BackendPolicyInput {
+            core_name: "dolphin",
+            requires_hw_render: false,
+            requested_hw_context_type: None,
+            frontend_capabilities: &frontend(false, true),
+        });
+
+        assert_eq!(selection.chosen, VideoBackendKind::Vulkan);
+        assert_eq!(selection.fallbacks, vec![VideoBackendKind::Software]);
+        assert!(selection.allows_external_present);
     }
 
     #[test]
