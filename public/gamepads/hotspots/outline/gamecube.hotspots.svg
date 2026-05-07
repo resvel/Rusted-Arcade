@@ -11,10 +11,10 @@
   <rect id="gamecube-c-stick-down" data-action="C Stick Down" data-label="C Stick Down" x="39.40" y="41.30" width="5.80" height="2.00" />
   <rect id="gamecube-c-stick-left" data-action="C Stick Left" data-label="C Stick Left" x="36.15" y="34.90" width="2.00" height="5.80" />
   <rect id="gamecube-c-stick-right" data-action="C Stick Right" data-label="C Stick Right" x="46.35" y="34.90" width="2.00" height="5.80" />
-  <circle id="gamecube-a" data-action="A" data-label="A" cx="42.20" cy="37.80" r="3.20" />
+  <circle id="gamecube-a" data-action="A" data-label="A" cx="51.20" cy="24.60" r="3.80" />
   <circle id="gamecube-b" data-action="B" data-label="B" cx="43.98" cy="27.85" r="2.75" />
-  <circle id="gamecube-x" data-action="X" data-label="X" cx="51.20" cy="24.60" r="3.30" />
-  <circle id="gamecube-y" data-action="Y" data-label="Y" cx="50.90" cy="16.00" r="2.55" />
+  <rect id="gamecube-x" data-action="X" data-label="X" x="56.30" y="19.00" width="3.90" height="8.60" />
+  <rect id="gamecube-y" data-action="Y" data-label="Y" x="46.80" y="15.00" width="6.60" height="4.80" />
   <rect id="gamecube-z" data-action="Z" data-label="Z" x="47.00" y="10.75" width="9.00" height="3.20" />
   <rect id="gamecube-l" data-action="L" data-label="L" x="9.75" y="9.90" width="9.90" height="3.20" />
   <rect id="gamecube-r" data-action="R" data-label="R" x="45.50" y="9.90" width="9.90" height="3.20" />
