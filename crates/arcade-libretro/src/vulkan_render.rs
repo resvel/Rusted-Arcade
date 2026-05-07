@@ -2209,6 +2209,17 @@ fn recreate_vulkan_present_state(
 }
 
 pub(super) fn destroy_vulkan_interface_state(state: VulkanInterfaceState) {
+    destroy_vulkan_interface_state_with_options(state, true);
+}
+
+pub(super) fn destroy_vulkan_interface_state_without_core_callback(state: VulkanInterfaceState) {
+    destroy_vulkan_interface_state_with_options(state, false);
+}
+
+fn destroy_vulkan_interface_state_with_options(
+    state: VulkanInterfaceState,
+    call_core_destroy_device: bool,
+) {
     if let Some(present) = state.present {
         destroy_vulkan_present_state(&state.device, present);
     }
@@ -2225,9 +2236,11 @@ pub(super) fn destroy_vulkan_interface_state(state: VulkanInterfaceState) {
             state.device.free_memory(readback.staging_memory, None);
         }
     }
-    if let Some(destroy_device) = state.destroy_device_callback {
-        unsafe {
-            destroy_device();
+    if call_core_destroy_device {
+        if let Some(destroy_device) = state.destroy_device_callback {
+            unsafe {
+                destroy_device();
+            }
         }
     }
     unsafe {

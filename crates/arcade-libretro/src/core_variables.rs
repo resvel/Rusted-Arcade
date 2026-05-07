@@ -27,6 +27,10 @@ pub(super) fn default_core_variables_for(
         apply_parallel_n64_env_overrides(&mut variables);
     }
 
+    if core_name == "pcsx2" {
+        apply_pcsx2_forced(&mut variables, backend);
+    }
+
     variables
 }
 
@@ -173,6 +177,26 @@ fn apply_parallel_n64_forced(
 }
 
 // ---------------------------------------------------------------------------
+// pcsx2: forced (non-configurable) overrides
+// ---------------------------------------------------------------------------
+
+fn apply_pcsx2_forced(variables: &mut HashMap<String, CString>, backend: VideoBackendKind) {
+    match backend {
+        VideoBackendKind::Vulkan => {
+            let renderer = std::env::var("ARCADE_PCSX2_RENDERER")
+                .ok()
+                .filter(|value| !value.is_empty())
+                .unwrap_or_else(|| String::from("Vulkan"));
+            insert_core_variable(variables, "pcsx2_renderer", &renderer);
+        }
+        VideoBackendKind::OpenGl => {
+            insert_core_variable(variables, "pcsx2_renderer", "OpenGL");
+        }
+        VideoBackendKind::Software => {}
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
@@ -186,7 +210,29 @@ pub(super) fn default_core_variables(core_name: &str) -> HashMap<String, CString
 }
 
 pub(super) fn apply_core_runtime_env_defaults(core_name: &str, backend: VideoBackendKind) {
-    let _ = (core_name, backend);
+    if core_name.eq_ignore_ascii_case("pcsx2") && backend == VideoBackendKind::Vulkan {
+        apply_pcsx2_vulkan_runtime_env_defaults();
+    }
+}
+
+fn apply_pcsx2_vulkan_runtime_env_defaults() {
+    if std::env::var_os("GRANITE_VULKAN_LIBRARY").is_some() {
+        return;
+    }
+
+    for candidate in [
+        "/usr/local/lib/libvulkan.1.dylib",
+        "/usr/local/lib/libvulkan.dylib",
+        "/usr/local/lib/libMoltenVK.dylib",
+        "/opt/homebrew/lib/libvulkan.1.dylib",
+        "/opt/homebrew/lib/libvulkan.dylib",
+        "/opt/homebrew/lib/libMoltenVK.dylib",
+    ] {
+        if std::path::Path::new(candidate).exists() {
+            std::env::set_var("GRANITE_VULKAN_LIBRARY", candidate);
+            break;
+        }
+    }
 }
 
 fn insert_core_variable(variables: &mut HashMap<String, CString>, key: &str, value: &str) {
@@ -327,6 +373,12 @@ pub(super) fn store_default_variable(context: &mut EnvironmentContext, key: &str
 mod tests {
     use super::*;
     use std::collections::HashMap as StdHashMap;
+    use std::sync::{Mutex, OnceLock};
+
+    fn pcsx2_renderer_env_lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(())).lock().expect("lock")
+    }
 
     fn emulation_with(core: &str, key: &str, value: &str) -> EmulationConfig {
         let mut e = EmulationConfig::default();
@@ -583,6 +635,71 @@ mod tests {
         assert_eq!(fastmem_arena.to_str().expect("utf8"), "enabled");
         assert_eq!(main_mmu.to_str().expect("utf8"), "disabled");
         assert_eq!(skip_gc_bios.to_str().expect("utf8"), "enabled");
+    }
+
+    #[test]
+    fn default_core_variables_force_pcsx2_vulkan_renderer_when_backend_is_vulkan() {
+        let _guard = pcsx2_renderer_env_lock();
+        let key = "ARCADE_PCSX2_RENDERER";
+        let previous = std::env::var_os(key);
+        std::env::remove_var(key);
+
+        let emulation = emulation_with("pcsx2", "pcsx2_renderer", "Software");
+        let variables = default_core_variables_for("pcsx2", VideoBackendKind::Vulkan, &emulation);
+        let renderer = variables
+            .get("pcsx2_renderer")
+            .expect("pcsx2 renderer override");
+
+        assert_eq!(renderer.to_str().expect("utf8"), "Vulkan");
+
+        if let Some(previous) = previous {
+            std::env::set_var(key, previous);
+        }
+    }
+
+    #[test]
+    fn default_core_variables_honor_pcsx2_renderer_env_override() {
+        let _guard = pcsx2_renderer_env_lock();
+        let key = "ARCADE_PCSX2_RENDERER";
+        let previous = std::env::var_os(key);
+        std::env::set_var(key, "paraLLEl-GS");
+
+        let variables = default_core_variables_for(
+            "pcsx2",
+            VideoBackendKind::Vulkan,
+            &EmulationConfig::default(),
+        );
+        let renderer = variables
+            .get("pcsx2_renderer")
+            .expect("pcsx2 renderer override");
+
+        assert_eq!(renderer.to_str().expect("utf8"), "paraLLEl-GS");
+
+        if let Some(previous) = previous {
+            std::env::set_var(key, previous);
+        } else {
+            std::env::remove_var(key);
+        }
+    }
+
+    #[test]
+    fn pcsx2_runtime_env_preserves_existing_vulkan_loader_override() {
+        let key = "GRANITE_VULKAN_LIBRARY";
+        let previous = std::env::var_os(key);
+        std::env::set_var(key, "/tmp/custom-libvulkan.dylib");
+
+        apply_core_runtime_env_defaults("pcsx2", VideoBackendKind::Vulkan);
+
+        assert_eq!(
+            std::env::var(key).expect("env value"),
+            "/tmp/custom-libvulkan.dylib"
+        );
+
+        if let Some(previous) = previous {
+            std::env::set_var(key, previous);
+        } else {
+            std::env::remove_var(key);
+        }
     }
 
     #[test]

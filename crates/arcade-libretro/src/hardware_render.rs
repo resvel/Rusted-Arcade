@@ -451,6 +451,18 @@ pub(super) fn release_hw_render_target(state: &mut HardwareRenderState) {
 }
 
 pub(super) fn destroy_hw_render_session_for(runtime: &HostRuntime) {
+    destroy_hw_render_session_for_with_options(runtime, true, true);
+}
+
+pub(super) fn destroy_hw_render_session_after_core_deinit(runtime: &HostRuntime) {
+    destroy_hw_render_session_for_with_options(runtime, false, false);
+}
+
+fn destroy_hw_render_session_for_with_options(
+    runtime: &HostRuntime,
+    call_core_context_destroy: bool,
+    call_vulkan_core_destroy_device: bool,
+) {
     runtime.video_coordinator.lock().end_session(runtime);
     let (callbacks, vulkan, external_vulkan_window) = {
         let mut state = runtime.hw_render_state.lock();
@@ -465,19 +477,33 @@ pub(super) fn destroy_hw_render_session_for(runtime: &HostRuntime) {
         (state.callbacks.take(), vulkan, external_vulkan_window)
     };
 
-    if let Some(callbacks) = callbacks {
-        if let Some(context_destroy) = callbacks.context_destroy {
-            unsafe {
-                context_destroy();
+    if call_core_context_destroy {
+        if let Some(callbacks) = callbacks {
+            if let Some(context_destroy) = callbacks.context_destroy {
+                unsafe {
+                    context_destroy();
+                }
             }
         }
     }
 
     if let Some(vulkan) = vulkan {
-        destroy_vulkan_interface_state(vulkan);
+        if call_vulkan_core_destroy_device {
+            destroy_vulkan_interface_state(vulkan);
+        } else {
+            destroy_vulkan_interface_state_without_core_callback(vulkan);
+        }
     }
     if let Some(external_vulkan_window) = external_vulkan_window {
         destroy_external_vulkan_window(external_vulkan_window);
+    }
+}
+
+pub(super) fn abandon_hw_render_core_callbacks_after_deinit(runtime: &HostRuntime) {
+    let mut state = runtime.hw_render_state.lock();
+    state.callbacks = None;
+    if let Some(vulkan) = state.vulkan.as_mut() {
+        vulkan.destroy_device_callback = None;
     }
 }
 

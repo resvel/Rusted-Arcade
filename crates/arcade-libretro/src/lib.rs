@@ -1186,6 +1186,13 @@ struct LoadedCore {
     uses_hw_render: bool,
 }
 
+fn is_pcsx2_core_label(core_label: &str) -> bool {
+    core_label
+        .strip_suffix("_libretro")
+        .unwrap_or(core_label)
+        .eq_ignore_ascii_case("pcsx2")
+}
+
 fn default_core_library_filename(core_name: &str) -> String {
     format!("{core_name}_libretro.dylib")
 }
@@ -2290,34 +2297,109 @@ impl LibretroHost {
                 .and_then(|name| name.to_str())
                 .unwrap_or("unknown_core")
                 .to_owned();
+            let pcsx2_core = is_pcsx2_core_label(&core_label);
+            info!(
+                target: "arcade_libretro::core_loader",
+                core = core_label.as_str(),
+                "unloading core"
+            );
             let audio_set_state_callback = {
                 let mut context = self.runtime.environment_context.lock();
                 context.audio_callback_enabled = false;
                 context.audio_set_state_callback
             };
             if let Some(set_state) = audio_set_state_callback {
+                info!(
+                    target: "arcade_libretro::core_loader",
+                    core = core_label.as_str(),
+                    "disabling core audio callback"
+                );
                 unsafe { set_state(false) };
             }
+            self.audio_output.borrow_mut().take();
+            info!(
+                target: "arcade_libretro::core_loader",
+                core = core_label.as_str(),
+                "calling retro_unload_game"
+            );
             unsafe {
                 (loaded.api.unload_game)();
             }
+            info!(
+                target: "arcade_libretro::core_loader",
+                core = core_label.as_str(),
+                "retro_unload_game returned"
+            );
             log_vulkan_present_metrics_summary(
                 &self.runtime,
                 &core_label,
                 loaded.uses_hw_render,
                 "final",
             );
-            destroy_hw_render_session();
-            unsafe {
-                (loaded.api.deinit)();
+            if pcsx2_core {
+                info!(
+                    target: "arcade_libretro::core_loader",
+                    core = core_label.as_str(),
+                    "calling retro_deinit before hardware teardown"
+                );
+                unsafe {
+                    (loaded.api.deinit)();
+                }
+                info!(
+                    target: "arcade_libretro::core_loader",
+                    core = core_label.as_str(),
+                    "retro_deinit returned"
+                );
+                abandon_hw_render_core_callbacks_after_deinit(&self.runtime);
+                info!(
+                    target: "arcade_libretro::core_loader",
+                    core = core_label.as_str(),
+                    "destroying hardware render session after deinit without core callbacks"
+                );
+                destroy_hw_render_session_after_core_deinit(&self.runtime);
+                info!(
+                    target: "arcade_libretro::core_loader",
+                    core = core_label.as_str(),
+                    "hardware render session destroyed"
+                );
+            } else {
+                info!(
+                    target: "arcade_libretro::core_loader",
+                    core = core_label.as_str(),
+                    "destroying hardware render session before deinit"
+                );
+                destroy_hw_render_session();
+                info!(
+                    target: "arcade_libretro::core_loader",
+                    core = core_label.as_str(),
+                    "hardware render session destroyed"
+                );
+                info!(
+                    target: "arcade_libretro::core_loader",
+                    core = core_label.as_str(),
+                    "calling retro_deinit after hardware teardown"
+                );
+                unsafe {
+                    (loaded.api.deinit)();
+                }
+                info!(
+                    target: "arcade_libretro::core_loader",
+                    core = core_label.as_str(),
+                    "retro_deinit returned"
+                );
             }
+            info!(
+                target: "arcade_libretro::core_loader",
+                core = core_label.as_str(),
+                "core unload complete"
+            );
         } else {
+            self.audio_output.borrow_mut().take();
             destroy_hw_render_session();
         }
-        // Drop the audio output *before* clearing the active runtime so the
-        // cpal stream stops its callbacks.  Without this the stream keeps
-        // firing into write_output_*, sees no runtime, and spams "audio
-        // runtime not available" warnings until the LibretroHost is dropped.
+        // Drop the audio output before clearing the active runtime so the cpal
+        // stream stops its callbacks. It is also dropped before core teardown
+        // above so slow core shutdown cannot keep audio callbacks alive.
         self.audio_output.borrow_mut().take();
         reset_callback_video_state(&self.runtime);
         self.runtime.callback_state.lock().input_state.clear();
@@ -3240,6 +3322,13 @@ mod tests {
         host.unload().expect("unload");
 
         assert!(!host.runtime.shutdown_requested.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn pcsx2_core_label_matches_plain_and_libretro_stem() {
+        assert!(is_pcsx2_core_label("pcsx2"));
+        assert!(is_pcsx2_core_label("pcsx2_libretro"));
+        assert!(!is_pcsx2_core_label("play_libretro"));
     }
 
     #[test]

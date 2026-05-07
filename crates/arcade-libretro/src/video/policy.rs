@@ -31,6 +31,10 @@ pub(super) fn select_backend(input: BackendPolicyInput<'_>) -> BackendSelection 
         return select_dolphin_backend(input);
     }
 
+    if input.core_name == "pcsx2" {
+        return select_pcsx2_backend(input);
+    }
+
     if input.core_name == "play" {
         return select_play_backend(input);
     }
@@ -61,6 +65,46 @@ fn select_play_backend(_input: BackendPolicyInput<'_>) -> BackendSelection {
         chosen: VideoBackendKind::OpenGl,
         fallbacks: vec![],
         allows_external_present: false,
+    }
+}
+
+fn select_pcsx2_backend(input: BackendPolicyInput<'_>) -> BackendSelection {
+    const RETRO_HW_CONTEXT_VULKAN: u32 = 6;
+
+    if input.requested_hw_context_type == Some(RETRO_HW_CONTEXT_VULKAN) {
+        return BackendSelection {
+            chosen: VideoBackendKind::Vulkan,
+            fallbacks: vec![VideoBackendKind::Software],
+            allows_external_present: cfg!(target_os = "macos"),
+        };
+    }
+
+    if input
+        .requested_hw_context_type
+        .is_some_and(hw_context_type_supported)
+    {
+        #[cfg(target_os = "macos")]
+        if arcade_domain::platform::is_running_under_rosetta() {
+            return BackendSelection {
+                chosen: VideoBackendKind::Vulkan,
+                fallbacks: vec![VideoBackendKind::Software],
+                allows_external_present: true,
+            };
+        }
+
+        if input.frontend_capabilities.supports_gl_backend() {
+            return BackendSelection {
+                chosen: VideoBackendKind::OpenGl,
+                fallbacks: vec![VideoBackendKind::Software],
+                allows_external_present: false,
+            };
+        }
+    }
+
+    BackendSelection {
+        chosen: VideoBackendKind::Vulkan,
+        fallbacks: vec![VideoBackendKind::Software],
+        allows_external_present: cfg!(target_os = "macos"),
     }
 }
 
@@ -347,6 +391,34 @@ mod tests {
         assert_eq!(selection.chosen, VideoBackendKind::OpenGl);
         assert!(selection.fallbacks.is_empty());
         assert!(!selection.allows_external_present);
+    }
+
+    #[test]
+    fn pcsx2_defaults_to_vulkan_backend() {
+        let selection = select_backend(BackendPolicyInput {
+            core_name: "pcsx2",
+            requires_hw_render: false,
+            requested_hw_context_type: None,
+            frontend_capabilities: &frontend(false, true),
+        });
+
+        assert_eq!(selection.chosen, VideoBackendKind::Vulkan);
+        assert_eq!(selection.fallbacks, vec![VideoBackendKind::Software]);
+        assert_eq!(selection.allows_external_present, cfg!(target_os = "macos"));
+    }
+
+    #[test]
+    fn pcsx2_accepts_vulkan_request() {
+        let selection = select_backend(BackendPolicyInput {
+            core_name: "pcsx2",
+            requires_hw_render: true,
+            requested_hw_context_type: Some(6),
+            frontend_capabilities: &frontend(false, true),
+        });
+
+        assert_eq!(selection.chosen, VideoBackendKind::Vulkan);
+        assert_eq!(selection.fallbacks, vec![VideoBackendKind::Software]);
+        assert_eq!(selection.allows_external_present, cfg!(target_os = "macos"));
     }
 
     #[test]

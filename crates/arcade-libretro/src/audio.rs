@@ -25,6 +25,13 @@ fn audio_profile_f64_env(name: &str, default: f64) -> f64 {
         .unwrap_or(default)
 }
 
+fn audio_profile_usize_env(name: &str, default: usize) -> usize {
+    std::env::var(name)
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(default)
+}
+
 #[cfg(feature = "audio")]
 const PLAY_AUDIO_TARGET_LATENCY_SECS: f64 = 0.200;
 #[cfg(feature = "audio")]
@@ -47,6 +54,16 @@ const PLAY_AUDIO_ADAPTIVE_CLOCK_MAX_SCALE: f64 = 1.0;
 const PLAY_AUDIO_ADAPTIVE_CLOCK_SMOOTHING: f64 = 0.45;
 #[cfg(feature = "audio")]
 const PLAY_AUDIO_ADAPTIVE_CLOCK_QUEUE_FEEDBACK: f64 = 0.12;
+#[cfg(feature = "audio")]
+const PCSX2_AUDIO_TARGET_LATENCY_SECS: f64 = 0.200;
+#[cfg(feature = "audio")]
+const PCSX2_AUDIO_MAX_LATENCY_SECS: f64 = 0.600;
+#[cfg(feature = "audio")]
+const PCSX2_AUDIO_QUEUE_CORRECTION: f64 = 0.0;
+#[cfg(feature = "audio")]
+const PCSX2_AUDIO_DRIFT_LIMIT: f64 = 0.02;
+#[cfg(feature = "audio")]
+const PCSX2_AUDIO_UNDERFLOW_CONCEALMENT_FRAMES: usize = 1024;
 #[cfg(feature = "audio")]
 const FLYCAST_AUDIO_TARGET_LATENCY_SECS: f64 = 0.120;
 #[cfg(feature = "audio")]
@@ -166,9 +183,31 @@ fn flycast_audio_profile_defaults() -> AudioProfile {
 }
 
 #[cfg(feature = "audio")]
+fn pcsx2_audio_profile_defaults() -> AudioProfile {
+    AudioProfile {
+        target_latency_secs: PCSX2_AUDIO_TARGET_LATENCY_SECS,
+        max_latency_secs: PCSX2_AUDIO_MAX_LATENCY_SECS,
+        resample_queue_correction: PCSX2_AUDIO_QUEUE_CORRECTION,
+        resample_ratio_drift_limit: PCSX2_AUDIO_DRIFT_LIMIT,
+        trim_to_target_on_overflow: false,
+        drop_excess_silence_when_buffered: true,
+        underflow_concealment_frames: PCSX2_AUDIO_UNDERFLOW_CONCEALMENT_FRAMES,
+        playback_buffer_secs: 0.0,
+        playback_buffer_low_water_secs: 0.0,
+        adaptive_clock_enabled: false,
+        adaptive_clock_min_scale: 1.0,
+        adaptive_clock_max_scale: 1.0,
+        adaptive_clock_smoothing: 0.0,
+        adaptive_clock_queue_feedback: 0.0,
+    }
+}
+
+#[cfg(feature = "audio")]
 fn audio_profile_for_core_defaults(core_name: &str) -> AudioProfile {
     if core_name.eq_ignore_ascii_case("play") {
         play_audio_profile_defaults()
+    } else if core_name.eq_ignore_ascii_case("pcsx2") {
+        pcsx2_audio_profile_defaults()
     } else if core_name.eq_ignore_ascii_case("flycast") {
         flycast_audio_profile_defaults()
     } else {
@@ -197,11 +236,10 @@ fn apply_audio_profile_for_core(state: &mut AudioState, core_name: &str) {
             "ARCADE_PLAY_AUDIO_DRIFT_LIMIT",
             profile.resample_ratio_drift_limit,
         );
-        profile.underflow_concealment_frames =
-            std::env::var("ARCADE_PLAY_AUDIO_UNDERFLOW_CONCEALMENT_FRAMES")
-                .ok()
-                .and_then(|value| value.parse::<usize>().ok())
-                .unwrap_or(profile.underflow_concealment_frames);
+        profile.underflow_concealment_frames = audio_profile_usize_env(
+            "ARCADE_PLAY_AUDIO_UNDERFLOW_CONCEALMENT_FRAMES",
+            profile.underflow_concealment_frames,
+        );
         profile.playback_buffer_secs = audio_profile_f64_env(
             "ARCADE_PLAY_AUDIO_PLAYBACK_BUFFER_SECS",
             profile.playback_buffer_secs,
@@ -234,6 +272,27 @@ fn apply_audio_profile_for_core(state: &mut AudioState, core_name: &str) {
         profile.adaptive_clock_queue_feedback = audio_profile_f64_env(
             "ARCADE_PLAY_AUDIO_ADAPTIVE_CLOCK_QUEUE_FEEDBACK",
             profile.adaptive_clock_queue_feedback,
+        );
+    } else if core_name.eq_ignore_ascii_case("pcsx2") {
+        profile.target_latency_secs = audio_profile_f64_env(
+            "ARCADE_PCSX2_AUDIO_TARGET_LATENCY_SECS",
+            profile.target_latency_secs,
+        );
+        profile.max_latency_secs = audio_profile_f64_env(
+            "ARCADE_PCSX2_AUDIO_MAX_LATENCY_SECS",
+            profile.max_latency_secs,
+        );
+        profile.resample_queue_correction = audio_profile_f64_env(
+            "ARCADE_PCSX2_AUDIO_QUEUE_CORRECTION",
+            profile.resample_queue_correction,
+        );
+        profile.resample_ratio_drift_limit = audio_profile_f64_env(
+            "ARCADE_PCSX2_AUDIO_DRIFT_LIMIT",
+            profile.resample_ratio_drift_limit,
+        );
+        profile.underflow_concealment_frames = audio_profile_usize_env(
+            "ARCADE_PCSX2_AUDIO_UNDERFLOW_CONCEALMENT_FRAMES",
+            profile.underflow_concealment_frames,
         );
     } else if core_name.eq_ignore_ascii_case("flycast") {
         profile.target_latency_secs = audio_profile_f64_env(
@@ -554,6 +613,27 @@ mod tests {
         );
         assert_eq!(profile.target_latency_secs, PLAY_AUDIO_TARGET_LATENCY_SECS);
         assert_eq!(profile.max_latency_secs, PLAY_AUDIO_MAX_LATENCY_SECS);
+    }
+
+    #[test]
+    fn pcsx2_profile_uses_vulkan_frame_clock_friendly_defaults() {
+        let profile = audio_profile_for_core_defaults("pcsx2");
+        assert!(!profile.trim_to_target_on_overflow);
+        assert!(profile.drop_excess_silence_when_buffered);
+        assert_eq!(
+            profile.resample_queue_correction,
+            PCSX2_AUDIO_QUEUE_CORRECTION
+        );
+        assert_eq!(profile.resample_ratio_drift_limit, PCSX2_AUDIO_DRIFT_LIMIT);
+        assert_eq!(
+            profile.underflow_concealment_frames,
+            PCSX2_AUDIO_UNDERFLOW_CONCEALMENT_FRAMES
+        );
+        assert_eq!(profile.playback_buffer_secs, 0.0);
+        assert_eq!(profile.playback_buffer_low_water_secs, 0.0);
+        assert!(!profile.adaptive_clock_enabled);
+        assert_eq!(profile.target_latency_secs, PCSX2_AUDIO_TARGET_LATENCY_SECS);
+        assert_eq!(profile.max_latency_secs, PCSX2_AUDIO_MAX_LATENCY_SECS);
     }
 
     fn push_test_frames(state: &mut AudioState, frames: usize) {

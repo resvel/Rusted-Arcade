@@ -40,8 +40,11 @@ fn is_audio_master_pacing_core(core_name: &str) -> bool {
         || core_name.eq_ignore_ascii_case("mupen64plus_next")
         || core_name.eq_ignore_ascii_case("mednafen_psx_hw")
         || core_name.eq_ignore_ascii_case("mednafen_saturn")
-        || core_name.eq_ignore_ascii_case("pcsx2")
         || core_name.eq_ignore_ascii_case("play")
+}
+
+fn is_tight_frame_clock_core(core_name: &str) -> bool {
+    core_name.eq_ignore_ascii_case("play") || core_name.eq_ignore_ascii_case("pcsx2")
 }
 
 fn play_frames_to_run_for_elapsed(
@@ -201,7 +204,7 @@ impl NativeArcadeUiApp {
         let dreamcast_low_latency_pacing =
             active_core.is_some_and(|core| core.eq_ignore_ascii_case("flycast"));
         let low_latency_pacing = arcade_low_latency_pacing || dreamcast_low_latency_pacing;
-        let play_tight_pacing = active_core.is_some_and(|core| core.eq_ignore_ascii_case("play"));
+        let tight_frame_clock_pacing = active_core.is_some_and(is_tight_frame_clock_core);
         let audio_snapshot = self.host.audio_queue_snapshot();
         let audio_master_frames = audio_master_frames_to_run(
             active_core
@@ -219,7 +222,7 @@ impl NativeArcadeUiApp {
                 ctx.request_repaint();
                 return;
             }
-        } else if play_tight_pacing {
+        } else if tight_frame_clock_pacing {
             if elapsed < frame_interval {
                 let remaining = frame_interval - elapsed;
                 request_play_runner_repaint(ctx, remaining);
@@ -262,8 +265,8 @@ impl NativeArcadeUiApp {
             self.state.play.catch_up_frame_debt =
                 (frame_budget - frames_to_run as f64).clamp(0.0, debt_cap);
             frames_to_run
-        } else if play_tight_pacing {
-            // Play should follow the core-reported frame clock, not the audio queue.
+        } else if tight_frame_clock_pacing {
+            // These cores should follow the core-reported frame clock, not the audio queue.
             // Allow small wall-clock catch-up when the UI timer fires late so audio
             // production does not starve, but cap it tightly to avoid FMV overspeed.
             let (frames_to_run, catch_up_debt, leftover) = play_frames_to_run_for_elapsed(
@@ -438,7 +441,7 @@ impl NativeArcadeUiApp {
                 }
                 ctx.request_repaint();
             }
-        } else if play_tight_pacing {
+        } else if tight_frame_clock_pacing {
             let target_interval = frame_interval;
             let post_tick_elapsed =
                 std::time::Instant::now().duration_since(self.state.play.last_frame_run_at);
@@ -735,9 +738,16 @@ mod tests {
         assert!(is_audio_master_pacing_core("mupen64plus_next"));
         assert!(is_audio_master_pacing_core("mednafen_psx_hw"));
         assert!(is_audio_master_pacing_core("mednafen_saturn"));
-        assert!(is_audio_master_pacing_core("pcsx2"));
         assert!(is_audio_master_pacing_core("play"));
+        assert!(!is_audio_master_pacing_core("pcsx2"));
         assert!(!is_audio_master_pacing_core("fceumm"));
+    }
+
+    #[test]
+    fn tight_frame_clock_cores_include_play_and_pcsx2() {
+        assert!(is_tight_frame_clock_core("play"));
+        assert!(is_tight_frame_clock_core("pcsx2"));
+        assert!(!is_tight_frame_clock_core("flycast"));
     }
 
     #[test]
