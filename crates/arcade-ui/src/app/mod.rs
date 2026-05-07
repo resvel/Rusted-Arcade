@@ -20,6 +20,7 @@ use std::collections::HashMap;
 
 use crate::actions::INITIAL_LIBRARY_PRELOAD_SIZE;
 use crate::assets::AssetCache;
+use crate::play_runner::PlayRunner;
 use crate::state::ArcadeUiState;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -61,6 +62,7 @@ pub struct NativeArcadeUiApp {
     pub(crate) retro_keys_pressed_since_frame: HashSet<u32>,
     /// Deferred key releases for DOS keyboard passthrough; flushed after at least one core frame.
     pub(crate) pending_retro_key_releases: Vec<(u32, u16)>,
+    pub(crate) play_runner: Option<PlayRunner>,
 }
 
 pub(crate) enum ManageUiMessage {
@@ -243,6 +245,7 @@ impl NativeArcadeUiApp {
             prev_keyboard_keys_down: HashSet::new(),
             retro_keys_pressed_since_frame: HashSet::new(),
             pending_retro_key_releases: Vec::new(),
+            play_runner: None,
         };
 
         #[cfg(feature = "gamepad")]
@@ -376,8 +379,11 @@ impl eframe::App for NativeArcadeUiApp {
         }
         self.host
             .set_frontend_capabilities(frontend_capabilities(frame));
+        self.host
+            .sync_external_vulkan_window_visibility_on_main_thread();
         let session_active = self.host.is_loaded();
-        if !session_active {
+        let play_shell_active = session_active || self.state.play.launch_shell_active();
+        if !play_shell_active {
             self.poll_manage_jobs();
             self.tick_frontend_navigation(ctx);
         }
@@ -399,24 +405,24 @@ impl eframe::App for NativeArcadeUiApp {
             immersive_viewport_allowed,
         );
 
-        if !session_active {
+        if !play_shell_active {
             self.draw_top_nav(ctx);
         }
 
         egui::CentralPanel::default()
-            .frame(egui::Frame::new().inner_margin(if session_active {
+            .frame(egui::Frame::new().inner_margin(if play_shell_active {
                 egui::Margin::same(0)
             } else {
                 egui::Margin::same(central_margin)
             }))
             .show(ctx, |ui| {
-                if !session_active {
+                if !play_shell_active {
                     self.draw_thematic_background(ui, ctx);
                 } else {
                     ui.painter()
                         .rect_filled(ui.max_rect(), 0.0, egui::Color32::BLACK);
                 }
-                if session_active {
+                if play_shell_active {
                     self.draw_play(ctx, ui);
                 } else {
                     match self.state.current_view {
@@ -427,7 +433,7 @@ impl eframe::App for NativeArcadeUiApp {
                 }
             });
 
-        if !session_active {
+        if !play_shell_active {
             self.draw_status_bar(ctx);
         }
 

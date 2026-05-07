@@ -29,6 +29,16 @@ impl PendingVulkanImage {
     }
 }
 
+unsafe fn set_ns_window_title(ns_window: *mut Object, title: &str) {
+    let sanitized = title.replace('\0', " ");
+    let Ok(title) = CString::new(sanitized) else {
+        return;
+    };
+    let ns_string_class = class!(NSString);
+    let ns_title: *mut Object = msg_send![ns_string_class, stringWithUTF8String: title.as_ptr()];
+    let _: () = msg_send![ns_window, setTitle: ns_title];
+}
+
 pub(super) fn pending_vulkan_image_delay(vulkan: &VulkanInterfaceState) -> usize {
     #[cfg(target_os = "macos")]
     if vulkan.present.is_some() {
@@ -83,7 +93,7 @@ pub(super) fn create_sampling_image_view_for_pending_image(
 }
 
 impl ExternalVulkanWindow {
-    fn create() -> std::result::Result<Self, String> {
+    fn create(title: &str) -> std::result::Result<Self, String> {
         unsafe {
             // Ensure NSApplication exists (idempotent).
             let ns_app_class = class!(NSApplication);
@@ -139,11 +149,7 @@ impl ExternalVulkanWindow {
             let _: () = msg_send![content_view, setLayer: metal_layer];
 
             // Configure the window.
-            let title = CString::new("Rusted Arcade N64 (Vulkan)").unwrap();
-            let ns_string_class = class!(NSString);
-            let ns_title: *mut Object =
-                msg_send![ns_string_class, stringWithUTF8String: title.as_ptr()];
-            let _: () = msg_send![ns_window, setTitle: ns_title];
+            set_ns_window_title(ns_window, title);
 
             let ns_color_class = class!(NSColor);
             let black: *mut Object = msg_send![ns_color_class, blackColor];
@@ -168,6 +174,12 @@ impl ExternalVulkanWindow {
     }
 
     pub(super) fn set_overlay_message(&mut self, _message: Option<&str>) {}
+
+    pub(super) fn set_title(&mut self, title: &str) {
+        unsafe {
+            set_ns_window_title(self.ns_window, title);
+        }
+    }
 
     fn pump_events(&mut self) {
         // No-op on macOS: eframe/winit manages the NSApplication event loop
@@ -366,7 +378,12 @@ pub(super) fn ensure_external_vulkan_window_for(
     }
 
     if state.external_vulkan_window.is_none() {
-        match ExternalVulkanWindow::create() {
+        let title = if state.external_vulkan_window_title.trim().is_empty() {
+            String::from("Arcade")
+        } else {
+            state.external_vulkan_window_title.clone()
+        };
+        match ExternalVulkanWindow::create(&title) {
             Ok(window) => {
                 if vulkan_debug_enabled() {
                     let descriptor = window.descriptor();
@@ -402,8 +419,16 @@ pub(super) fn pump_external_vulkan_window_events(runtime: &HostRuntime) {
 pub(super) fn update_external_vulkan_present_state(runtime: &HostRuntime, active: bool) {
     let mut state = runtime.hw_render_state.lock();
     state.external_vulkan_present_active = active;
+    state.external_vulkan_visibility_pending = Some(active);
+}
+
+pub(super) fn sync_external_vulkan_window_visibility_on_main_thread(runtime: &HostRuntime) {
+    let mut state = runtime.hw_render_state.lock();
+    let Some(visible) = state.external_vulkan_visibility_pending.take() else {
+        return;
+    };
     if let Some(window) = state.external_vulkan_window.as_mut() {
-        window.set_visible(active);
+        window.set_visible(visible);
     }
 }
 

@@ -8,7 +8,6 @@ mod vfs;
 mod video;
 mod vulkan_render;
 
-use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::collections::{HashMap, HashSet};
 use std::ffi::{c_char, c_void, CStr, CString};
@@ -18,7 +17,6 @@ use std::num::NonZeroU32;
 #[cfg(unix)]
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
-use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Weak};
 
@@ -194,6 +192,16 @@ pub struct VulkanPresentTestMetrics {
     pub swapchain_non_black_seen: bool,
     pub non_tiny_source_frame_seen: bool,
     pub max_consecutive_tiny_source_frames: u64,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct PresentationStatus {
+    pub expects_external_present: bool,
+    pub external_window_created: bool,
+    pub external_present_active: bool,
+    pub external_present_deliveries: u64,
+    pub cpu_frame_deliveries: u64,
+    pub gl_texture_deliveries: u64,
 }
 
 impl Default for VulkanPresentTestMetrics {
@@ -659,6 +667,7 @@ unsafe impl Send for VulkanInterfaceState {}
 #[derive(Default)]
 struct HardwareRenderState {
     external_vulkan_probe_logged: bool,
+    external_vulkan_window_title: String,
     frontend_gl_context: Option<Arc<glow::Context>>,
     #[cfg(target_os = "macos")]
     private_play_gl_context: Option<MacosPrivateGlContext>,
@@ -670,6 +679,7 @@ struct HardwareRenderState {
     target: Option<HardwareRenderTarget>,
     external_vulkan_window: Option<ExternalVulkanWindow>,
     external_vulkan_present_active: bool,
+    external_vulkan_visibility_pending: Option<bool>,
     vulkan_fallback_frame_size: Option<(u32, u32)>,
     vulkan_negotiation: Option<VulkanNegotiationCallbacks>,
     vulkan: Option<VulkanInterfaceState>,
@@ -1240,7 +1250,6 @@ impl GlProcLoader {
     }
 }
 
-#[derive(Clone)]
 pub struct LibretroHost {
     core_root: PathBuf,
     system_root: PathBuf,
@@ -1248,8 +1257,17 @@ pub struct LibretroHost {
     emulation: EmulationConfig,
     runtime: Arc<HostRuntime>,
     loaded: Arc<Mutex<Option<LoadedCore>>>,
-    audio_output: Rc<RefCell<Option<AudioOutput>>>,
+    audio_output: Arc<Mutex<Option<AudioOutput>>>,
+    unload_on_drop: bool,
 }
+
+#[derive(Clone)]
+pub struct LibretroRunHandle {
+    host: LibretroHost,
+}
+
+unsafe impl Send for LibretroRunHandle {}
+unsafe impl Sync for LibretroRunHandle {}
 
 impl LibretroHost {
     pub fn new(
@@ -1265,7 +1283,8 @@ impl LibretroHost {
             emulation,
             runtime: Arc::new(HostRuntime::default()),
             loaded: Arc::new(Mutex::new(None)),
-            audio_output: Rc::new(RefCell::new(None)),
+            audio_output: Arc::new(Mutex::new(None)),
+            unload_on_drop: true,
         }
     }
 
@@ -1340,6 +1359,33 @@ impl LibretroHost {
             .unwrap_or(false)
     }
 
+    pub fn presentation_status(&self) -> PresentationStatus {
+        let expects_external_present = self.expects_external_vulkan_present_window();
+        let hw_state = self.runtime.hw_render_state.lock();
+        let external_window_created = hw_state.external_vulkan_window.is_some();
+        let external_present_active = hw_state.external_vulkan_present_active;
+        drop(hw_state);
+        let metrics = self.runtime.vulkan_present_metrics.lock();
+        PresentationStatus {
+            expects_external_present,
+            external_window_created,
+            external_present_active,
+            external_present_deliveries: metrics.external_present_deliveries,
+            cpu_frame_deliveries: metrics.cpu_frame_deliveries,
+            gl_texture_deliveries: metrics.gl_texture_deliveries,
+        }
+    }
+
+    pub fn set_external_vulkan_window_title(&self, title: impl Into<String>) {
+        let title = title.into();
+        let mut state = self.runtime.hw_render_state.lock();
+        state.external_vulkan_window_title = title;
+        let title = state.external_vulkan_window_title.clone();
+        if let Some(window) = state.external_vulkan_window.as_mut() {
+            window.set_title(&title);
+        }
+    }
+
     pub fn should_use_immersive_play_viewport(&self) -> bool {
         if std::env::var_os("ARCADE_FORCE_SESSION_FULLSCREEN").is_some() {
             return true;
@@ -1356,6 +1402,14 @@ impl LibretroHost {
         let is_opengl = context.loaded_backend == Some(VideoBackendKind::OpenGl);
 
         !(is_dolphin && is_opengl)
+    }
+
+    pub fn run_handle(&self) -> LibretroRunHandle {
+        LibretroRunHandle { host: self.clone() }
+    }
+
+    pub fn sync_external_vulkan_window_visibility_on_main_thread(&self) {
+        sync_external_vulkan_window_visibility_on_main_thread(&self.runtime);
     }
 
     pub fn vulkan_present_test_metrics(&self) -> VulkanPresentTestMetrics {
@@ -2316,7 +2370,7 @@ impl LibretroHost {
                 );
                 unsafe { set_state(false) };
             }
-            self.audio_output.borrow_mut().take();
+            self.audio_output.lock().take();
             info!(
                 target: "arcade_libretro::core_loader",
                 core = core_label.as_str(),
@@ -2394,13 +2448,13 @@ impl LibretroHost {
                 "core unload complete"
             );
         } else {
-            self.audio_output.borrow_mut().take();
+            self.audio_output.lock().take();
             destroy_hw_render_session();
         }
         // Drop the audio output before clearing the active runtime so the cpal
         // stream stops its callbacks. It is also dropped before core teardown
         // above so slow core shutdown cannot keep audio callbacks alive.
-        self.audio_output.borrow_mut().take();
+        self.audio_output.lock().take();
         reset_callback_video_state(&self.runtime);
         self.runtime.callback_state.lock().input_state.clear();
         self.runtime
@@ -2432,7 +2486,7 @@ impl LibretroHost {
     }
 
     fn ensure_audio_output_started(&self, preferred_sample_rate_hz: Option<u32>) -> Result<()> {
-        let mut guard = self.audio_output.borrow_mut();
+        let mut guard = self.audio_output.lock();
         if let Some(existing) = guard.as_ref() {
             let requested = preferred_sample_rate_hz.unwrap_or(existing.sample_rate_hz);
             if requested == existing.sample_rate_hz {
@@ -2723,9 +2777,52 @@ fn create_file_symlink(source: &Path, target: &Path) -> std::io::Result<()> {
     fs::hard_link(source, target)
 }
 
+impl LibretroRunHandle {
+    pub fn run_frame(&self) -> Result<Option<FrameOutput>> {
+        self.host.run_frame()
+    }
+
+    pub fn reset(&self) -> Result<()> {
+        self.host.reset()
+    }
+
+    pub fn serialize_state(&self) -> Result<Option<Vec<u8>>> {
+        self.host.serialize_state()
+    }
+
+    pub fn unserialize_state(&self, data: &[u8]) -> Result<bool> {
+        self.host.unserialize_state(data)
+    }
+
+    pub fn frame_timing_snapshot(&self) -> FrameTimingSnapshot {
+        self.host.frame_timing_snapshot()
+    }
+
+    pub fn presentation_status(&self) -> PresentationStatus {
+        self.host.presentation_status()
+    }
+}
+
+impl Clone for LibretroHost {
+    fn clone(&self) -> Self {
+        Self {
+            core_root: self.core_root.clone(),
+            system_root: self.system_root.clone(),
+            save_root: self.save_root.clone(),
+            emulation: self.emulation.clone(),
+            runtime: self.runtime.clone(),
+            loaded: self.loaded.clone(),
+            audio_output: self.audio_output.clone(),
+            unload_on_drop: false,
+        }
+    }
+}
+
 impl Drop for LibretroHost {
     fn drop(&mut self) {
-        let _ = self.unload();
+        if self.unload_on_drop {
+            let _ = self.unload();
+        }
     }
 }
 

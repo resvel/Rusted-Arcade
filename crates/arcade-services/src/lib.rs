@@ -49,6 +49,8 @@ pub struct LaunchPlan {
     pub resolved_core_name: String,
     pub status_message: String,
     pub active_core_note: Option<&'static str>,
+    pub cover_path: Option<String>,
+    pub preview_poster_path: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -160,6 +162,8 @@ impl NativeServices {
             resolved_core_name,
             status_message,
             active_core_note,
+            cover_path: rom.cover_path,
+            preview_poster_path: rom.preview_poster_path,
         })
     }
 

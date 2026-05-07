@@ -253,8 +253,8 @@ impl NativeArcadeUiApp {
         )
     }
 
-    pub(crate) fn resolve_system_background_path(&self) -> Option<PathBuf> {
-        let system = self.active_system().trim().to_ascii_lowercase();
+    pub(crate) fn resolve_system_background_path_for(&self, system: &str) -> Option<PathBuf> {
+        let system = system.trim().to_ascii_lowercase();
         if !system.is_empty() {
             let custom_candidates = [
                 format!("/system-logos/{system}_background.png"),
@@ -270,6 +270,10 @@ impl NativeArcadeUiApp {
         }
 
         self.resolve_all_background_path()
+    }
+
+    pub(crate) fn resolve_system_background_path(&self) -> Option<PathBuf> {
+        self.resolve_system_background_path_for(self.active_system().trim())
     }
 
     pub(crate) fn load_texture_from_path(
@@ -389,6 +393,41 @@ impl NativeArcadeUiApp {
             ctx,
             path,
             "system-bg",
+            egui::TextureOptions::LINEAR,
+        )
+    }
+
+    pub(crate) fn launch_art_texture(
+        &mut self,
+        ctx: &egui::Context,
+        cover_path: Option<&str>,
+        preview_poster_path: Option<&str>,
+    ) -> Option<TextureHandle> {
+        let path = cover_path
+            .and_then(|path| self.resolve_db_asset_path(path))
+            .or_else(|| preview_poster_path.and_then(|path| self.resolve_db_asset_path(path)))?;
+        Self::load_texture_from_path(
+            &mut self.assets.cover_textures,
+            &mut self.assets.image_load_failures,
+            ctx,
+            path,
+            "launch-art",
+            egui::TextureOptions::LINEAR,
+        )
+    }
+
+    pub(crate) fn launch_system_background_texture(
+        &mut self,
+        ctx: &egui::Context,
+        system: Option<&str>,
+    ) -> Option<TextureHandle> {
+        let path = self.resolve_system_background_path_for(system.unwrap_or(""))?;
+        Self::load_texture_from_path(
+            &mut self.assets.background_textures,
+            &mut self.assets.image_load_failures,
+            ctx,
+            path,
+            "launch-system-bg",
             egui::TextureOptions::LINEAR,
         )
     }

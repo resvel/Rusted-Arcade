@@ -8,17 +8,15 @@ impl NativeArcadeUiApp {
         ctx: &egui::Context,
         session_active: bool,
         external_present_active: bool,
-        _external_present_expected: bool,
+        external_present_expected: bool,
         external_window_available: bool,
         immersive_viewport_allowed: bool,
     ) {
         let external_window_session =
-            session_active && (external_present_active || external_window_available);
-        let window_level = if external_window_session {
-            egui::viewport::WindowLevel::AlwaysOnBottom
-        } else {
-            egui::viewport::WindowLevel::Normal
-        };
+            external_window_session_active(session_active, external_present_active);
+        let external_window_reserved = session_active
+            && (external_present_active || external_window_available || external_present_expected);
+        let window_level = session_window_level(external_window_session);
         ctx.send_viewport_cmd(egui::ViewportCommand::WindowLevel(window_level));
         let viewport = ctx.input(|i| i.viewport().clone());
         self.sync_external_present_window_position(
@@ -39,10 +37,10 @@ impl NativeArcadeUiApp {
             self.send_viewport_restore_cmds(ctx);
         }
 
-        // If an external Vulkan window exists for this session, never push the main app
-        // into immersive fullscreen; fullscreen can trap the app above the external window.
+        // If this session owns or expects an external Vulkan window, keep the
+        // launcher window normal until the first present decides window level.
         let immersive_session =
-            session_active && !external_window_session && immersive_viewport_allowed;
+            session_active && !external_window_reserved && immersive_viewport_allowed;
 
         if immersive_session {
             self.state.play.viewport_restore_stage = 0;
@@ -67,7 +65,11 @@ impl NativeArcadeUiApp {
             self.state.play.viewport_enter_stage = 0;
         }
 
-        if external_window_session && viewport.fullscreen.unwrap_or(false) {
+        if session_active
+            && external_window_available
+            && external_present_active
+            && viewport.fullscreen.unwrap_or(false)
+        {
             ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(false));
             self.send_viewport_restore_cmds(ctx);
             self.state.play.viewport_immersive_applied = false;
@@ -164,5 +166,41 @@ impl NativeArcadeUiApp {
         hide_for_external_present: bool,
     ) {
         let _ = (ctx, viewport, hide_for_external_present);
+    }
+}
+
+fn external_window_session_active(session_active: bool, external_present_active: bool) -> bool {
+    session_active && external_present_active
+}
+
+fn session_window_level(external_window_session: bool) -> egui::viewport::WindowLevel {
+    if external_window_session {
+        egui::viewport::WindowLevel::AlwaysOnBottom
+    } else {
+        egui::viewport::WindowLevel::Normal
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn external_window_session_waits_for_active_present() {
+        assert!(!external_window_session_active(false, false));
+        assert!(!external_window_session_active(true, false));
+        assert!(external_window_session_active(true, true));
+    }
+
+    #[test]
+    fn launcher_lowers_only_for_active_external_present() {
+        assert_eq!(
+            session_window_level(false),
+            egui::viewport::WindowLevel::Normal
+        );
+        assert_eq!(
+            session_window_level(true),
+            egui::viewport::WindowLevel::AlwaysOnBottom
+        );
     }
 }

@@ -470,6 +470,7 @@ fn destroy_hw_render_session_for_with_options(
         let vulkan = state.vulkan.take();
         let external_vulkan_window = state.external_vulkan_window.take();
         state.external_vulkan_present_active = false;
+        state.external_vulkan_visibility_pending = None;
         state.vulkan_fallback_frame_size = None;
         state.vulkan_negotiation = None;
         state.context_ready = false;

@@ -3,6 +3,7 @@ mod app;
 mod assets;
 mod controller_mapper;
 mod input;
+mod play_runner;
 mod play_session;
 mod render;
 mod state;

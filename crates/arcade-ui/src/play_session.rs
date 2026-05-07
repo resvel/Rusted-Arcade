@@ -7,12 +7,14 @@ use std::sync::OnceLock;
 
 use crate::{
     app::NativeArcadeUiApp,
-    state::{HoldAction, MenuFocusRegion},
+    play_runner::{PlayRunner, PlayRunnerEvent, PlayRunnerExecutorMode},
+    state::{HoldAction, MenuFocusRegion, PlayLaunchPhase},
 };
 
 const AUDIO_MASTER_DRAIN_WATERMARK: f64 = 1.25;
 const AUDIO_MASTER_REFILL_WATERMARK: f64 = 0.85;
-const PLAY_MAX_CATCH_UP_FRAMES: u32 = 2;
+const PLAY_DEFAULT_MAX_CATCH_UP_FRAMES: u32 = 2;
+const PLAY_PCSX2_EXTERNAL_MAX_CATCH_UP_FRAMES: u32 = 3;
 const PLAY_CATCH_UP_DEBT_CAP: f64 = 0.75;
 const PLAY_REPAINT_WAKE_AHEAD: std::time::Duration = std::time::Duration::from_millis(2);
 const PLAY_REPAINT_IMMEDIATE_THRESHOLD: std::time::Duration = std::time::Duration::from_micros(500);
@@ -51,21 +53,41 @@ fn play_frames_to_run_for_elapsed(
     elapsed: std::time::Duration,
     frame_interval: std::time::Duration,
     catch_up_debt: f64,
+    max_catch_up_frames: u32,
 ) -> (u32, f64, std::time::Duration) {
     if frame_interval.is_zero() {
         return (1, 0.0, std::time::Duration::ZERO);
     }
 
     let elapsed_frames = elapsed.as_secs_f64() / frame_interval.as_secs_f64();
-    let frame_budget = (catch_up_debt + elapsed_frames).clamp(1.0, PLAY_MAX_CATCH_UP_FRAMES as f64);
-    let frames_to_run = frame_budget
-        .floor()
-        .clamp(1.0, PLAY_MAX_CATCH_UP_FRAMES as f64) as u32;
+    let max_catch_up_frames = max_catch_up_frames.max(1);
+    let frame_budget = (catch_up_debt + elapsed_frames).clamp(1.0, max_catch_up_frames as f64);
+    let frames_to_run = frame_budget.floor().clamp(1.0, max_catch_up_frames as f64) as u32;
     let catch_up_debt = (frame_budget - frames_to_run as f64).clamp(0.0, PLAY_CATCH_UP_DEBT_CAP);
     let advance = frame_interval.saturating_mul(frames_to_run);
     let leftover = elapsed.saturating_sub(advance);
 
     (frames_to_run, catch_up_debt, leftover)
+}
+
+fn tight_frame_clock_max_catch_up_frames(
+    core_name: Option<&str>,
+    external_present_session: bool,
+) -> u32 {
+    if external_present_session && core_name.is_some_and(|core| core.eq_ignore_ascii_case("pcsx2"))
+    {
+        PLAY_PCSX2_EXTERNAL_MAX_CATCH_UP_FRAMES
+    } else {
+        PLAY_DEFAULT_MAX_CATCH_UP_FRAMES
+    }
+}
+
+fn tight_frame_clock_post_tick_debt_cap(max_catch_up_frames: u32) -> f64 {
+    if max_catch_up_frames > PLAY_DEFAULT_MAX_CATCH_UP_FRAMES {
+        PLAY_CATCH_UP_DEBT_CAP
+    } else {
+        0.25
+    }
 }
 
 fn play_repaint_delay_for_remaining(remaining: std::time::Duration) -> Option<std::time::Duration> {
@@ -86,6 +108,48 @@ fn request_play_runner_repaint(ctx: &egui::Context, remaining: std::time::Durati
         ctx.request_repaint_after(delay);
     } else {
         ctx.request_repaint();
+    }
+}
+
+fn env_flag_disabled(name: &str) -> bool {
+    match std::env::var(name) {
+        Ok(value) => matches!(
+            value.trim().to_ascii_lowercase().as_str(),
+            "0" | "false" | "off" | "no"
+        ),
+        Err(_) => false,
+    }
+}
+
+fn external_present_worker_disabled_for_core(core_name: &str) -> bool {
+    if std::env::var_os("ARCADE_DISABLE_PLAY_WORKER_RUNNER").is_some()
+        || env_flag_disabled("ARCADE_EXTERNAL_PRESENT_RUNNER")
+    {
+        return true;
+    }
+
+    if core_name.eq_ignore_ascii_case("pcsx2") {
+        env_flag_disabled("ARCADE_PCSX2_EXTERNAL_RUNNER")
+    } else if core_name.eq_ignore_ascii_case("mupen64plus_next") {
+        env_flag_disabled("ARCADE_N64_EXTERNAL_RUNNER")
+    } else if core_name.eq_ignore_ascii_case("dolphin") {
+        env_flag_disabled("ARCADE_DOLPHIN_EXTERNAL_RUNNER")
+    } else {
+        false
+    }
+}
+
+fn play_runner_executor_mode_for_policy(
+    external_present_session: bool,
+    force_fallback: bool,
+    worker_disabled: bool,
+) -> PlayRunnerExecutorMode {
+    if force_fallback {
+        PlayRunnerExecutorMode::FallbackEguiPump
+    } else if external_present_session && !worker_disabled {
+        PlayRunnerExecutorMode::WorkerThread
+    } else {
+        PlayRunnerExecutorMode::MainThreadExecutor
     }
 }
 
@@ -160,7 +224,138 @@ impl NativeArcadeUiApp {
     const PLAY_RETURN_HOLD_DURATION: std::time::Duration = std::time::Duration::from_millis(800);
     const PLAY_RESET_HOLD_DURATION: std::time::Duration = std::time::Duration::from_millis(800);
 
-    pub(crate) fn tick_play_session(&mut self, ctx: &egui::Context) {
+    pub(crate) fn start_play_runner_for_loaded_session(
+        &mut self,
+        ctx: &egui::Context,
+        core_name: &str,
+    ) {
+        self.stop_play_runner_only();
+        let frame_interval = self
+            .host
+            .frame_interval()
+            .unwrap_or_else(|| std::time::Duration::from_secs_f64(1.0 / 60.0));
+        let executor_mode = self.play_runner_executor_mode(core_name);
+        self.play_runner = Some(PlayRunner::start(
+            executor_mode,
+            self.host.run_handle(),
+            frame_interval,
+            ctx,
+        ));
+        self.state
+            .play
+            .set_runner_started(executor_mode.label().to_owned());
+        info!(
+            target: "arcade_ui::perf",
+            core = core_name,
+            executor_mode = executor_mode.label(),
+            target_fps = 1.0 / frame_interval.as_secs_f64(),
+            "play_runner session started"
+        );
+    }
+
+    fn play_runner_executor_mode(&self, core_name: &str) -> PlayRunnerExecutorMode {
+        play_runner_executor_mode_for_policy(
+            self.host.expects_external_vulkan_present_window()
+                || self.host.using_external_vulkan_present_window(),
+            std::env::var_os("ARCADE_FORCE_FALLBACK_EGUI_PUMP").is_some(),
+            external_present_worker_disabled_for_core(core_name),
+        )
+    }
+
+    fn stop_play_runner_only(&mut self) {
+        if let Some(mut runner) = self.play_runner.take() {
+            runner.stop();
+        }
+        self.state.play.clear_runner_state();
+    }
+
+    pub(crate) fn pump_play_runner(&mut self, ctx: &egui::Context) {
+        if self.play_runner.is_none() && self.host.is_loaded() {
+            let core = self
+                .state
+                .play
+                .active_core
+                .clone()
+                .unwrap_or_else(|| String::from("unknown"));
+            self.start_play_runner_for_loaded_session(ctx, &core);
+        }
+
+        if self
+            .play_runner
+            .as_ref()
+            .is_some_and(|runner| runner.executor_mode() == PlayRunnerExecutorMode::WorkerThread)
+        {
+            self.drain_worker_play_runner(ctx);
+        } else {
+            self.pump_main_thread_play_runner(ctx);
+        }
+
+        self.host
+            .sync_external_vulkan_window_visibility_on_main_thread();
+
+        if let Some(runner) = self.play_runner.as_ref() {
+            self.state.play.update_runner_status(
+                runner.last_event_label(),
+                runner.missed_deadlines(),
+                runner.is_stopping(),
+            );
+        }
+    }
+
+    fn drain_worker_play_runner(&mut self, ctx: &egui::Context) {
+        let events = self
+            .play_runner
+            .as_mut()
+            .map(PlayRunner::drain_events)
+            .unwrap_or_default();
+
+        let mut frames_advanced = 0_u32;
+        for event in events {
+            match event {
+                PlayRunnerEvent::FrameDelivered(frame) => {
+                    self.handle_runner_frame_output(ctx, frame);
+                }
+                PlayRunnerEvent::PresentationReady => {
+                    self.mark_launch_presentation_ready();
+                }
+                PlayRunnerEvent::FrameStepped(_stats) => {
+                    frames_advanced = frames_advanced.saturating_add(1);
+                }
+                PlayRunnerEvent::Failed(message) => {
+                    warn!("play runner failed: {message}");
+                    self.state.play.set_status(message);
+                    self.stop_play_session();
+                    ctx.request_repaint();
+                    return;
+                }
+                PlayRunnerEvent::Stopped => {}
+            }
+        }
+
+        if frames_advanced > 0 {
+            self.mark_retro_keyboard_frame_advanced();
+            self.flush_deferred_retro_keyboard_releases();
+        }
+
+        if self.external_present_ready_for_launch() {
+            self.mark_launch_presentation_ready();
+        } else {
+            self.maybe_warn_launch_waiting_for_presentation();
+        }
+        ctx.request_repaint_after(std::time::Duration::from_millis(33));
+    }
+
+    fn handle_runner_frame_output(&mut self, ctx: &egui::Context, frame: FrameOutput) {
+        match frame {
+            FrameOutput::Cpu(frame) => self.update_frame_texture(ctx, frame),
+            FrameOutput::GlTexture(frame) => self.update_gl_texture_frame(frame),
+            #[cfg(target_os = "macos")]
+            FrameOutput::MacosIosurface(frame) => self.update_macos_iosurface_frame(frame),
+        }
+        self.mark_launch_presentation_ready();
+    }
+
+    pub(crate) fn pump_main_thread_play_runner(&mut self, ctx: &egui::Context) {
         const MAX_STALE_FRAMES: u32 = 3;
         const ARCADE_MAX_CATCH_UP_FRAMES: u32 = 2;
         const ARCADE_MAX_FRAME_BUDGET: f64 = 2.5;
@@ -173,13 +368,6 @@ impl NativeArcadeUiApp {
             return;
         }
 
-        self.apply_keyboard_and_gamepad_input(ctx);
-        if !self.host.is_loaded() {
-            // Controller-triggered exits can unload mid-frame without any new egui input event.
-            // Force one more frame so the shell re-renders the prior view immediately.
-            ctx.request_repaint();
-            return;
-        }
         let frame_interval = self
             .host
             .frame_interval()
@@ -205,6 +393,11 @@ impl NativeArcadeUiApp {
             active_core.is_some_and(|core| core.eq_ignore_ascii_case("flycast"));
         let low_latency_pacing = arcade_low_latency_pacing || dreamcast_low_latency_pacing;
         let tight_frame_clock_pacing = active_core.is_some_and(is_tight_frame_clock_core);
+        let tight_frame_clock_max_catch_up_frames = tight_frame_clock_max_catch_up_frames(
+            active_core,
+            self.host.expects_external_vulkan_present_window()
+                || self.host.using_external_vulkan_present_window(),
+        );
         let audio_snapshot = self.host.audio_queue_snapshot();
         let audio_master_frames = audio_master_frames_to_run(
             active_core
@@ -273,6 +466,7 @@ impl NativeArcadeUiApp {
                 elapsed,
                 frame_interval,
                 self.state.play.catch_up_frame_debt,
+                tight_frame_clock_max_catch_up_frames,
             );
             self.state
                 .play
@@ -360,12 +554,11 @@ impl NativeArcadeUiApp {
             return;
         }
         if let Some(frame) = latest_frame {
-            match frame {
-                FrameOutput::Cpu(frame) => self.update_frame_texture(ctx, frame),
-                FrameOutput::GlTexture(frame) => self.update_gl_texture_frame(frame),
-                #[cfg(target_os = "macos")]
-                FrameOutput::MacosIosurface(frame) => self.update_macos_iosurface_frame(frame),
-            }
+            self.handle_runner_frame_output(ctx, frame);
+        } else if self.external_present_ready_for_launch() {
+            self.mark_launch_presentation_ready();
+        } else {
+            self.maybe_warn_launch_waiting_for_presentation();
         }
         let tick_work = tick_started_at.elapsed();
         if let Some(sample) = self.state.play.record_perf_tick(
@@ -449,7 +642,13 @@ impl NativeArcadeUiApp {
                 let remaining = target_interval - post_tick_elapsed;
                 request_play_runner_repaint(ctx, remaining);
             } else {
-                self.state.play.catch_up_frame_debt = self.state.play.catch_up_frame_debt.min(0.25);
+                self.state.play.catch_up_frame_debt =
+                    self.state
+                        .play
+                        .catch_up_frame_debt
+                        .min(tight_frame_clock_post_tick_debt_cap(
+                            tight_frame_clock_max_catch_up_frames,
+                        ));
                 ctx.request_repaint();
             }
         } else if low_latency_pacing {
@@ -475,11 +674,54 @@ impl NativeArcadeUiApp {
     }
 
     pub(crate) fn reset_play_session(&mut self) {
-        if let Err(err) = self.host.reset() {
+        let host = self.host.clone();
+        let reset_result = if let Some(runner) = self.play_runner.as_mut() {
+            runner.reset(|| host.reset())
+        } else {
+            self.host.reset().map_err(|err| err.to_string())
+        };
+        if let Err(err) = reset_result {
             self.state.play.set_status(format!("reset failed: {err}"));
         } else {
             self.reset_play_clock();
         }
+    }
+
+    fn mark_launch_presentation_ready(&mut self) {
+        if matches!(
+            self.state.play.launch_phase,
+            PlayLaunchPhase::WaitingForPresentation | PlayLaunchPhase::Warning
+        ) {
+            self.state.play.launch_friendly_message = Some(String::from("Playing"));
+            self.state.play.launch_detail_message = None;
+            self.state.play.set_launch_phase(PlayLaunchPhase::Playing);
+        }
+    }
+
+    fn external_present_ready_for_launch(&self) -> bool {
+        let status = self.host.presentation_status();
+        status.external_present_active || status.external_present_deliveries > 0
+    }
+
+    fn maybe_warn_launch_waiting_for_presentation(&mut self) {
+        if self.state.play.launch_phase != PlayLaunchPhase::WaitingForPresentation {
+            return;
+        }
+        if self.state.play.launch_phase_started_at.elapsed() < std::time::Duration::from_secs(8) {
+            return;
+        }
+        let detail = if self.host.expects_external_vulkan_present_window() {
+            let status = self.host.presentation_status();
+            format!(
+                "Core loaded, but no external-present frame has appeared yet. external_window_created={}, queue_present_successes={}, external_present_deliveries={}",
+                status.external_window_created,
+                self.host.vulkan_present_test_metrics().queue_present_successes,
+                status.external_present_deliveries
+            )
+        } else {
+            String::from("Core loaded, but no embedded video frame has appeared yet.")
+        };
+        self.state.play.warn_launch("Still starting...", detail);
     }
 
     pub(crate) fn stop_play_session(&mut self) {
@@ -492,6 +734,7 @@ impl NativeArcadeUiApp {
         self.prev_keyboard_keys_down.clear();
         self.retro_keys_pressed_since_frame.clear();
         self.pending_retro_key_releases.clear();
+        self.stop_play_runner_only();
         if let Err(err) = self.host.unload() {
             self.state.play.set_status(format!("stop failed: {err}"));
         }
@@ -521,7 +764,13 @@ impl NativeArcadeUiApp {
             self.set_play_feedback("No active ROM loaded.");
             return;
         };
-        match self.host.serialize_state() {
+        let host = self.host.clone();
+        let serialized = if let Some(runner) = self.play_runner.as_mut() {
+            runner.serialize_state(|| host.serialize_state())
+        } else {
+            self.host.serialize_state().map_err(|err| err.to_string())
+        };
+        match serialized {
             Ok(Some(bytes)) => match self.services.save_save_slot(
                 &rom_id,
                 self.state.play.save_slot,
@@ -572,21 +821,33 @@ impl NativeArcadeUiApp {
             .services
             .load_save_slot(&rom_id, self.state.play.save_slot)
         {
-            Ok(Some(slot_data)) => match self.host.unserialize_state(&slot_data.bytes) {
-                Ok(true) => {
-                    self.reset_play_clock();
-                    self.set_play_feedback(format!(
-                        "Loaded slot {} (version {})",
-                        slot_data.slot, slot_data.version
-                    ));
+            Ok(Some(slot_data)) => {
+                let host = self.host.clone();
+                let loaded = if let Some(runner) = self.play_runner.as_mut() {
+                    runner.unserialize_state(slot_data.bytes.clone(), |bytes| {
+                        host.unserialize_state(bytes)
+                    })
+                } else {
+                    self.host
+                        .unserialize_state(&slot_data.bytes)
+                        .map_err(|err| err.to_string())
+                };
+                match loaded {
+                    Ok(true) => {
+                        self.reset_play_clock();
+                        self.set_play_feedback(format!(
+                            "Loaded slot {} (version {})",
+                            slot_data.slot, slot_data.version
+                        ));
+                    }
+                    Ok(false) => {
+                        self.set_play_feedback("Core rejected unserialize payload.");
+                    }
+                    Err(err) => {
+                        self.set_play_feedback(format!("Unserialize failed: {err}"));
+                    }
                 }
-                Ok(false) => {
-                    self.set_play_feedback("Core rejected unserialize payload.");
-                }
-                Err(err) => {
-                    self.set_play_feedback(format!("Unserialize failed: {err}"));
-                }
-            },
+            }
             Ok(None) => {
                 self.set_play_feedback("Slot is empty.");
             }
@@ -744,10 +1005,56 @@ mod tests {
     }
 
     #[test]
+    fn external_present_policy_uses_worker_runner_for_all_external_present_cores() {
+        assert_eq!(
+            play_runner_executor_mode_for_policy(true, false, false),
+            PlayRunnerExecutorMode::WorkerThread
+        );
+    }
+
+    #[test]
+    fn external_present_policy_respects_fallback_and_worker_disable() {
+        assert_eq!(
+            play_runner_executor_mode_for_policy(true, true, false),
+            PlayRunnerExecutorMode::FallbackEguiPump
+        );
+        assert_eq!(
+            play_runner_executor_mode_for_policy(true, false, true),
+            PlayRunnerExecutorMode::MainThreadExecutor
+        );
+        assert_eq!(
+            play_runner_executor_mode_for_policy(false, false, false),
+            PlayRunnerExecutorMode::MainThreadExecutor
+        );
+    }
+
+    #[test]
     fn tight_frame_clock_cores_include_play_and_pcsx2() {
         assert!(is_tight_frame_clock_core("play"));
         assert!(is_tight_frame_clock_core("pcsx2"));
         assert!(!is_tight_frame_clock_core("flycast"));
+    }
+
+    #[test]
+    fn pcsx2_external_present_allows_three_frame_catch_up() {
+        assert_eq!(
+            tight_frame_clock_max_catch_up_frames(Some("pcsx2"), true),
+            3
+        );
+        assert_eq!(
+            tight_frame_clock_max_catch_up_frames(Some("pcsx2"), false),
+            2
+        );
+        assert_eq!(tight_frame_clock_max_catch_up_frames(Some("play"), true), 2);
+    }
+
+    #[test]
+    fn three_frame_tight_clock_keeps_enough_debt_to_trigger_catch_up() {
+        assert_eq!(tight_frame_clock_post_tick_debt_cap(2), 0.25);
+        assert_eq!(
+            tight_frame_clock_post_tick_debt_cap(3),
+            PLAY_CATCH_UP_DEBT_CAP
+        );
     }
 
     #[test]
@@ -783,7 +1090,7 @@ mod tests {
         let frame_interval = std::time::Duration::from_micros(16_667);
         let elapsed = frame_interval + std::time::Duration::from_millis(3);
         let (frames_to_run, debt, leftover) =
-            play_frames_to_run_for_elapsed(elapsed, frame_interval, 0.0);
+            play_frames_to_run_for_elapsed(elapsed, frame_interval, 0.0, 2);
 
         assert_eq!(frames_to_run, 1);
         assert!(debt > 0.0);
@@ -795,11 +1102,27 @@ mod tests {
         let frame_interval = std::time::Duration::from_micros(16_667);
         let elapsed = frame_interval.saturating_mul(2) + std::time::Duration::from_millis(2);
         let (frames_to_run, debt, leftover) =
-            play_frames_to_run_for_elapsed(elapsed, frame_interval, 0.0);
+            play_frames_to_run_for_elapsed(elapsed, frame_interval, 0.0, 2);
 
         assert_eq!(frames_to_run, 2);
         assert_eq!(debt, 0.0);
         assert_eq!(leftover, std::time::Duration::from_millis(2));
+    }
+
+    #[test]
+    fn play_frame_pacing_can_repay_debt_with_three_frame_cap() {
+        let frame_interval = std::time::Duration::from_micros(16_667);
+        let elapsed = frame_interval.saturating_mul(2) + std::time::Duration::from_millis(9);
+        let (frames_to_run, debt, _leftover) =
+            play_frames_to_run_for_elapsed(elapsed, frame_interval, 0.0, 3);
+
+        assert_eq!(frames_to_run, 2);
+        assert!(debt > 0.5);
+
+        let (frames_to_run, debt, _leftover) =
+            play_frames_to_run_for_elapsed(elapsed, frame_interval, debt, 3);
+        assert_eq!(frames_to_run, 3);
+        assert!(debt < 0.25);
     }
 
     #[test]

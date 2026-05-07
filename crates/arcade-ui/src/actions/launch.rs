@@ -1,8 +1,11 @@
 use arcade_domain::N64CpuCoreMode;
+use arcade_domain::RomCard;
 use arcade_services::LaunchPlan;
+use eframe::egui;
 use tracing::{info, warn};
 
 use crate::app::NativeArcadeUiApp;
+use crate::state::PlayLaunchPhase;
 
 impl NativeArcadeUiApp {
     pub(crate) fn launch_selected_rom(&mut self) {
@@ -10,120 +13,162 @@ impl NativeArcadeUiApp {
             self.state.play.set_status("Select a ROM first.");
             return;
         };
+        let selected_rom = self.current_selected_rom().cloned();
 
         match self.services.prepare_launch(&rom_id) {
             Ok(plan) => {
-                let active_config = self.services.config();
-                self.host.update_core_variables(&active_config.emulation);
-
-                let n64_cpu_core_mode = self.services.n64_cpu_core_mode();
-                let should_retry_with_cached =
-                    should_retry_n64_with_cached_fallback(&plan, n64_cpu_core_mode);
-                let mut dynarec_error: Option<String> = None;
-
-                let load_result = if should_retry_with_cached {
-                    match self.host.load_for_rom(
-                        &plan.system,
-                        plan.effective_core.as_deref(),
-                        &plan.rom_path,
-                    ) {
-                        Ok(core_name) => Ok((core_name, false)),
-                        Err(primary_err) => {
-                            let primary_error_text = primary_err.to_string();
-                            dynarec_error = Some(primary_error_text.clone());
-                            warn!(
-                                system = %plan.system,
-                                rom_id = %plan.rom_id,
-                                rom_path = %plan.rom_path.display(),
-                                requested_core = %plan.effective_core.as_deref().unwrap_or("auto"),
-                                error = %primary_error_text,
-                                "N64 dynarec launch failed; retrying with cached interpreter"
-                            );
-
-                            let mut fallback_emulation = active_config.emulation.clone();
-                            fallback_emulation.n64.cpu_core_mode =
-                                N64CpuCoreMode::CachedInterpreter;
-                            self.host.update_core_variables(&fallback_emulation);
-
-                            self.host
-                                .load_for_rom(
-                                    &plan.system,
-                                    plan.effective_core.as_deref(),
-                                    &plan.rom_path,
-                                )
-                                .map(|core_name| (core_name, true))
-                        }
-                    }
-                } else {
-                    self.host
-                        .load_for_rom(&plan.system, plan.effective_core.as_deref(), &plan.rom_path)
-                        .map(|core_name| (core_name, false))
-                };
-
-                match load_result {
-                    Ok((core_name, used_cached_fallback)) => {
-                        let status_message = if used_cached_fallback {
-                            format!(
-                                "{} (dynarec failed to boot; running Stable Cached lane)",
-                                plan.status_message
-                            )
-                        } else {
-                            plan.status_message.clone()
-                        };
-                        info!(
-                            system = %plan.system,
-                            rom_id = %plan.rom_id,
-                            rom_path = %plan.rom_path.display(),
-                            core = %core_name,
-                            used_cached_fallback,
-                            "Started play session"
-                        );
-                        self.state.play.begin_session(
-                            status_message,
-                            plan.rom_id,
-                            plan.system,
-                            core_name,
-                            self.state.current_view,
-                        );
-                        self.assets.last_frame_texture = None;
-                        self.assets.last_gl_texture_frame = None;
-                        #[cfg(target_os = "macos")]
-                        {
-                            self.assets.last_macos_iosurface_frame = None;
-                        }
-                        self.show_play_bar();
-                    }
-                    Err(err) => {
-                        warn!(
-                            system = %plan.system,
-                            rom_id = %plan.rom_id,
-                            rom_path = %plan.rom_path.display(),
-                            requested_core = %plan.effective_core.as_deref().unwrap_or("auto"),
-                            error = %err,
-                            dynarec_attempt_error = dynarec_error.as_deref().unwrap_or("none"),
-                            "Failed to start play session"
-                        );
-                        if !self.host.is_loaded() {
-                            self.state.play.clear_active_launch();
-                        }
-                        let status = if let Some(primary_err) = dynarec_error {
-                            format!(
-                                "Failed to start core: dynarec attempt failed ({primary_err}); cached fallback failed ({err})"
-                            )
-                        } else {
-                            format!("Failed to start core: {err}")
-                        };
-                        self.state.play.set_status(status);
-                    }
+                self.state.play.queue_launch(plan, self.state.current_view);
+                self.assets.last_frame_texture = None;
+                self.assets.last_gl_texture_frame = None;
+                #[cfg(target_os = "macos")]
+                {
+                    self.assets.last_macos_iosurface_frame = None;
                 }
             }
             Err(err) => {
                 warn!(rom_id = %rom_id, error = %err, "Could not prepare play session");
-                self.state
-                    .play
-                    .set_status(format!("Could not start play session: {err}"));
+                self.assets.last_frame_texture = None;
+                self.assets.last_gl_texture_frame = None;
+                #[cfg(target_os = "macos")]
+                {
+                    self.assets.last_macos_iosurface_frame = None;
+                }
+                self.fail_prepared_launch(selected_rom.as_ref(), err.to_string());
             }
         }
+    }
+
+    pub(crate) fn continue_pending_launch(&mut self, ctx: &egui::Context) {
+        let Some(pending) = self.state.play.take_ready_pending_launch() else {
+            return;
+        };
+
+        self.state
+            .play
+            .set_launch_phase(PlayLaunchPhase::LoadingCore);
+        self.state.play.launch_friendly_message = Some(String::from("Starting..."));
+        ctx.request_repaint();
+
+        let plan = pending.plan;
+        let launch_view = pending.launch_view;
+        self.host
+            .set_external_vulkan_window_title(format!("Arcade - {}", plan.display_title));
+
+        let active_config = self.services.config();
+        self.host.update_core_variables(&active_config.emulation);
+
+        let n64_cpu_core_mode = self.services.n64_cpu_core_mode();
+        let should_retry_with_cached =
+            should_retry_n64_with_cached_fallback(&plan, n64_cpu_core_mode);
+        let mut dynarec_error: Option<String> = None;
+
+        let load_result = if should_retry_with_cached {
+            match self.host.load_for_rom(
+                &plan.system,
+                plan.effective_core.as_deref(),
+                &plan.rom_path,
+            ) {
+                Ok(core_name) => Ok((core_name, false)),
+                Err(primary_err) => {
+                    let primary_error_text = primary_err.to_string();
+                    dynarec_error = Some(primary_error_text.clone());
+                    warn!(
+                        system = %plan.system,
+                        rom_id = %plan.rom_id,
+                        rom_path = %plan.rom_path.display(),
+                        requested_core = %plan.effective_core.as_deref().unwrap_or("auto"),
+                        error = %primary_error_text,
+                        "N64 dynarec launch failed; retrying with cached interpreter"
+                    );
+
+                    let mut fallback_emulation = active_config.emulation.clone();
+                    fallback_emulation.n64.cpu_core_mode = N64CpuCoreMode::CachedInterpreter;
+                    self.host.update_core_variables(&fallback_emulation);
+
+                    self.host
+                        .load_for_rom(&plan.system, plan.effective_core.as_deref(), &plan.rom_path)
+                        .map(|core_name| (core_name, true))
+                }
+            }
+        } else {
+            self.host
+                .load_for_rom(&plan.system, plan.effective_core.as_deref(), &plan.rom_path)
+                .map(|core_name| (core_name, false))
+        };
+
+        match load_result {
+            Ok((core_name, used_cached_fallback)) => {
+                let status_message = if used_cached_fallback {
+                    format!("{} (using stable cached lane)", plan.status_message)
+                } else {
+                    plan.status_message.clone()
+                };
+                info!(
+                    system = %plan.system,
+                    rom_id = %plan.rom_id,
+                    rom_path = %plan.rom_path.display(),
+                    core = %core_name,
+                    used_cached_fallback,
+                    "Started play session"
+                );
+                self.state.play.launch_note_message = used_cached_fallback
+                    .then_some(String::from(
+                        "Using the stable cached lane for this launch.",
+                    ))
+                    .or_else(|| plan.active_core_note.map(String::from));
+                self.state.play.begin_session(
+                    status_message,
+                    plan.rom_id,
+                    plan.system,
+                    core_name.clone(),
+                    launch_view,
+                );
+                self.start_play_runner_for_loaded_session(ctx, &core_name);
+                self.show_play_bar();
+            }
+            Err(err) => {
+                warn!(
+                    system = %plan.system,
+                    rom_id = %plan.rom_id,
+                    rom_path = %plan.rom_path.display(),
+                    requested_core = %plan.effective_core.as_deref().unwrap_or("auto"),
+                    error = %err,
+                    dynarec_attempt_error = dynarec_error.as_deref().unwrap_or("none"),
+                    "Failed to start play session"
+                );
+                if !self.host.is_loaded() {
+                    self.state.play.clear_active_launch();
+                }
+                let detail = if let Some(primary_err) = dynarec_error {
+                    format!("Dynarec attempt failed: {primary_err}\nCached fallback failed: {err}")
+                } else {
+                    err.to_string()
+                };
+                self.state.play.fail_launch(
+                    Some(plan.display_title),
+                    Some(plan.system),
+                    Some(plan.resolved_core_name),
+                    plan.cover_path,
+                    plan.preview_poster_path,
+                    friendly_launch_error(&detail),
+                    detail,
+                );
+            }
+        }
+        ctx.request_repaint();
+    }
+
+    fn fail_prepared_launch(&mut self, rom: Option<&RomCard>, detail: String) {
+        let friendly = friendly_launch_error(&detail);
+        self.state.play.fail_launch(
+            rom.map(|rom| rom.display_title.clone()),
+            rom.map(|rom| rom.rom.system.clone()),
+            rom.and_then(|rom| rom.rom.emulator_core.clone()),
+            rom.and_then(|rom| rom.rom.cover_path.clone()),
+            rom.and_then(|rom| rom.rom.preview_poster_path.clone()),
+            friendly,
+            detail,
+        );
     }
 }
 
@@ -133,4 +178,15 @@ fn should_retry_n64_with_cached_fallback(plan: &LaunchPlan, cpu_core_mode: N64Cp
         && plan
             .resolved_core_name
             .eq_ignore_ascii_case("mupen64plus_next")
+}
+
+fn friendly_launch_error(detail: &str) -> String {
+    let lower = detail.to_ascii_lowercase();
+    if lower.contains("bios") {
+        String::from("Missing required BIOS files.")
+    } else if lower.contains("rom file not found") || lower.contains("not found") {
+        String::from("Couldn’t find this game file.")
+    } else {
+        String::from("Couldn’t start this game.")
+    }
 }
