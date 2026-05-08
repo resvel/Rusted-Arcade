@@ -17,6 +17,23 @@ if [[ -z "${APP_VERSION}" ]]; then
   APP_VERSION="0.1.0"
 fi
 
+EFFECTIVE_TARGET="${TARGET}"
+if [[ -z "${EFFECTIVE_TARGET}" ]]; then
+  case "$(uname -m)" in
+    x86_64) EFFECTIVE_TARGET="x86_64-apple-darwin" ;;
+    arm64) EFFECTIVE_TARGET="aarch64-apple-darwin" ;;
+  esac
+fi
+
+PLIST_ENVIRONMENT=""
+if [[ "${EFFECTIVE_TARGET}" == "x86_64-apple-darwin" ]]; then
+  PLIST_ENVIRONMENT='  <key>LSEnvironment</key>
+  <dict>
+    <key>ARCADE_PCSX2_METAL_POC</key>
+    <string>1</string>
+  </dict>'
+fi
+
 if [[ "${PROFILE}" == "release" ]]; then
   BUILD_ARGS=(build --release -p arcade-app)
   PROFILE_DIR="release"
@@ -84,11 +101,16 @@ cat > "${CONTENTS_DIR}/Info.plist" <<PLIST
   <string>${APP_VERSION}</string>
   <key>LSMinimumSystemVersion</key>
   <string>13.0</string>
+${PLIST_ENVIRONMENT}
   <key>NSHighResolutionCapable</key>
   <true/>
 </dict>
 </plist>
 PLIST
+
+if [[ -n "${PLIST_ENVIRONMENT}" ]]; then
+  echo "Baked ARCADE_PCSX2_METAL_POC=1 into Info.plist LSEnvironment."
+fi
 
 echo "APPL????" > "${CONTENTS_DIR}/PkgInfo"
 
