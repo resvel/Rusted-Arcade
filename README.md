@@ -12,7 +12,7 @@ Included:
 
 - Rust workspace source under `crates/`
 - SQLite bootstrap schema under `sql/`
-- Bundled UI art under `public/`
+- Bundled UI art under `assets/`
 - Example configuration in `config.example.toml`
 - Top-level project docs and license
 - A gitlink/submodule entry for `third_party/mupen64plus-libretro-nx`
@@ -117,7 +117,7 @@ cores/
 bios/
 data/arcade.db
 data/save-states/
-public/covers/
+covers/
 ```
 
 Those directories are local runtime content and should not be committed.
@@ -196,7 +196,7 @@ Default controller frontend shortcuts:
 
 ## Theme Assets
 
-The app loads bundled UI art from `public/`. GitHub includes only the default header and background art: `public/system-logos/all_header.jpg` and `public/system-logos/All-background.jpg`. Per-system header and background art can be added locally by placing files in `public/system-logos/`.
+The app loads bundled UI art from `assets/`. GitHub includes only the default header and background art: `assets/system-logos/all_header.jpg` and `assets/system-logos/All-background.jpg`. Per-system header and background art can be added locally by placing files in `assets/system-logos/`.
 
 See [UI.md](UI.md) for the full header, background, logo, and controller art assignment map.
 
@@ -236,7 +236,7 @@ git status --short --ignored
 git submodule status
 ```
 
-Confirm that ignored local content such as `roms/`, `bios/`, `cores/`, `data/`, `public/covers/`, and `target/` is not staged.
+Confirm that ignored local content such as `roms/`, `bios/`, `cores/`, `data/`, `covers/`, and `target/` is not staged.
 
 ## Release Gates
 

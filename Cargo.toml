@@ -21,7 +21,6 @@ serde_json = "1.0"
 toml = "0.8"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
-directories = "6.0"
 rusqlite = { version = "0.32", features = ["bundled", "chrono"] }
 libloading = "0.8"
 cpal = "0.15"

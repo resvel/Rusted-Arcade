@@ -1,9 +1,9 @@
 use std::collections::{HashMap, HashSet};
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 
-use arcade_domain::RomCard;
+use arcade_domain::{AppConfig, RomCard};
 use arcade_libretro::GlTextureFrame;
 #[cfg(target_os = "macos")]
 use arcade_libretro::MacosIosurfaceFrame;
@@ -25,6 +25,7 @@ pub(crate) struct SizedTextureKey {
 
 pub(crate) struct AssetCache {
     pub(crate) asset_roots: Vec<PathBuf>,
+    pub(crate) cover_roots: Vec<PathBuf>,
     pub(crate) cover_textures: HashMap<PathBuf, TextureHandle>,
     pub(crate) background_textures: HashMap<PathBuf, TextureHandle>,
     pub(crate) repeating_background_textures: HashMap<PathBuf, TextureHandle>,
@@ -42,9 +43,10 @@ pub(crate) struct AssetCache {
 }
 
 impl AssetCache {
-    pub(crate) fn new(rom_root: &Path) -> Self {
+    pub(crate) fn new(config: &AppConfig) -> Self {
         Self {
-            asset_roots: NativeArcadeUiApp::discover_asset_roots(rom_root),
+            asset_roots: NativeArcadeUiApp::discover_asset_roots(config),
+            cover_roots: NativeArcadeUiApp::discover_cover_roots(config),
             cover_textures: HashMap::new(),
             background_textures: HashMap::new(),
             repeating_background_textures: HashMap::new(),
@@ -156,21 +158,39 @@ impl NativeArcadeUiApp {
         ui.painter().add(egui::Shape::mesh(mesh));
     }
 
-    pub(crate) fn discover_asset_roots(rom_root: &Path) -> Vec<PathBuf> {
+    pub(crate) fn discover_asset_roots(config: &AppConfig) -> Vec<PathBuf> {
         let mut roots = Vec::new();
+        if let Some(resources_assets) = bundle_resources_asset_root() {
+            roots.push(resources_assets);
+        }
         if let Ok(cwd) = std::env::current_dir() {
-            roots.push(cwd.join("public"));
+            roots.push(cwd.join("assets"));
             if let Some(parent) = cwd.parent() {
-                roots.push(parent.join("public"));
+                roots.push(parent.join("assets"));
             }
         }
-        if let Some(parent) = rom_root.parent() {
-            roots.push(parent.join("public"));
+        if let Some(parent) = config.paths.rom_root.parent() {
+            roots.push(parent.join("assets"));
         }
-        roots.retain(|path| path.exists());
-        roots.sort();
-        roots.dedup();
-        roots
+        existing_unique_paths(roots)
+    }
+
+    pub(crate) fn discover_cover_roots(config: &AppConfig) -> Vec<PathBuf> {
+        let mut roots = Vec::new();
+        if let Some(parent) = config.paths.rom_root.parent() {
+            roots.push(parent.join("covers"));
+            roots.push(parent.join("public").join("covers"));
+        }
+        roots.push(config.paths.rom_root.join("covers"));
+        if let Ok(cwd) = std::env::current_dir() {
+            roots.push(cwd.join("covers"));
+            roots.push(cwd.join("public").join("covers"));
+            if let Some(parent) = cwd.parent() {
+                roots.push(parent.join("covers"));
+                roots.push(parent.join("public").join("covers"));
+            }
+        }
+        existing_unique_paths(roots)
     }
 
     pub(crate) fn resolve_db_asset_path(&self, raw_path: &str) -> Option<PathBuf> {
@@ -184,11 +204,40 @@ impl NativeArcadeUiApp {
             return Some(direct);
         }
 
+        if let Some(path) = self.resolve_cover_asset_path(trimmed) {
+            return Some(path);
+        }
+
         let without_lead = trimmed.trim_start_matches('/');
         for root in &self.assets.asset_roots {
             let candidate = root.join(without_lead);
             if candidate.exists() {
                 return Some(candidate);
+            }
+        }
+
+        None
+    }
+
+    fn resolve_cover_asset_path(&self, trimmed: &str) -> Option<PathBuf> {
+        if let Some(relative) = trimmed.trim_start_matches('/').strip_prefix("covers/") {
+            for root in &self.assets.cover_roots {
+                let candidate = root.join(relative);
+                if candidate.exists() {
+                    return Some(candidate);
+                }
+            }
+        }
+
+        if let Some(relative) = trimmed.trim_start_matches('/').strip_prefix("covers-web/") {
+            for root in &self.assets.cover_roots {
+                let Some(parent) = root.parent() else {
+                    continue;
+                };
+                let candidate = parent.join("covers-web").join(relative);
+                if candidate.exists() {
+                    return Some(candidate);
+                }
             }
         }
 
@@ -689,6 +738,25 @@ impl NativeArcadeUiApp {
     }
 }
 
+fn bundle_resources_asset_root() -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    let macos_dir = exe.parent()?;
+    let contents_dir = macos_dir.parent()?;
+    let resources_assets = contents_dir.join("Resources").join("assets");
+    resources_assets.exists().then_some(resources_assets)
+}
+
+fn existing_unique_paths(paths: Vec<PathBuf>) -> Vec<PathBuf> {
+    let mut unique = Vec::new();
+    for path in paths {
+        if !path.exists() || unique.contains(&path) {
+            continue;
+        }
+        unique.push(path);
+    }
+    unique
+}
+
 #[cfg(test)]
 mod delivery_tests {
     use super::*;
@@ -696,7 +764,7 @@ mod delivery_tests {
     use std::num::NonZeroU32;
 
     fn cache() -> AssetCache {
-        AssetCache::new(std::env::temp_dir().as_path())
+        AssetCache::new(&AppConfig::default())
     }
 
     #[test]

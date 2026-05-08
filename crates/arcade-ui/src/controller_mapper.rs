@@ -2279,55 +2279,55 @@ mod tests {
         let cases = [
             (
                 SystemControllerLayout::Nes,
-                include_str!("../../../public/gamepads/hotspots/outline/nes.hotspots.svg"),
+                include_str!("../../../assets/gamepads/hotspots/outline/nes.hotspots.svg"),
             ),
             (
                 SystemControllerLayout::Snes,
-                include_str!("../../../public/gamepads/hotspots/outline/snes.hotspots.svg"),
+                include_str!("../../../assets/gamepads/hotspots/outline/snes.hotspots.svg"),
             ),
             (
                 SystemControllerLayout::Genesis,
-                include_str!("../../../public/gamepads/hotspots/outline/genesis.hotspots.svg"),
+                include_str!("../../../assets/gamepads/hotspots/outline/genesis.hotspots.svg"),
             ),
             (
                 SystemControllerLayout::Arcade,
-                include_str!("../../../public/gamepads/hotspots/outline/arcade.hotspots.svg"),
+                include_str!("../../../assets/gamepads/hotspots/outline/arcade.hotspots.svg"),
             ),
             (
                 SystemControllerLayout::PcEngine,
-                include_str!("../../../public/gamepads/hotspots/outline/pc-engine.hotspots.svg"),
+                include_str!("../../../assets/gamepads/hotspots/outline/pc-engine.hotspots.svg"),
             ),
             (
                 SystemControllerLayout::GameBoy,
-                include_str!("../../../public/gamepads/hotspots/outline/gb.hotspots.svg"),
+                include_str!("../../../assets/gamepads/hotspots/outline/gb.hotspots.svg"),
             ),
             (
                 SystemControllerLayout::GameBoyAdvance,
-                include_str!("../../../public/gamepads/hotspots/outline/gba.hotspots.svg"),
+                include_str!("../../../assets/gamepads/hotspots/outline/gba.hotspots.svg"),
             ),
             (
                 SystemControllerLayout::N64,
-                include_str!("../../../public/gamepads/hotspots/outline/n64.hotspots.svg"),
+                include_str!("../../../assets/gamepads/hotspots/outline/n64.hotspots.svg"),
             ),
             (
                 SystemControllerLayout::Psx,
-                include_str!("../../../public/gamepads/hotspots/outline/psx.hotspots.svg"),
+                include_str!("../../../assets/gamepads/hotspots/outline/psx.hotspots.svg"),
             ),
             (
                 SystemControllerLayout::Ps2,
-                include_str!("../../../public/gamepads/hotspots/outline/ps2.hotspots.svg"),
+                include_str!("../../../assets/gamepads/hotspots/outline/ps2.hotspots.svg"),
             ),
             (
                 SystemControllerLayout::Dreamcast,
-                include_str!("../../../public/gamepads/hotspots/outline/dreamcast.hotspots.svg"),
+                include_str!("../../../assets/gamepads/hotspots/outline/dreamcast.hotspots.svg"),
             ),
             (
                 SystemControllerLayout::GameCube,
-                include_str!("../../../public/gamepads/hotspots/outline/gamecube.hotspots.svg"),
+                include_str!("../../../assets/gamepads/hotspots/outline/gamecube.hotspots.svg"),
             ),
             (
                 SystemControllerLayout::Saturn,
-                include_str!("../../../public/gamepads/hotspots/outline/saturn.hotspots.svg"),
+                include_str!("../../../assets/gamepads/hotspots/outline/saturn.hotspots.svg"),
             ),
         ];
 

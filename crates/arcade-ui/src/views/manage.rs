@@ -871,9 +871,7 @@ impl NativeArcadeUiApp {
             Ok(outcome) => {
                 if !outcome.restart_required {
                     self.sync_manage_settings_from_services();
-                    self.assets = crate::assets::AssetCache::new(
-                        self.services.config().paths.rom_root.as_path(),
-                    );
+                    self.assets = crate::assets::AssetCache::new(self.services.config().as_ref());
                     self.host
                         .update_core_variables(&self.services.config().emulation);
                 }

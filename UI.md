@@ -4,13 +4,16 @@ This document describes how the app assigns bundled background and header art ac
 
 ## Asset Roots
 
-At startup, the UI builds a list of existing `public/` asset roots from:
+At startup, the UI builds a list of existing `assets/` asset roots from:
 
-- The current working directory: `./public`
-- The parent of the current working directory: `../public`
-- The parent of the configured ROM root: `<rom_root_parent>/public`
+- The packaged app bundle: `Rusted Arcade.app/Contents/Resources/assets`
+- The current working directory: `./assets`
+- The parent of the current working directory: `../assets`
+- The parent of the configured ROM root: `<rom_root_parent>/assets`
 
 Relative asset paths such as `/system-logos/all_header.jpg` are resolved against those roots. Absolute paths are used only when the file exists.
+Covers are separate user/runtime data: `/covers/...` paths resolve from the
+configured runtime root, normally `~/Documents/Arcade/covers`.
 
 ## App Sections
 
@@ -29,22 +32,22 @@ The active system comes from the library system filter. If no system filter is s
 The top navigation tries a per-system header first:
 
 ```text
-public/system-logos/<system>_header.png
-public/system-logos/<system>_header.webp
-public/system-logos/<system>_header.jpg
-public/system-logos/<system>_header.jpeg
+assets/system-logos/<system>_header.png
+assets/system-logos/<system>_header.webp
+assets/system-logos/<system>_header.jpg
+assets/system-logos/<system>_header.jpeg
 ```
 
 `<system>` is the lowercase system key, such as `nes`, `snes`, `genesis`, or `gb`. If no matching file exists, the header falls back to:
 
 ```text
-public/system-logos/all_header.jpg
+assets/system-logos/all_header.jpg
 ```
 
 The title image is always:
 
 ```text
-public/system-logos/headerTitle.png
+assets/system-logos/headerTitle.png
 ```
 
 If `headerTitle.png` cannot be loaded, the header renders the text fallback `Rusted Arcade`.
@@ -65,10 +68,10 @@ Every non-play section starts by painting the active system palette gradient. Th
 For regular systems, the app first checks for these per-system background files:
 
 ```text
-public/system-logos/<system>_background.png
-public/system-logos/<system>_background.webp
-public/system-logos/<system>_background.jpg
-public/system-logos/<system>_background.jpeg
+assets/system-logos/<system>_background.png
+assets/system-logos/<system>_background.webp
+assets/system-logos/<system>_background.jpg
+assets/system-logos/<system>_background.jpeg
 ```
 
 If none exists, the code falls back to `All-background.jpg`.
@@ -84,7 +87,7 @@ Only `All-background.jpg` is bundled for GitHub publishing.
 
 ## Related Mapper Art
 
-The Library and Settings surfaces also use system logo assets in toolbars and SVG controller mapper assets in controller mapping panels. These are not the page background or top header, but they are resolved through the same `public/` asset-root system.
+The Library and Settings surfaces also use system logo assets in toolbars and SVG controller mapper assets in controller mapping panels. These are not the page background or top header, but they are resolved through the same `assets/` asset-root system.
 
 System logo assignments:
 
@@ -127,7 +130,7 @@ DOS does not currently use the visual system controller mapper.
 
 ## Notes For Changing Art
 
-- Put new UI art under `public/system-logos/`.
+- Put new UI art under `assets/system-logos/`.
 - Use lowercase system keys in override filenames.
 - Prefer replacing or adding the documented asset path over changing Rust code.
 - Keep large local-only generated art out of Git unless the app actually needs it at runtime.

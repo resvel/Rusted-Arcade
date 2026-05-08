@@ -3,13 +3,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 
-const PROJECT_DIR_QUALIFIER: &str = "com";
-const PROJECT_DIR_ORGANIZATION: &str = "jules";
-const PROJECT_NAME_NATIVE: &str = "personal-arcade-native";
-const PROJECT_NAME_LEGACY: &str = "personal-web-arcade";
+const USER_DOCUMENTS_APP_DIR: &str = "Arcade";
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct EmulationConfig {
@@ -743,89 +739,28 @@ impl AppConfig {
     }
 }
 
-fn prefer_native_unless_only_legacy_exists(native: PathBuf, legacy: PathBuf) -> PathBuf {
-    if native.exists() || !legacy.exists() {
-        native
-    } else {
-        legacy
-    }
-}
-
-fn project_dirs_for(project_name: &str) -> Option<ProjectDirs> {
-    ProjectDirs::from(
-        PROJECT_DIR_QUALIFIER,
-        PROJECT_DIR_ORGANIZATION,
-        project_name,
-    )
-}
-
-fn fallback_data_dir(project_name: &str) -> PathBuf {
+fn user_documents_arcade_dir() -> PathBuf {
     let home = std::env::var("HOME").unwrap_or_else(|_| String::from("."));
-    PathBuf::from(format!("{home}/.local/share/{project_name}"))
-}
-
-fn fallback_config_path(project_name: &str) -> PathBuf {
-    let home = std::env::var("HOME").unwrap_or_else(|_| String::from("."));
-    PathBuf::from(format!("{home}/.config/{project_name}/config.toml"))
-}
-
-fn project_data_dir(project_name: &str) -> PathBuf {
-    project_dirs_for(project_name)
-        .map(|dirs| dirs.data_local_dir().to_path_buf())
-        .unwrap_or_else(|| fallback_data_dir(project_name))
-}
-
-fn project_config_path(project_name: &str) -> PathBuf {
-    project_dirs_for(project_name)
-        .map(|dirs| dirs.config_dir().join("config.toml"))
-        .unwrap_or_else(|| fallback_config_path(project_name))
-}
-
-fn executable_root_dir() -> Option<PathBuf> {
-    std::env::current_exe()
-        .ok()
-        .and_then(|path| path.parent().map(Path::to_path_buf))
+    PathBuf::from(home)
+        .join("Documents")
+        .join(USER_DOCUMENTS_APP_DIR)
 }
 
 fn default_app_root() -> PathBuf {
-    default_app_root_with(
-        executable_root_dir(),
-        project_data_dir(PROJECT_NAME_NATIVE),
-        project_data_dir(PROJECT_NAME_LEGACY),
-    )
+    user_documents_arcade_dir()
 }
 
-fn default_app_root_with(
-    executable_root: Option<PathBuf>,
-    native_data_dir: PathBuf,
-    legacy_data_dir: PathBuf,
-) -> PathBuf {
-    executable_root
-        .filter(|root| !root.as_os_str().is_empty())
-        .unwrap_or_else(|| {
-            prefer_native_unless_only_legacy_exists(native_data_dir, legacy_data_dir)
-        })
+#[cfg(test)]
+fn default_app_root_with(documents_arcade_dir: PathBuf) -> PathBuf {
+    documents_arcade_dir
 }
 
 fn default_config_path() -> PathBuf {
-    default_config_path_with(
-        executable_root_dir(),
-        project_config_path(PROJECT_NAME_NATIVE),
-        project_config_path(PROJECT_NAME_LEGACY),
-    )
+    default_config_path_with(user_documents_arcade_dir())
 }
 
-fn default_config_path_with(
-    executable_root: Option<PathBuf>,
-    native_config_path: PathBuf,
-    legacy_config_path: PathBuf,
-) -> PathBuf {
-    executable_root
-        .filter(|root| !root.as_os_str().is_empty())
-        .map(|root| root.join("config.toml"))
-        .unwrap_or_else(|| {
-            prefer_native_unless_only_legacy_exists(native_config_path, legacy_config_path)
-        })
+fn default_config_path_with(documents_arcade_dir: PathBuf) -> PathBuf {
+    documents_arcade_dir.join("config.toml")
 }
 
 pub fn resolve_path_from_root(path: impl AsRef<Path>, root: &Path) -> PathBuf {
@@ -1147,24 +1082,16 @@ bios_root = "/tmp/bios"
     }
 
     #[test]
-    fn default_config_path_prefers_executable_directory_when_available() {
-        let portable_root = PathBuf::from("/portable-app");
-        let resolved = default_config_path_with(
-            Some(portable_root.clone()),
-            PathBuf::from("/native/config.toml"),
-            PathBuf::from("/legacy/config.toml"),
-        );
-        assert_eq!(resolved, portable_root.join("config.toml"));
+    fn default_config_path_uses_documents_arcade_root() {
+        let documents_root = PathBuf::from("/Users/test/Documents/Arcade");
+        let resolved = default_config_path_with(documents_root.clone());
+        assert_eq!(resolved, documents_root.join("config.toml"));
     }
 
     #[test]
-    fn default_app_root_prefers_executable_directory_when_available() {
-        let portable_root = PathBuf::from("/portable-app");
-        let resolved = default_app_root_with(
-            Some(portable_root.clone()),
-            PathBuf::from("/native-data"),
-            PathBuf::from("/legacy-data"),
-        );
-        assert_eq!(resolved, portable_root);
+    fn default_app_root_uses_documents_arcade_root() {
+        let documents_root = PathBuf::from("/Users/test/Documents/Arcade");
+        let resolved = default_app_root_with(documents_root.clone());
+        assert_eq!(resolved, documents_root);
     }
 }

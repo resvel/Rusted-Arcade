@@ -378,7 +378,7 @@ impl NativeServices {
 
     pub fn list_manage_roms(&self, scope: &ManageScope) -> Result<Vec<ManageRomStatus>> {
         let config = self.current_config()?;
-        let public_root = resolve_public_root(&config.paths.rom_root)?;
+        let cover_root = resolve_cover_root(&config.paths)?;
         let mut items = self
             .list_all_roms(scope)?
             .into_iter()
@@ -394,7 +394,7 @@ impl NativeServices {
                         .rom
                         .cover_path
                         .as_deref()
-                        .and_then(|value| resolve_local_cover_asset_path(&public_root, value))
+                        .and_then(|value| resolve_local_cover_asset_path(&cover_root, value))
                         .is_some(),
                 }
             })
@@ -415,8 +415,8 @@ impl NativeServices {
         mut progress: impl FnMut(ManageProgressEvent),
     ) -> Result<ManageOperationSummary> {
         let config = self.current_config()?;
-        let public_root = resolve_public_root(&config.paths.rom_root)?;
-        let local_cover_index = build_local_cover_index(&public_root)?;
+        let cover_root = resolve_cover_root(&config.paths)?;
+        let local_cover_index = build_local_cover_index(&cover_root)?;
         let existing_roms = self.list_all_roms(&ManageScope::AllSystems)?;
         let mut slug_set = existing_roms
             .iter()
@@ -440,7 +440,7 @@ impl NativeServices {
             kind: Some(ManageOperationKind::SmartScan),
             ..ManageOperationSummary::default()
         };
-        let arcade_cover_index = build_arcade_cover_index(&public_root)?;
+        let arcade_cover_index = build_arcade_cover_index(&cover_root)?;
 
         for (index, path) in files.iter().enumerate() {
             let Some(target) = target_for_path(path, &scan_targets) else {
@@ -530,9 +530,9 @@ impl NativeServices {
         mut progress: impl FnMut(ManageProgressEvent),
     ) -> Result<ManageOperationSummary> {
         let config = self.current_config()?;
-        let public_root = resolve_public_root(&config.paths.rom_root)?;
-        let local_cover_index = build_local_cover_index(&public_root)?;
-        let arcade_cover_index = build_arcade_cover_index(&public_root)?;
+        let cover_root = resolve_cover_root(&config.paths)?;
+        let local_cover_index = build_local_cover_index(&cover_root)?;
+        let arcade_cover_index = build_arcade_cover_index(&cover_root)?;
         let allowed_systems = run
             .systems
             .iter()
@@ -632,7 +632,7 @@ impl NativeServices {
             return Err(anyhow!("Scrape limit must be greater than zero."));
         }
 
-        let public_root = resolve_public_root(&config.paths.rom_root)?;
+        let cover_root = resolve_cover_root(&config.paths)?;
         let allowed_systems = run
             .systems
             .iter()
@@ -666,7 +666,7 @@ impl NativeServices {
         };
 
         for (index, rom) in candidates.iter().enumerate() {
-            match scrape_cover_for_rom(api_key, scrape_config, rom, &public_root, &self.db) {
+            match scrape_cover_for_rom(api_key, scrape_config, rom, &cover_root, &self.db) {
                 Ok(true) => summary.updated += 1,
                 Ok(false) => summary.skipped += 1,
                 Err(_) => summary.failed += 1,
@@ -1114,18 +1114,25 @@ fn hash_file(path: &Path) -> Result<String> {
     Ok(format!("{:x}", hasher.finalize()))
 }
 
-fn resolve_public_root(rom_root: &Path) -> Result<PathBuf> {
+fn resolve_cover_root(paths: &PathsConfig) -> Result<PathBuf> {
     let cwd = std::env::current_dir()?;
+    let runtime_root = paths
+        .rom_root
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| paths.rom_root.clone());
     let candidates = [
-        rom_root.join("public"),
-        rom_root
-            .parent()
-            .map(|parent| parent.join("public"))
-            .unwrap_or_else(|| rom_root.join("public")),
-        cwd.join("public"),
+        runtime_root.join("covers"),
+        paths.rom_root.join("covers"),
+        runtime_root.join("public").join("covers"),
+        cwd.join("covers"),
+        cwd.join("public").join("covers"),
         cwd.parent()
-            .map(|parent| parent.join("public"))
-            .unwrap_or_else(|| cwd.join("public")),
+            .map(|parent| parent.join("covers"))
+            .unwrap_or_else(|| cwd.join("covers")),
+        cwd.parent()
+            .map(|parent| parent.join("public").join("covers"))
+            .unwrap_or_else(|| cwd.join("public").join("covers")),
     ];
 
     if let Some(existing) = candidates.iter().find(|candidate| candidate.exists()) {
@@ -1149,9 +1156,8 @@ struct SystemCoverIndex {
     exact_paths: HashMap<String, String>,
 }
 
-fn build_local_cover_index(public_root: &Path) -> Result<LocalCoverIndex> {
-    let covers_root = public_root.join("covers");
-    let entries = match fs::read_dir(&covers_root) {
+fn build_local_cover_index(cover_root: &Path) -> Result<LocalCoverIndex> {
+    let entries = match fs::read_dir(cover_root) {
         Ok(entries) => entries,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
             return Ok(LocalCoverIndex::default())
@@ -1211,21 +1217,21 @@ fn build_local_cover_index(public_root: &Path) -> Result<LocalCoverIndex> {
             let Some(file_name) = file_name else {
                 continue;
             };
-            let candidate_public_path = format!("/covers/{system_key}/{file_name}");
-            if let Some(existing_public_path) = system_index.exact_paths.get(&stem) {
-                let existing_rank = cover_extension_rank_from_public_path(existing_public_path);
+            let candidate_cover_path = format!("/covers/{system_key}/{file_name}");
+            if let Some(existing_cover_path) = system_index.exact_paths.get(&stem) {
+                let existing_rank = cover_extension_rank_from_stored_path(existing_cover_path);
                 let candidate_rank = cover_extension_rank(extension.as_str());
                 if candidate_rank > existing_rank {
                     continue;
                 }
                 if candidate_rank == existing_rank
-                    && candidate_public_path.to_ascii_lowercase()
-                        >= existing_public_path.to_ascii_lowercase()
+                    && candidate_cover_path.to_ascii_lowercase()
+                        >= existing_cover_path.to_ascii_lowercase()
                 {
                     continue;
                 }
             }
-            system_index.exact_paths.insert(stem, candidate_public_path);
+            system_index.exact_paths.insert(stem, candidate_cover_path);
         }
     }
 
@@ -1239,7 +1245,7 @@ fn cover_extension_rank(extension: &str) -> usize {
         .unwrap_or(usize::MAX)
 }
 
-fn cover_extension_rank_from_public_path(path: &str) -> usize {
+fn cover_extension_rank_from_stored_path(path: &str) -> usize {
     Path::new(path)
         .extension()
         .and_then(|value| value.to_str())
@@ -1312,7 +1318,7 @@ fn strip_trailing_numeric_suffix(slug: &str) -> Option<&str> {
     Some(base)
 }
 
-fn resolve_local_cover_asset_path(public_root: &Path, raw_path: &str) -> Option<PathBuf> {
+fn resolve_local_cover_asset_path(cover_root: &Path, raw_path: &str) -> Option<PathBuf> {
     let trimmed = raw_path.trim();
     if trimmed.is_empty() {
         return None;
@@ -1323,13 +1329,17 @@ fn resolve_local_cover_asset_path(public_root: &Path, raw_path: &str) -> Option<
         return Some(direct);
     }
 
-    let candidate = public_root.join(trimmed.trim_start_matches('/'));
+    let relative = trimmed
+        .trim_start_matches('/')
+        .strip_prefix("covers/")
+        .unwrap_or_else(|| trimmed.trim_start_matches('/'));
+    let candidate = cover_root.join(relative);
     candidate.exists().then_some(candidate)
 }
 
-fn build_arcade_cover_index(public_root: &Path) -> Result<HashMap<String, String>> {
+fn build_arcade_cover_index(cover_root: &Path) -> Result<HashMap<String, String>> {
     let mut index = HashMap::new();
-    let dir = public_root.join("covers").join("arcade-mame2003");
+    let dir = cover_root.join("arcade-mame2003");
     let entries = match fs::read_dir(&dir) {
         Ok(entries) => entries,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(index),
@@ -1452,7 +1462,7 @@ fn scrape_cover_for_rom(
     api_key: &str,
     scrape_config: &CoverScrapingConfig,
     rom: &RomCard,
-    public_root: &Path,
+    cover_root: &Path,
     db: &Database,
 ) -> Result<bool> {
     let clean_title = sanitize_cover_title(&rom.rom.title);
@@ -1515,7 +1525,7 @@ fn scrape_cover_for_rom(
         .filter(|ext| !ext.trim().is_empty())
         .unwrap_or("jpg");
     let system_folder = normalize_system(&rom.rom.system).to_ascii_lowercase();
-    let cover_dir = public_root.join("covers").join(&system_folder);
+    let cover_dir = cover_root.join(&system_folder);
     fs::create_dir_all(&cover_dir)?;
     let file_name = format!("{}.{}", rom.rom.slug, extension);
     let dest_path = cover_dir.join(&file_name);
@@ -1527,8 +1537,8 @@ fn scrape_cover_for_rom(
         .read_to_end(&mut bytes)?;
     fs::write(&dest_path, bytes)?;
 
-    let public_path = format!("/covers/{system_folder}/{file_name}");
-    db.update_rom_cover_path(&rom.rom.id, &public_path)?;
+    let cover_path = format!("/covers/{system_folder}/{file_name}");
+    db.update_rom_cover_path(&rom.rom.id, &cover_path)?;
     Ok(true)
 }
 
@@ -2300,15 +2310,15 @@ mod tests {
     #[test]
     fn local_cover_matcher_supports_exact_alias_and_unique_variant() {
         let tmp = TempDir::new().expect("tempdir");
-        let public_root = tmp.path().join("public");
-        let covers_dir = public_root.join("covers").join("nes");
+        let cover_root = tmp.path().join("covers");
+        let covers_dir = cover_root.join("nes");
         std::fs::create_dir_all(&covers_dir).expect("create cover dir");
         std::fs::write(covers_dir.join("contra-u.jpg"), b"cover").expect("write contra cover");
         std::fs::write(covers_dir.join("mario-u-a1.png"), b"cover").expect("write mario variant");
         std::fs::write(covers_dir.join("zelda-u-a1.jpg"), b"cover").expect("write zelda variant");
         std::fs::write(covers_dir.join("zelda-u-a2.jpg"), b"cover").expect("write zelda variant");
 
-        let index = build_local_cover_index(&public_root).expect("build index");
+        let index = build_local_cover_index(&cover_root).expect("build index");
         assert_eq!(
             resolve_local_cover_path_for_slug(&index, "NES", "contra-u"),
             Some(String::from("/covers/nes/contra-u.jpg"))
@@ -2351,7 +2361,7 @@ mod tests {
         )
         .expect("insert rom-existing");
 
-        let covers_dir = tmp.path().join("public").join("covers").join("nes");
+        let covers_dir = tmp.path().join("covers").join("nes");
         std::fs::create_dir_all(&covers_dir).expect("create cover dir");
         std::fs::write(covers_dir.join("contra-u.jpg"), b"cover").expect("write cover");
         std::fs::write(covers_dir.join("existing.jpg"), b"cover").expect("write existing cover");
@@ -2403,7 +2413,7 @@ mod tests {
         let rom_path = config.paths.rom_root.join("nes").join("Test Rom (U).nes");
         std::fs::create_dir_all(rom_path.parent().expect("rom parent")).expect("create rom dir");
         std::fs::write(&rom_path, b"rom").expect("write rom");
-        let covers_dir = tmp.path().join("public").join("covers").join("nes");
+        let covers_dir = tmp.path().join("covers").join("nes");
         std::fs::create_dir_all(&covers_dir).expect("create cover dir");
         std::fs::write(covers_dir.join("test-rom-u.jpg"), b"cover").expect("write cover");
         let services = NativeServices::bootstrap(config.clone(), config_path_for(&config), db)

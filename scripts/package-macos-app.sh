@@ -1,0 +1,106 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+APP_NAME="${APP_NAME:-Rusted Arcade}"
+BUNDLE_IDENTIFIER="${BUNDLE_IDENTIFIER:-com.jules.rusted-arcade}"
+PROFILE="${PROFILE:-release}"
+TARGET="${TARGET:-}"
+CODESIGN="${CODESIGN:-1}"
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+APP_VERSION="$(
+  sed -n 's/^version = "\(.*\)"/\1/p' "${REPO_ROOT}/crates/arcade-app/Cargo.toml" | head -n 1
+)"
+
+if [[ -z "${APP_VERSION}" ]]; then
+  APP_VERSION="0.1.0"
+fi
+
+if [[ "${PROFILE}" == "release" ]]; then
+  BUILD_ARGS=(build --release -p arcade-app)
+  PROFILE_DIR="release"
+else
+  BUILD_ARGS=(build --profile "${PROFILE}" -p arcade-app)
+  PROFILE_DIR="${PROFILE}"
+fi
+
+if [[ -n "${TARGET}" ]]; then
+  BUILD_ARGS+=(--target "${TARGET}")
+  BINARY_PATH="${REPO_ROOT}/target/${TARGET}/${PROFILE_DIR}/arcade-app"
+else
+  BINARY_PATH="${REPO_ROOT}/target/${PROFILE_DIR}/arcade-app"
+fi
+
+APP_BUNDLE="${REPO_ROOT}/dist/${APP_NAME}.app"
+CONTENTS_DIR="${APP_BUNDLE}/Contents"
+MACOS_DIR="${CONTENTS_DIR}/MacOS"
+RESOURCES_DIR="${CONTENTS_DIR}/Resources"
+ICON_FILE="${RESOURCES_DIR}/AppIcon.icns"
+
+echo "Building arcade-app (${PROFILE}${TARGET:+, target ${TARGET}})..."
+(cd "${REPO_ROOT}" && cargo "${BUILD_ARGS[@]}")
+
+echo "Creating ${APP_BUNDLE}..."
+rm -rf "${APP_BUNDLE}"
+mkdir -p "${MACOS_DIR}" "${RESOURCES_DIR}"
+
+cp "${BINARY_PATH}" "${MACOS_DIR}/arcade-app"
+chmod 755 "${MACOS_DIR}/arcade-app"
+cp -R "${REPO_ROOT}/assets" "${RESOURCES_DIR}/assets"
+
+if command -v sips >/dev/null 2>&1; then
+  sips -s format icns "${REPO_ROOT}/assets/icon.png" --out "${ICON_FILE}" >/dev/null
+else
+  echo "warning: sips not found; copying PNG icon instead"
+  cp "${REPO_ROOT}/assets/icon.png" "${RESOURCES_DIR}/AppIcon.png"
+fi
+
+cat > "${CONTENTS_DIR}/Info.plist" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleDevelopmentRegion</key>
+  <string>en</string>
+  <key>CFBundleDisplayName</key>
+  <string>${APP_NAME}</string>
+  <key>CFBundleExecutable</key>
+  <string>arcade-app</string>
+  <key>CFBundleIconFile</key>
+  <string>AppIcon</string>
+  <key>CFBundleIdentifier</key>
+  <string>${BUNDLE_IDENTIFIER}</string>
+  <key>CFBundleInfoDictionaryVersion</key>
+  <string>6.0</string>
+  <key>CFBundleName</key>
+  <string>${APP_NAME}</string>
+  <key>CFBundlePackageType</key>
+  <string>APPL</string>
+  <key>CFBundleShortVersionString</key>
+  <string>${APP_VERSION}</string>
+  <key>CFBundleVersion</key>
+  <string>${APP_VERSION}</string>
+  <key>LSMinimumSystemVersion</key>
+  <string>13.0</string>
+  <key>NSHighResolutionCapable</key>
+  <true/>
+</dict>
+</plist>
+PLIST
+
+echo "APPL????" > "${CONTENTS_DIR}/PkgInfo"
+
+find "${APP_BUNDLE}" -name .DS_Store -delete
+if command -v xattr >/dev/null 2>&1; then
+  xattr -cr "${APP_BUNDLE}" >/dev/null 2>&1 || true
+fi
+
+if [[ "${CODESIGN}" != "0" ]] && command -v codesign >/dev/null 2>&1; then
+  echo "Ad-hoc signing ${APP_NAME}.app..."
+  codesign --force --deep --sign - "${APP_BUNDLE}" >/dev/null
+fi
+
+echo "Created ${APP_BUNDLE}"
+echo "Runtime folders stay in ~/Documents/Arcade."

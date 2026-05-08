@@ -220,7 +220,7 @@ impl NativeArcadeUiApp {
             Err(err) => (None, Some(format!("Controller runtime unavailable: {err}"))),
         };
 
-        let assets = AssetCache::new(services.config().paths.rom_root.as_path());
+        let assets = AssetCache::new(services.config().as_ref());
 
         let mut app = Self {
             services,
