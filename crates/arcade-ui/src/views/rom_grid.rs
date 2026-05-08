@@ -3,29 +3,22 @@ use eframe::egui;
 use egui::Color32;
 
 use crate::app::{GridSource, NativeArcadeUiApp};
-use crate::render::fit_size_to_aspect;
 use crate::state::MenuFocusRegion;
+use crate::theme::ThemePalette;
 
-const GRID_EDGE_PADDING: f32 = 8.0;
+const GRID_EDGE_PADDING: f32 = 0.0;
 const GRID_SCROLLBAR_GUTTER: f32 = 18.0;
-const GRID_RIGHT_SAFETY_INSET: f32 = 24.0;
-const GRID_LEFT_SHIFT_BIAS: f32 = 80.0;
+const GRID_RIGHT_SAFETY_INSET: f32 = 8.0;
+const GRID_LEFT_SHIFT_BIAS: f32 = 0.0;
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct RomGridLayout {
     pub(crate) card_width: f32,
     pub(crate) card_height: f32,
-    pub(crate) cover_height: f32,
     pub(crate) card_gap: f32,
     pub(crate) row_gap: f32,
-    pub(crate) inner_margin: i8,
     pub(crate) title_max_chars: usize,
-    pub(crate) meta_max_chars: usize,
     pub(crate) title_size: f32,
-    pub(crate) line_size: f32,
-    pub(crate) compact: bool,
-    pub(crate) show_metadata: bool,
-    pub(crate) show_preview_badge: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -39,55 +32,34 @@ pub(crate) struct GridMetrics {
 impl RomGridLayout {
     fn full() -> Self {
         Self {
-            card_width: 204.0,
-            card_height: 336.0,
-            cover_height: 246.0,
-            card_gap: 10.0,
-            row_gap: 12.0,
-            inner_margin: 8,
-            title_max_chars: 36,
-            meta_max_chars: 38,
-            title_size: 14.0,
-            line_size: 11.5,
-            compact: false,
-            show_metadata: true,
-            show_preview_badge: true,
+            card_width: 224.0,
+            card_height: 224.0,
+            card_gap: 8.0,
+            row_gap: 8.0,
+            title_max_chars: 44,
+            title_size: 15.5,
         }
     }
 
     fn compact() -> Self {
         Self {
-            card_width: 170.0,
-            card_height: 258.0,
-            cover_height: 182.0,
-            card_gap: 8.0,
-            row_gap: 10.0,
-            inner_margin: 7,
-            title_max_chars: 28,
-            meta_max_chars: 28,
-            title_size: 13.0,
-            line_size: 11.0,
-            compact: true,
-            show_metadata: true,
-            show_preview_badge: false,
+            card_width: 208.0,
+            card_height: 208.0,
+            card_gap: 7.0,
+            row_gap: 7.0,
+            title_max_chars: 40,
+            title_size: 15.0,
         }
     }
 
     fn dense() -> Self {
         Self {
-            card_width: 152.0,
-            card_height: 220.0,
-            cover_height: 144.0,
-            card_gap: 8.0,
-            row_gap: 8.0,
-            inner_margin: 6,
-            title_max_chars: 24,
-            meta_max_chars: 0,
-            title_size: 12.0,
-            line_size: 10.0,
-            compact: true,
-            show_metadata: false,
-            show_preview_badge: false,
+            card_width: 192.0,
+            card_height: 192.0,
+            card_gap: 6.0,
+            row_gap: 6.0,
+            title_max_chars: 36,
+            title_size: 14.5,
         }
     }
 }
@@ -112,9 +84,9 @@ pub(crate) fn resolve_rom_grid_layout(
             <= usable_width
     };
 
-    if fits_width(full, 8) {
+    if fits_width(full, 10) {
         full
-    } else if fits_width(compact, 7) {
+    } else if fits_width(compact, 8) {
         compact
     } else {
         dense
@@ -132,15 +104,9 @@ pub(crate) fn grid_metrics_for(
         - GRID_RIGHT_SAFETY_INSET
         - GRID_EDGE_PADDING * 2.0)
         .max(layout.card_width);
-    let max_columns = if matches!(source, GridSource::Favorites | GridSource::Library) {
-        9
-    } else {
-        usize::MAX
-    };
-    let columns = (((usable_width + layout.card_gap) / (layout.card_width + layout.card_gap))
+    let columns = ((usable_width + layout.card_gap) / (layout.card_width + layout.card_gap))
         .floor()
-        .max(1.0) as usize)
-        .min(max_columns);
+        .max(1.0) as usize;
     let visible_rows = (((available_height + layout.row_gap)
         / (layout.card_height + layout.row_gap))
         .ceil()
@@ -284,122 +250,100 @@ impl NativeArcadeUiApp {
         self.begin_cover_load_frame();
         let section_width = ui.available_width();
         let section_height = ui.available_height();
-        let content_width = Self::content_band_width_for(section_width);
-        let side_gutter = ((section_width - content_width) * 0.5).max(0.0);
+        ui.allocate_ui_with_layout(
+            egui::vec2(section_width, section_height),
+            egui::Layout::top_down(egui::Align::Min),
+            |ui| {
+                let metrics = grid_metrics_for(source, ui.available_width(), ui.available_height());
+                self.state.menu_nav.record_grid_metrics(
+                    source,
+                    metrics.columns,
+                    metrics.visible_rows,
+                );
+                self.repair_grid_selection(source);
+                let layout = metrics.layout;
+                let columns = metrics.columns;
+                let total = self.grid_len(source);
+                let total_rows = total.div_ceil(columns);
+                let mut needs_refresh = false;
+                let mut min_visible_row_start = None;
+                let mut max_visible_row_end = 0usize;
+                let row_height = layout.card_height + layout.row_gap;
+                let pending_scroll_index = self
+                    .state
+                    .menu_nav
+                    .pending_scroll_index(self.current_browse_grid_source() == Some(source));
 
-        ui.horizontal(|ui| {
-            if side_gutter > 0.0 {
-                ui.add_space(side_gutter);
-            }
+                let mut scroll_area = egui::ScrollArea::vertical().id_salt(grid_id);
+                if let Some(index) = pending_scroll_index {
+                    scroll_area =
+                        scroll_area.vertical_scroll_offset((index / columns) as f32 * row_height);
+                }
 
-            ui.allocate_ui_with_layout(
-                egui::vec2(content_width, section_height),
-                egui::Layout::top_down(egui::Align::Min),
-                |ui| {
-                    let metrics =
-                        grid_metrics_for(source, ui.available_width(), ui.available_height());
-                    self.state.menu_nav.record_grid_metrics(
-                        source,
-                        metrics.columns,
-                        metrics.visible_rows,
-                    );
-                    self.repair_grid_selection(source);
-                    let layout = metrics.layout;
-                    let columns = metrics.columns;
-                    let total = self.grid_len(source);
-                    let total_rows = total.div_ceil(columns);
-                    let mut needs_refresh = false;
-                    let mut min_visible_row_start = None;
-                    let mut max_visible_row_end = 0usize;
-                    let row_height = layout.card_height + layout.row_gap;
-                    let pending_scroll_index = self
-                        .state
-                        .menu_nav
-                        .pending_scroll_index(self.current_browse_grid_source() == Some(source));
-
-                    let mut scroll_area = egui::ScrollArea::vertical().id_salt(grid_id);
-                    if let Some(index) = pending_scroll_index {
-                        scroll_area = scroll_area
-                            .vertical_scroll_offset((index / columns) as f32 * row_height);
-                    }
-
-                    scroll_area.show_rows(ui, row_height, total_rows, |ui, row_range| {
-                        min_visible_row_start.get_or_insert(row_range.start);
-                        max_visible_row_end = max_visible_row_end.max(row_range.end);
-                        let shift_left = metrics.side_padding.min(GRID_LEFT_SHIFT_BIAS);
-                        let left_inset = GRID_EDGE_PADDING + metrics.side_padding - shift_left;
-                        let right_inset = GRID_EDGE_PADDING + metrics.side_padding + shift_left;
-                        for row in row_range {
-                            ui.horizontal_top(|ui| {
-                                ui.spacing_mut().item_spacing.x = 0.0;
-                                ui.add_space(left_inset);
-                                for col in 0..columns {
-                                    let index = row * columns + col;
-                                    if let Some(rom) = self.grid_item(source, index) {
-                                        ui.allocate_ui_with_layout(
-                                            egui::vec2(layout.card_width, layout.card_height),
-                                            egui::Layout::top_down(egui::Align::LEFT),
-                                            |ui| {
-                                                if self.draw_rom_card(
-                                                    ctx, ui, source, index, &rom, layout,
-                                                ) {
-                                                    needs_refresh = true;
-                                                }
-                                            },
-                                        );
-                                    } else {
-                                        ui.allocate_space(egui::vec2(
-                                            layout.card_width,
-                                            layout.card_height,
-                                        ));
+                scroll_area.show_rows(ui, row_height, total_rows, |ui, row_range| {
+                    min_visible_row_start.get_or_insert(row_range.start);
+                    max_visible_row_end = max_visible_row_end.max(row_range.end);
+                    let shift_left = metrics.side_padding.min(GRID_LEFT_SHIFT_BIAS);
+                    let left_inset = GRID_EDGE_PADDING + metrics.side_padding - shift_left;
+                    let right_inset = GRID_EDGE_PADDING + metrics.side_padding + shift_left;
+                    for row in row_range {
+                        ui.horizontal_top(|ui| {
+                            ui.spacing_mut().item_spacing.x = 0.0;
+                            ui.add_space(left_inset);
+                            for col in 0..columns {
+                                let index = row * columns + col;
+                                if let Some(rom) = self.grid_item(source, index) {
+                                    if self.draw_rom_tile(ctx, ui, source, index, &rom, layout) {
+                                        needs_refresh = true;
                                     }
-
-                                    if col + 1 < columns {
-                                        ui.add_space(layout.card_gap);
-                                    }
+                                } else {
+                                    ui.allocate_space(egui::vec2(
+                                        layout.card_width,
+                                        layout.card_height,
+                                    ));
                                 }
-                                ui.add_space(right_inset);
-                            });
-                            ui.add_space(layout.row_gap);
-                        }
-                    });
-                    if pending_scroll_index.is_some() {
-                        self.state.menu_nav.clear_pending_scroll();
-                    }
-                    let visible_row_start = min_visible_row_start.unwrap_or(0);
-                    let visible_row_end = if total_rows == 0 {
-                        0
-                    } else {
-                        max_visible_row_end.max(visible_row_start.saturating_add(1))
-                    };
-                    self.state.menu_nav.record_visible_row_range(
-                        source,
-                        visible_row_start,
-                        visible_row_end,
-                    );
 
-                    if matches!(source, GridSource::Library) {
-                        let near_end = max_visible_row_end.saturating_add(2) >= total_rows;
-                        if near_end {
-                            self.try_load_more_library();
-                        }
+                                if col + 1 < columns {
+                                    ui.add_space(layout.card_gap);
+                                }
+                            }
+                            ui.add_space(right_inset);
+                        });
+                        ui.add_space(layout.row_gap);
                     }
-                    self.maybe_preload_near_end_for_selection(source, columns);
+                });
+                if pending_scroll_index.is_some() {
+                    self.state.menu_nav.clear_pending_scroll();
+                }
+                let visible_row_start = min_visible_row_start.unwrap_or(0);
+                let visible_row_end = if total_rows == 0 {
+                    0
+                } else {
+                    max_visible_row_end.max(visible_row_start.saturating_add(1))
+                };
+                self.state.menu_nav.record_visible_row_range(
+                    source,
+                    visible_row_start,
+                    visible_row_end,
+                );
 
-                    if needs_refresh {
-                        let _ = self.refresh_all();
-                        self.repair_grid_selection(source);
+                if matches!(source, GridSource::Library) {
+                    let near_end = max_visible_row_end.saturating_add(2) >= total_rows;
+                    if near_end {
+                        self.try_load_more_library();
                     }
-                },
-            );
+                }
+                self.maybe_preload_near_end_for_selection(source, columns);
 
-            if side_gutter > 0.0 {
-                ui.add_space(side_gutter);
-            }
-        });
+                if needs_refresh {
+                    let _ = self.refresh_all();
+                    self.repair_grid_selection(source);
+                }
+            },
+        );
     }
 
-    pub(crate) fn draw_rom_card(
+    pub(crate) fn draw_rom_tile(
         &mut self,
         ctx: &egui::Context,
         ui: &mut egui::Ui,
@@ -414,303 +358,163 @@ impl NativeArcadeUiApp {
             && self.state.menu_nav.focus_region == MenuFocusRegion::Grid
             && self.current_browse_grid_source() == Some(source);
         let mut needs_refresh = false;
-        let card_id = ui.id().with(("rom-card", rom.rom.id.as_str()));
-        let card_response = ui.interact(ui.max_rect(), card_id, egui::Sense::click());
-        let hovered = card_response.hovered();
-        let interaction_t = ui.ctx().animate_bool(card_id, selected || hovered);
-        let fill = blend_color(
-            palette.panel,
-            palette.panel_alt,
-            if selected {
-                if focus_selected {
-                    0.84
-                } else {
-                    0.78
-                }
-            } else {
-                interaction_t * 0.55
-            },
+        let (tile_rect, tile_response) = ui.allocate_exact_size(
+            egui::vec2(layout.card_width, layout.card_height),
+            egui::Sense::click(),
         );
-        let stroke_color = blend_color(
-            palette.border,
-            palette.accent,
-            if selected {
-                if focus_selected {
-                    1.0
-                } else {
-                    0.92
-                }
-            } else {
-                interaction_t * 0.7
-            },
+        let tile_id = ui.id().with(("rom-tile", rom.rom.id.as_str()));
+        let hovered = tile_response.hovered();
+        let interaction_t = ui.ctx().animate_bool(tile_id, selected || hovered);
+        let cover_texture = self.rom_cover_texture(ctx, rom);
+        let has_art = cover_texture.is_some();
+        let title_t = ui.ctx().animate_bool(
+            ui.id().with(("rom-tile-title", rom.rom.id.as_str())),
+            has_art && (hovered || focus_selected),
         );
         let mut favorite_consumed = false;
+        let corner_radius = egui::CornerRadius::same(4);
 
-        let card_frame = egui::Frame::new()
-            .fill(fill)
-            .stroke(egui::Stroke::new(
-                1.0 + interaction_t * 0.45
-                    + if selected { 0.15 } else { 0.0 }
-                    + if focus_selected { 0.4 } else { 0.0 },
-                stroke_color,
-            ))
-            .corner_radius(egui::CornerRadius::same(if layout.compact {
-                12
-            } else {
-                16
-            }))
-            .inner_margin(egui::Margin::same(layout.inner_margin))
-            .show(ui, |ui| {
-                ui.spacing_mut().item_spacing.x = 4.0;
-                ui.spacing_mut().item_spacing.y = if layout.compact { 5.0 } else { 7.0 };
-                ui.set_width(layout.card_width - 4.0);
-                ui.set_min_height(layout.card_height - 4.0);
+        ui.painter().rect_filled(
+            tile_rect,
+            corner_radius,
+            blend_color(palette.panel, palette.panel_alt, interaction_t * 0.45),
+        );
 
-                let cover_slot_max_size = egui::vec2(
-                    layout.card_width - (layout.inner_margin as f32 * 2.0 + 4.0),
-                    layout.cover_height,
-                );
-                let cover_slot_size = fit_size_to_aspect(
-                    cover_slot_max_size,
-                    preferred_cover_aspect_for_system(&rom.rom.system),
-                );
-                let mut cover_rect = egui::Rect::NOTHING;
-                ui.allocate_ui_with_layout(
-                    cover_slot_max_size,
-                    egui::Layout::centered_and_justified(egui::Direction::LeftToRight),
-                    |ui| {
-                        let cover_frame = egui::Frame::new()
-                            .fill(blend_color(
-                                Color32::from_rgba_premultiplied(6, 10, 18, 210),
-                                palette.accent_soft,
-                                interaction_t * 0.18,
-                            ))
-                            .corner_radius(egui::CornerRadius::same(12))
-                            .show(ui, |ui| {
-                                ui.allocate_ui_with_layout(
-                                    cover_slot_size,
-                                    egui::Layout::centered_and_justified(
-                                        egui::Direction::LeftToRight,
-                                    ),
-                                    |ui| {
-                                        if let Some(texture) = self.rom_cover_texture(ctx, rom) {
-                                            let texture_size = texture.size_vec2();
-                                            let aspect_ratio = if texture_size.y > 0.0 {
-                                                texture_size.x / texture_size.y
-                                            } else {
-                                                1.0
-                                            };
-                                            let draw_size =
-                                                fit_size_to_aspect(cover_slot_size, aspect_ratio);
-                                            ui.add(egui::Image::new((texture.id(), draw_size)));
-                                        } else {
-                                            let rect = ui.max_rect();
-                                            ui.painter().rect_filled(
-                                                rect,
-                                                egui::CornerRadius::same(10),
-                                                Color32::from_rgba_premultiplied(10, 14, 22, 240),
-                                            );
-                                            ui.painter().text(
-                                                rect.center(),
-                                                egui::Align2::CENTER_CENTER,
-                                                "ART COMING SOON",
-                                                egui::FontId::proportional(12.5),
-                                                palette.text_muted,
-                                            );
-                                        }
-                                    },
-                                );
-                            });
-                        cover_rect = cover_frame.response.rect;
-                    },
-                );
+        if let Some(texture) = cover_texture {
+            let uv = center_crop_uv(texture.size_vec2(), tile_rect.size());
+            ui.painter()
+                .image(texture.id(), tile_rect, uv, Color32::WHITE);
+        } else {
+            paint_missing_art_tile(ui, tile_rect, &rom.display_title, layout, palette);
+        }
 
-                if layout.show_preview_badge && rom.rom.preview_video_path.is_some() {
-                    let preview_size = egui::vec2(if layout.compact { 56.0 } else { 64.0 }, 20.0);
-                    let preview_rect = egui::Rect::from_min_size(
-                        cover_rect.min + egui::vec2(8.0, 8.0),
-                        preview_size,
-                    );
-                    ui.painter().rect_filled(
-                        preview_rect,
-                        egui::CornerRadius::same(255),
-                        blend_color(palette.panel_alt, palette.accent_soft, 0.55),
-                    );
-                    ui.painter().text(
-                        preview_rect.center(),
-                        egui::Align2::CENTER_CENTER,
-                        "Preview",
-                        egui::FontId::proportional(layout.line_size),
-                        palette.text,
-                    );
-                }
-
-                let favorite_size = if layout.compact {
-                    egui::vec2(28.0, 24.0)
-                } else {
-                    egui::vec2(30.0, 26.0)
-                };
-                let favorite_rect = egui::Rect::from_min_size(
-                    egui::pos2(
-                        cover_rect.right() - favorite_size.x - 8.0,
-                        cover_rect.top() + 8.0,
-                    ),
-                    favorite_size,
-                );
-                let favorite_response = ui
-                    .interact(
-                        favorite_rect,
-                        ui.id().with(("favorite-chip", rom.rom.id.as_str())),
-                        egui::Sense::click(),
-                    )
-                    .on_hover_text(if rom.is_favorite {
-                        "Remove Favorite"
-                    } else {
-                        "Add Favorite"
-                    });
-                let favorite_hover_t = ui.ctx().animate_bool(
-                    ui.id().with(("favorite-chip-hover", rom.rom.id.as_str())),
-                    favorite_response.hovered(),
-                );
-                let favorite_fill = if rom.is_favorite {
-                    blend_color(
-                        blend_color(palette.accent_soft, palette.accent, 0.18),
-                        palette.accent,
-                        favorite_hover_t * 0.16,
-                    )
-                } else {
-                    blend_color(
-                        blend_color(palette.panel, palette.panel_alt, 0.45),
-                        palette.accent_soft,
-                        favorite_hover_t * 0.4,
-                    )
-                };
-                let favorite_stroke = if rom.is_favorite {
-                    palette.accent
-                } else {
-                    blend_color(
-                        palette.border,
-                        palette.accent,
-                        interaction_t * 0.35 + favorite_hover_t * 0.25,
-                    )
-                };
-                ui.painter().rect_filled(
-                    favorite_rect,
-                    egui::CornerRadius::same(255),
-                    favorite_fill,
-                );
-                ui.painter().rect_stroke(
-                    favorite_rect,
-                    egui::CornerRadius::same(255),
-                    egui::Stroke::new(1.0, favorite_stroke),
-                    egui::StrokeKind::Inside,
-                );
-                ui.painter().text(
-                    favorite_rect.center(),
-                    egui::Align2::CENTER_CENTER,
-                    if rom.is_favorite { "★" } else { "☆" },
-                    egui::FontId::proportional(if layout.compact { 13.0 } else { 14.0 }),
-                    palette.text,
-                );
-                if favorite_response.clicked() {
-                    favorite_consumed = true;
-                    self.state.menu_nav.focus_region = MenuFocusRegion::Grid;
-                    self.set_active_grid_index(source, index);
-                    self.state.selection.set(Some(rom.rom.id.clone()));
-                    let result = if rom.is_favorite {
-                        self.services.remove_favorite(&rom.rom.id)
-                    } else {
-                        self.services.add_favorite(&rom.rom.id)
-                    };
-                    match result {
-                        Ok(_) => needs_refresh = true,
-                        Err(err) => {
-                            self.state.status = if rom.is_favorite {
-                                format!("Failed to remove favorite: {err}")
-                            } else {
-                                format!("Failed to favorite ROM: {err}")
-                            };
-                        }
-                    }
-                }
-
-                egui::Frame::new()
-                    .fill(Color32::from_rgba_premultiplied(6, 10, 18, 212))
-                    .corner_radius(egui::CornerRadius::same(8))
-                    .inner_margin(egui::Margin::symmetric(
-                        8,
-                        if layout.compact { 5 } else { 6 },
-                    ))
-                    .show(ui, |ui| {
-                        ui.set_width(cover_slot_max_size.x);
-                        ui.label(
-                            egui::RichText::new(truncate_text(
-                                &rom.display_title,
-                                layout.title_max_chars,
-                            ))
-                            .size(layout.title_size)
-                            .strong()
-                            .color(palette.text),
-                        );
-                    });
-
-                egui::Frame::new()
-                    .fill(Color32::from_rgba_premultiplied(6, 10, 18, 220))
-                    .stroke(egui::Stroke::new(
-                        1.0,
-                        blend_color(palette.border, palette.accent, 0.18),
-                    ))
-                    .corner_radius(egui::CornerRadius::same(255))
-                    .inner_margin(egui::Margin::symmetric(8, 3))
-                    .show(ui, |ui| {
-                        ui.label(
-                            egui::RichText::new(rom.rom.system.as_str())
-                                .size((layout.line_size - 1.0).max(9.0))
-                                .strong()
-                                .color(palette.accent),
-                        );
-                    });
-
-                if layout.show_metadata {
-                    if let Some(meta_line) = rom_metadata_line(rom) {
-                        let meta_visible = selected || hovered;
-                        let meta_t = ui.ctx().animate_bool(
-                            ui.id().with(("rom-meta", rom.rom.id.as_str())),
-                            meta_visible,
-                        );
-                        let max_chars = if layout.meta_max_chars == 0 {
-                            layout.title_max_chars
-                        } else {
-                            layout.meta_max_chars
-                        };
-                        if meta_t > 0.0 {
-                            ui.label(
-                                egui::RichText::new(truncate_text(&meta_line, max_chars))
-                                    .size(layout.line_size)
-                                    .color(scale_color_alpha(palette.text_muted, meta_t)),
-                            );
-                        }
-                    }
-                }
-            });
-        let card_rect = card_frame.response.rect;
-        let glow_t = if focus_selected { 1.0 } else { 0.0 };
-        if glow_t > 0.0 {
-            Self::paint_selection_glow(
-                ui,
-                card_rect,
-                if layout.compact { 12 } else { 16 },
-                palette.accent,
-                0.78 + glow_t * 0.22,
+        if title_t > 0.0 {
+            let scrim_height = (layout.card_height * 0.32).clamp(34.0, 46.0);
+            let scrim_rect = egui::Rect::from_min_max(
+                egui::pos2(tile_rect.left(), tile_rect.bottom() - scrim_height),
+                tile_rect.right_bottom(),
+            );
+            ui.painter().rect_filled(
+                scrim_rect,
+                egui::CornerRadius::same(0),
+                Color32::from_rgba_premultiplied(5, 8, 14, (198.0 * title_t) as u8),
+            );
+            ui.painter().text(
+                scrim_rect.shrink2(egui::vec2(9.0, 0.0)).center(),
+                egui::Align2::CENTER_CENTER,
+                truncate_text(&rom.display_title, layout.title_max_chars),
+                egui::FontId::proportional(layout.title_size),
+                scale_color_alpha(palette.text, title_t),
             );
         }
 
-        if !favorite_consumed && card_response.clicked() {
+        let stroke_t = if selected {
+            if focus_selected {
+                1.0
+            } else {
+                0.76
+            }
+        } else {
+            interaction_t * 0.52
+        };
+        ui.painter().rect_stroke(
+            tile_rect,
+            corner_radius,
+            egui::Stroke::new(
+                1.0 + stroke_t * 0.9,
+                blend_color(palette.border, palette.accent, stroke_t),
+            ),
+            egui::StrokeKind::Inside,
+        );
+
+        if focus_selected {
+            Self::paint_selection_glow(ui, tile_rect, 4, palette.accent, 0.95);
+        }
+
+        let favorite_size = (layout.card_width * 0.2).clamp(23.0, 28.0);
+        let favorite_rect = egui::Rect::from_min_size(
+            egui::pos2(
+                tile_rect.right() - favorite_size - 7.0,
+                tile_rect.top() + 7.0,
+            ),
+            egui::vec2(favorite_size, favorite_size),
+        );
+        let favorite_response = ui
+            .interact(
+                favorite_rect,
+                ui.id().with(("favorite-chip", rom.rom.id.as_str())),
+                egui::Sense::click(),
+            )
+            .on_hover_text(if rom.is_favorite {
+                "Remove Favorite"
+            } else {
+                "Add Favorite"
+            });
+        let favorite_hover_t = ui.ctx().animate_bool(
+            ui.id().with(("favorite-chip-hover", rom.rom.id.as_str())),
+            favorite_response.hovered(),
+        );
+        let favorite_fill = if rom.is_favorite {
+            blend_color(
+                Color32::from_rgba_premultiplied(5, 8, 14, 202),
+                palette.accent,
+                0.34 + favorite_hover_t * 0.18,
+            )
+        } else {
+            blend_color(
+                Color32::from_rgba_premultiplied(5, 8, 14, 188),
+                palette.panel_alt,
+                favorite_hover_t * 0.32,
+            )
+        };
+        let favorite_stroke = if rom.is_favorite {
+            palette.accent
+        } else {
+            blend_color(palette.border, palette.text, 0.32 + favorite_hover_t * 0.24)
+        };
+        ui.painter()
+            .rect_filled(favorite_rect, egui::CornerRadius::same(255), favorite_fill);
+        ui.painter().rect_stroke(
+            favorite_rect,
+            egui::CornerRadius::same(255),
+            egui::Stroke::new(1.0, favorite_stroke),
+            egui::StrokeKind::Inside,
+        );
+        ui.painter().text(
+            favorite_rect.center(),
+            egui::Align2::CENTER_CENTER,
+            if rom.is_favorite { "★" } else { "☆" },
+            egui::FontId::proportional((layout.title_size + 1.0).min(14.0)),
+            palette.text,
+        );
+        if favorite_response.clicked() {
+            favorite_consumed = true;
+            self.state.menu_nav.focus_region = MenuFocusRegion::Grid;
+            self.set_active_grid_index(source, index);
+            self.state.selection.set(Some(rom.rom.id.clone()));
+            let result = if rom.is_favorite {
+                self.services.remove_favorite(&rom.rom.id)
+            } else {
+                self.services.add_favorite(&rom.rom.id)
+            };
+            match result {
+                Ok(_) => needs_refresh = true,
+                Err(err) => {
+                    self.state.status = if rom.is_favorite {
+                        format!("Failed to remove favorite: {err}")
+                    } else {
+                        format!("Failed to favorite ROM: {err}")
+                    };
+                }
+            }
+        }
+
+        if !favorite_consumed && tile_response.clicked() {
             self.state.menu_nav.focus_region = MenuFocusRegion::Grid;
             self.set_active_grid_index(source, index);
             self.state.selection.set(Some(rom.rom.id.clone()));
         }
-        if !favorite_consumed && card_response.double_clicked() {
+        if !favorite_consumed && tile_response.double_clicked() {
             self.state.menu_nav.focus_region = MenuFocusRegion::Grid;
             self.set_active_grid_index(source, index);
             self.state.selection.set(Some(rom.rom.id.clone()));
@@ -721,41 +525,98 @@ impl NativeArcadeUiApp {
     }
 }
 
-fn rom_metadata_line(rom: &RomCard) -> Option<String> {
-    let mut parts = Vec::new();
-    if let Some(year) = rom.release_year {
-        parts.push(year.to_string());
+fn center_crop_uv(texture_size: egui::Vec2, draw_size: egui::Vec2) -> egui::Rect {
+    let full = egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0));
+    if texture_size.x <= 0.0 || texture_size.y <= 0.0 || draw_size.x <= 0.0 || draw_size.y <= 0.0 {
+        return full;
     }
-    if let Some(value) = rom.manufacturer.as_deref().map(str::trim) {
-        if !value.is_empty() {
-            parts.push(value.to_string());
-        }
-    }
-    if let Some(value) = rom.genre.as_deref().map(str::trim) {
-        if !value.is_empty() {
-            parts.push(value.to_string());
-        }
-    }
-    if parts.is_empty() {
-        None
+
+    let texture_aspect = texture_size.x / texture_size.y;
+    let draw_aspect = draw_size.x / draw_size.y;
+    if texture_aspect > draw_aspect {
+        let visible_width = (draw_aspect / texture_aspect).clamp(0.0, 1.0);
+        let left = (1.0 - visible_width) * 0.5;
+        egui::Rect::from_min_max(egui::pos2(left, 0.0), egui::pos2(left + visible_width, 1.0))
     } else {
-        Some(parts.join(" • "))
+        let visible_height = (texture_aspect / draw_aspect).clamp(0.0, 1.0);
+        let top = (1.0 - visible_height) * 0.5;
+        egui::Rect::from_min_max(egui::pos2(0.0, top), egui::pos2(1.0, top + visible_height))
     }
 }
 
-fn preferred_cover_aspect_for_system(system: &str) -> f32 {
-    match system {
-        "NES" => 0.72,
-        "SNES" => 1.28,
-        "GENESIS" => 0.8,
-        "GB" => 0.74,
-        "GBA" => 1.22,
-        "N64" => 0.86,
-        "ARCADE" => 0.78,
-        "SATURN" => 0.8,
-        "PCECD" => 0.8,
-        _ => 0.8,
+fn paint_missing_art_tile(
+    ui: &egui::Ui,
+    tile_rect: egui::Rect,
+    title: &str,
+    layout: RomGridLayout,
+    palette: ThemePalette,
+) {
+    let inner = tile_rect.shrink(12.0);
+    ui.painter().rect_filled(
+        tile_rect,
+        egui::CornerRadius::same(4),
+        Color32::from_rgba_premultiplied(4, 5, 8, 245),
+    );
+    ui.painter().rect_filled(
+        tile_rect.shrink(1.0),
+        egui::CornerRadius::same(3),
+        Color32::from_rgba_premultiplied(0, 0, 0, 226),
+    );
+
+    let lines = title_lines(title, layout.title_max_chars, 3);
+    let line_height = layout.title_size + 3.0;
+    let total_height = line_height * lines.len() as f32;
+    let first_y = inner.center().y - total_height * 0.5 + line_height * 0.5;
+    for (index, line) in lines.iter().enumerate() {
+        ui.painter().text(
+            egui::pos2(inner.center().x, first_y + index as f32 * line_height),
+            egui::Align2::CENTER_CENTER,
+            line,
+            egui::FontId::proportional(layout.title_size),
+            palette.text,
+        );
     }
+}
+
+fn title_lines(value: &str, max_chars: usize, max_lines: usize) -> Vec<String> {
+    let words = value.split_whitespace().collect::<Vec<_>>();
+    if words.is_empty() || max_lines == 0 {
+        return vec![truncate_text(value, max_chars)];
+    }
+
+    let chars_per_line = (max_chars / max_lines.max(1)).clamp(8, 14);
+    let mut lines = Vec::new();
+    let mut current = String::new();
+    for word in words {
+        let needed = if current.is_empty() {
+            word.chars().count()
+        } else {
+            current.chars().count() + 1 + word.chars().count()
+        };
+        if needed > chars_per_line && !current.is_empty() {
+            lines.push(current);
+            current = String::new();
+            if lines.len() + 1 == max_lines {
+                break;
+            }
+        }
+        if !current.is_empty() {
+            current.push(' ');
+        }
+        current.push_str(word);
+    }
+    if !current.is_empty() {
+        lines.push(current);
+    }
+
+    if lines.is_empty() {
+        lines.push(value.to_string());
+    }
+    let mut trimmed = lines.into_iter().take(max_lines).collect::<Vec<_>>();
+    if let Some(last) = trimmed.last_mut() {
+        *last = truncate_text(last, chars_per_line);
+    }
+    trimmed
 }
 
 fn blend_color(from: Color32, to: Color32, t: f32) -> Color32 {

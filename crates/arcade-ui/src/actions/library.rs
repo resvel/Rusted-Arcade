@@ -39,8 +39,7 @@ impl NativeArcadeUiApp {
         available_width: f32,
         available_height: f32,
     ) -> usize {
-        let content_width = Self::content_band_width_for(available_width);
-        let metrics = grid_metrics_for(GridSource::Library, content_width, available_height);
+        let metrics = grid_metrics_for(GridSource::Library, available_width, available_height);
         let columns = metrics.columns.max(1);
         let visible_rows = metrics.visible_rows.max(1);
 
