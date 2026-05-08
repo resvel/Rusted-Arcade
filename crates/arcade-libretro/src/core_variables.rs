@@ -27,7 +27,7 @@ pub(super) fn default_core_variables_for(
         apply_parallel_n64_env_overrides(&mut variables);
     }
 
-    if core_name == "pcsx2" {
+    if matches!(core_name, "pcsx2" | "pcarmsx2") {
         apply_pcsx2_forced(&mut variables, backend);
     }
 
@@ -672,6 +672,19 @@ mod tests {
         let emulation = emulation_with("pcsx2", "pcsx2_renderer", "Vulkan");
         let variables =
             default_core_variables_for("pcsx2", VideoBackendKind::MacosMetalView, &emulation);
+        let renderer = variables
+            .get("pcsx2_renderer")
+            .expect("pcsx2 renderer override");
+
+        assert_eq!(renderer.to_str().expect("utf8"), "Metal");
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn default_core_variables_force_pcarmsx2_metal_renderer_when_backend_is_macos_metal() {
+        let emulation = emulation_with("pcarmsx2", "pcsx2_renderer", "Vulkan");
+        let variables =
+            default_core_variables_for("pcarmsx2", VideoBackendKind::MacosMetalView, &emulation);
         let renderer = variables
             .get("pcsx2_renderer")
             .expect("pcsx2 renderer override");

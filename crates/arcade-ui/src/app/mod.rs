@@ -63,6 +63,7 @@ pub struct NativeArcadeUiApp {
     /// Deferred key releases for DOS keyboard passthrough; flushed after at least one core frame.
     pub(crate) pending_retro_key_releases: Vec<(u32, u16)>,
     pub(crate) play_runner: Option<PlayRunner>,
+    close_after_play_session_stop: bool,
 }
 
 pub(crate) enum ManageUiMessage {
@@ -246,6 +247,7 @@ impl NativeArcadeUiApp {
             retro_keys_pressed_since_frame: HashSet::new(),
             pending_retro_key_releases: Vec::new(),
             play_runner: None,
+            close_after_play_session_stop: false,
         };
 
         #[cfg(feature = "gamepad")]
@@ -372,7 +374,30 @@ fn frontend_capabilities(frame: &eframe::Frame) -> FrontendCapabilities {
 }
 
 impl eframe::App for NativeArcadeUiApp {
+    fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        if self.host.is_loaded() || self.play_runner.is_some() {
+            tracing::info!("app exiting with active play session; unloading core");
+            self.stop_play_session();
+        }
+    }
+
     fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+        if self.close_after_play_session_stop {
+            self.close_after_play_session_stop = false;
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            return;
+        }
+
+        let close_requested = ctx.input(|input| input.viewport().close_requested());
+        if close_requested && (self.host.is_loaded() || self.play_runner.is_some()) {
+            tracing::info!("close requested with active play session; unloading core before close");
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            self.stop_play_session();
+            self.close_after_play_session_stop = true;
+            ctx.request_repaint();
+            return;
+        }
+
         #[cfg(target_os = "macos")]
         {
             self.wgpu_target_format = frame.wgpu_render_state().map(|state| state.target_format);

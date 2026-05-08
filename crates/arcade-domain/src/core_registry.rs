@@ -112,6 +112,7 @@ pub fn core_profiles() -> Vec<CoreProfile> {
         mame2003_plus_profile(),
         mednafen_psx_hw_profile(),
         pcsx2_profile(),
+        pcarmsx2_profile(),
         play_profile(),
         flycast_profile(),
         dolphin_profile(),
@@ -1842,12 +1843,7 @@ fn pcsx2_profile() -> CoreProfile {
                 "Performance",
                 enabled_options(true),
             ),
-            var(
-                "pcsx2_mtvu",
-                "MTVU",
-                "Performance",
-                enabled_options(true),
-            ),
+            var("pcsx2_mtvu", "MTVU", "Performance", enabled_options(true)),
             var(
                 "pcsx2_instant_vu1",
                 "Instant VU1",
@@ -1893,6 +1889,13 @@ fn pcsx2_profile() -> CoreProfile {
             ),
         ],
     }
+}
+
+fn pcarmsx2_profile() -> CoreProfile {
+    let mut profile = pcsx2_profile();
+    profile.core_name = "pcarmsx2";
+    profile.display_name = "pcarmsx2 ARM64 PoC";
+    profile
 }
 
 // ---------------------------------------------------------------------------

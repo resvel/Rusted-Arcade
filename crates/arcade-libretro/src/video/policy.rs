@@ -33,7 +33,7 @@ pub(super) fn select_backend(input: BackendPolicyInput<'_>) -> BackendSelection 
         return select_dolphin_backend(input);
     }
 
-    if input.core_name == "pcsx2" {
+    if matches!(input.core_name, "pcsx2" | "pcarmsx2") {
         return select_pcsx2_backend(input);
     }
 
@@ -73,7 +73,7 @@ fn select_play_backend(_input: BackendPolicyInput<'_>) -> BackendSelection {
 fn select_pcsx2_backend(input: BackendPolicyInput<'_>) -> BackendSelection {
     const RETRO_HW_CONTEXT_VULKAN: u32 = 6;
 
-    #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+    #[cfg(target_os = "macos")]
     if pcsx2_metal_poc_enabled() {
         return BackendSelection {
             chosen: VideoBackendKind::MacosMetalView,
@@ -119,7 +119,7 @@ fn select_pcsx2_backend(input: BackendPolicyInput<'_>) -> BackendSelection {
     }
 }
 
-#[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+#[cfg(target_os = "macos")]
 fn pcsx2_metal_poc_enabled() -> bool {
     match std::env::var("ARCADE_PCSX2_METAL_POC") {
         Ok(value) => {
@@ -471,7 +471,7 @@ mod tests {
         restore_env(key, previous);
     }
 
-    #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+    #[cfg(target_os = "macos")]
     #[test]
     fn pcsx2_metal_poc_env_selects_private_metal_backend() {
         let _guard = pcsx2_metal_env_lock();
@@ -481,6 +481,28 @@ mod tests {
 
         let selection = select_backend(BackendPolicyInput {
             core_name: "pcsx2",
+            requires_hw_render: true,
+            requested_hw_context_type: Some(6),
+            frontend_capabilities: &frontend(false, true),
+        });
+
+        assert_eq!(selection.chosen, VideoBackendKind::MacosMetalView);
+        assert!(selection.fallbacks.is_empty());
+        assert!(selection.allows_external_present);
+
+        restore_env(key, previous);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn pcarmsx2_metal_poc_env_selects_private_metal_backend() {
+        let _guard = pcsx2_metal_env_lock();
+        let key = "ARCADE_PCSX2_METAL_POC";
+        let previous = std::env::var_os(key);
+        std::env::set_var(key, "1");
+
+        let selection = select_backend(BackendPolicyInput {
+            core_name: "pcarmsx2",
             requires_hw_render: true,
             requested_hw_context_type: Some(6),
             frontend_capabilities: &frontend(false, true),

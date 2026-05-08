@@ -1207,10 +1207,8 @@ struct LoadedCore {
 }
 
 fn is_pcsx2_core_label(core_label: &str) -> bool {
-    core_label
-        .strip_suffix("_libretro")
-        .unwrap_or(core_label)
-        .eq_ignore_ascii_case("pcsx2")
+    let normalized = core_label.strip_suffix("_libretro").unwrap_or(core_label);
+    normalized.eq_ignore_ascii_case("pcsx2") || normalized.eq_ignore_ascii_case("pcarmsx2")
 }
 
 fn default_core_library_filename(core_name: &str) -> String {
@@ -1218,11 +1216,11 @@ fn default_core_library_filename(core_name: &str) -> String {
 }
 
 fn pcsx2_metal_poc_enabled() -> bool {
-    #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+    #[cfg(target_os = "macos")]
     {
         return env_flag_enabled("ARCADE_PCSX2_METAL_POC");
     }
-    #[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
+    #[cfg(not(target_os = "macos"))]
     {
         false
     }
@@ -1542,6 +1540,16 @@ impl LibretroHost {
     }
 
     pub fn resolve_core_candidates(&self, core_name: &str) -> Vec<PathBuf> {
+        if core_name.eq_ignore_ascii_case("pcarmsx2") {
+            if let Ok(path) = std::env::var("ARCADE_PCSX2_METAL_CORE_PATH") {
+                let path = path.trim();
+                if !path.is_empty() {
+                    return vec![PathBuf::from(path)];
+                }
+            }
+            return vec![self.core_root.join("pcarmsx2_libretro.dylib")];
+        }
+
         if core_name.eq_ignore_ascii_case("pcsx2") && pcsx2_metal_poc_enabled() {
             if let Ok(path) = std::env::var("ARCADE_PCSX2_METAL_CORE_PATH") {
                 let path = path.trim();
@@ -2976,11 +2984,9 @@ mod tests {
     use super::*;
 
     static ACTIVE_RUNTIME_TEST_LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
-    #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
     static PCSX2_METAL_ENV_TEST_LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
     use tempfile::tempdir;
 
-    #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
     fn restore_env(key: &str, previous: Option<std::ffi::OsString>) {
         if let Some(previous) = previous {
             std::env::set_var(key, previous);
@@ -3095,7 +3101,7 @@ mod tests {
         assert_eq!(file_names, vec!["dolphin_libretro.dylib"]);
     }
 
-    #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+    #[cfg(target_os = "macos")]
     #[test]
     fn resolve_core_candidates_keeps_stable_pcsx2_when_metal_env_absent() {
         let _guard = PCSX2_METAL_ENV_TEST_LOCK.lock();
@@ -3126,7 +3132,7 @@ mod tests {
         restore_env(path_key, previous_path);
     }
 
-    #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+    #[cfg(target_os = "macos")]
     #[test]
     fn resolve_core_candidates_prefers_pcsx2_metal_poc_when_env_enabled() {
         let _guard = PCSX2_METAL_ENV_TEST_LOCK.lock();
@@ -3157,7 +3163,7 @@ mod tests {
         restore_env(path_key, previous_path);
     }
 
-    #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+    #[cfg(target_os = "macos")]
     #[test]
     fn resolve_core_candidates_uses_pcsx2_metal_core_path_override() {
         let _guard = PCSX2_METAL_ENV_TEST_LOCK.lock();
@@ -3184,6 +3190,57 @@ mod tests {
         );
 
         restore_env(enabled_key, previous_enabled);
+        restore_env(path_key, previous_path);
+    }
+
+    #[test]
+    fn resolve_core_candidates_uses_pcarmsx2_default_filename() {
+        let _guard = PCSX2_METAL_ENV_TEST_LOCK.lock();
+        let path_key = "ARCADE_PCSX2_METAL_CORE_PATH";
+        let previous_path = std::env::var_os(path_key);
+        std::env::remove_var(path_key);
+
+        let dir = tempdir().expect("tempdir");
+        let host = LibretroHost::new(
+            dir.path().join("cores"),
+            dir.path().join("bios"),
+            dir.path().join("saves"),
+            EmulationConfig::default(),
+        );
+
+        let candidates = host.resolve_core_candidates("pcarmsx2");
+        let file_names = candidates
+            .iter()
+            .map(|path| path.file_name().and_then(|f| f.to_str()).unwrap_or(""))
+            .collect::<Vec<_>>();
+
+        assert_eq!(file_names, vec!["pcarmsx2_libretro.dylib"]);
+
+        restore_env(path_key, previous_path);
+    }
+
+    #[test]
+    fn resolve_core_candidates_uses_pcarmsx2_core_path_override() {
+        let _guard = PCSX2_METAL_ENV_TEST_LOCK.lock();
+        let path_key = "ARCADE_PCSX2_METAL_CORE_PATH";
+        let previous_path = std::env::var_os(path_key);
+        std::env::set_var(path_key, "/tmp/arcade/pcarmsx2_libretro.dylib");
+
+        let dir = tempdir().expect("tempdir");
+        let host = LibretroHost::new(
+            dir.path().join("cores"),
+            dir.path().join("bios"),
+            dir.path().join("saves"),
+            EmulationConfig::default(),
+        );
+
+        let candidates = host.resolve_core_candidates("pcarmsx2");
+
+        assert_eq!(
+            candidates,
+            vec![PathBuf::from("/tmp/arcade/pcarmsx2_libretro.dylib")]
+        );
+
         restore_env(path_key, previous_path);
     }
 
@@ -3676,6 +3733,8 @@ mod tests {
     fn pcsx2_core_label_matches_plain_and_libretro_stem() {
         assert!(is_pcsx2_core_label("pcsx2"));
         assert!(is_pcsx2_core_label("pcsx2_libretro"));
+        assert!(is_pcsx2_core_label("pcarmsx2"));
+        assert!(is_pcsx2_core_label("pcarmsx2_libretro"));
         assert!(!is_pcsx2_core_label("play_libretro"));
     }
 

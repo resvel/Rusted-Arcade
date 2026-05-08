@@ -29,14 +29,27 @@ pub const SUPPORTED_CORES: &[&str] = &[
     "mednafen_saturn",
     "mednafen_pce_fast",
     "pcsx2",
+    "pcarmsx2",
     "play",
     "flycast",
     "dolphin",
     "dosbox_pure",
 ];
 
+fn env_flag_enabled(name: &str) -> bool {
+    std::env::var(name)
+        .map(|value| {
+            let normalized = value.trim().to_ascii_lowercase();
+            matches!(normalized.as_str(), "1" | "true" | "yes" | "on")
+        })
+        .unwrap_or(false)
+}
+
 fn default_ps2_core() -> &'static str {
     if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
+        if env_flag_enabled("ARCADE_PCSX2_METAL_POC") {
+            return "pcarmsx2";
+        }
         "play"
     } else {
         "pcsx2"
@@ -85,7 +98,7 @@ fn allowlist(system: &str) -> &'static [&'static str] {
 
 fn ps2_allowlist() -> &'static [&'static str] {
     if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
-        &["play"]
+        &["play", "pcarmsx2"]
     } else {
         &["pcsx2", "play"]
     }
@@ -182,6 +195,33 @@ pub fn resolve_arcade_hard_core_override(title: Option<&str>) -> Option<String> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    fn with_env_flag_removed<T>(key: &str, f: impl FnOnce() -> T) -> T {
+        let _guard = ENV_LOCK.lock().expect("env lock");
+        let previous = std::env::var_os(key);
+        std::env::remove_var(key);
+        let result = f();
+        if let Some(value) = previous {
+            std::env::set_var(key, value);
+        }
+        result
+    }
+
+    fn with_env_flag<T>(key: &str, value: &str, f: impl FnOnce() -> T) -> T {
+        let _guard = ENV_LOCK.lock().expect("env lock");
+        let previous = std::env::var_os(key);
+        std::env::set_var(key, value);
+        let result = f();
+        if let Some(value) = previous {
+            std::env::set_var(key, value);
+        } else {
+            std::env::remove_var(key);
+        }
+        result
+    }
 
     #[test]
     fn core_mapping_defaults_work() {
@@ -197,18 +237,32 @@ mod tests {
 
     #[test]
     fn ps2_default_core_respects_platform() {
-        let expected = if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
-            "play"
-        } else {
-            "pcsx2"
-        };
-        assert_eq!(resolve_core("PS2", None), expected);
+        with_env_flag_removed("ARCADE_PCSX2_METAL_POC", || {
+            let expected = if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
+                "play"
+            } else {
+                "pcsx2"
+            };
+            assert_eq!(resolve_core("PS2", None), expected);
+        });
+    }
+
+    #[test]
+    fn ps2_metal_poc_env_selects_pcarmsx2_on_native_macos_arm64() {
+        with_env_flag("ARCADE_PCSX2_METAL_POC", "1", || {
+            let expected = if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
+                "pcarmsx2"
+            } else {
+                "pcsx2"
+            };
+            assert_eq!(resolve_core("PS2", None), expected);
+        });
     }
 
     #[test]
     fn ps2_allowlist_respects_native_macos_arm64_play_path() {
         let expected: &[&str] = if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
-            &["play"]
+            &["play", "pcarmsx2"]
         } else {
             &["pcsx2", "play"]
         };
@@ -223,6 +277,16 @@ mod tests {
             "pcsx2"
         };
         assert_eq!(resolve_core("PS2", Some("pcsx2")), expected);
+    }
+
+    #[test]
+    fn ps2_pcarmsx2_override_is_available_only_on_native_macos_arm64() {
+        let expected = if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
+            "pcarmsx2"
+        } else {
+            "pcsx2"
+        };
+        assert_eq!(resolve_core("PS2", Some("pcarmsx2")), expected);
     }
 
     #[test]

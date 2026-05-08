@@ -9,6 +9,7 @@
 
 # Local PCSX2 Metal proof-of-concept source snapshot.
 /third_party/libretro-ps2-metal-poc/
+/third_party/pcarmsx2/
 
 # macOS / editor noise
 .DS_Store
