@@ -1015,6 +1015,8 @@ pub(super) unsafe extern "C" fn retro_environment(cmd: u32, data: *mut c_void) -
             let preferred = match runtime.video_coordinator.lock().current_backend_kind() {
                 VideoBackendKind::Vulkan => RETRO_HW_CONTEXT_VULKAN,
                 VideoBackendKind::OpenGl => RETRO_HW_CONTEXT_OPENGL_CORE,
+                #[cfg(target_os = "macos")]
+                VideoBackendKind::MacosMetalView => RETRO_HW_CONTEXT_NONE,
                 VideoBackendKind::Software => RETRO_HW_CONTEXT_NONE,
             };
             unsafe {
@@ -1614,6 +1616,8 @@ pub(super) unsafe extern "C" fn retro_input_state(
     id: u32,
 ) -> i16 {
     const RETRO_DEVICE_MASK: u32 = 0xff;
+    const RETRO_DEVICE_JOYPAD: u32 = 1;
+    const RETRO_DEVICE_ID_JOYPAD_MASK: u32 = 256;
 
     let Some(runtime) = active_runtime() else {
         return 0;
@@ -1624,6 +1628,22 @@ pub(super) unsafe extern "C" fn retro_input_state(
     }
 
     let base_device = device & RETRO_DEVICE_MASK;
+    if base_device == RETRO_DEVICE_JOYPAD && id == RETRO_DEVICE_ID_JOYPAD_MASK {
+        let mut mask = 0_u16;
+        for button_id in 0..16_u32 {
+            let pressed = state
+                .input_state
+                .get(&(port, base_device, index, button_id))
+                .copied()
+                .unwrap_or(0)
+                != 0;
+            if pressed {
+                mask |= 1_u16 << button_id;
+            }
+        }
+        return mask as i16;
+    }
+
     if base_device != device {
         return state
             .input_state

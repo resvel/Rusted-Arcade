@@ -424,11 +424,16 @@ pub(super) fn update_external_vulkan_present_state(runtime: &HostRuntime, active
 
 pub(super) fn sync_external_vulkan_window_visibility_on_main_thread(runtime: &HostRuntime) {
     let mut state = runtime.hw_render_state.lock();
-    let Some(visible) = state.external_vulkan_visibility_pending.take() else {
-        return;
-    };
-    if let Some(window) = state.external_vulkan_window.as_mut() {
-        window.set_visible(visible);
+    if let Some(visible) = state.external_vulkan_visibility_pending.take() {
+        if let Some(window) = state.external_vulkan_window.as_mut() {
+            window.set_visible(visible);
+        }
+    }
+    #[cfg(target_os = "macos")]
+    if let Some(visible) = state.macos_metal_visibility_pending.take() {
+        if let Some(window) = state.external_macos_metal_window.as_mut() {
+            window.set_visible(visible);
+        }
     }
 }
 

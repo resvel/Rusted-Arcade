@@ -5,6 +5,8 @@ pub enum VideoBackendKind {
     Software,
     OpenGl,
     Vulkan,
+    #[cfg(target_os = "macos")]
+    MacosMetalView,
 }
 
 pub(super) struct BackendPolicyInput<'a> {
@@ -71,6 +73,15 @@ fn select_play_backend(_input: BackendPolicyInput<'_>) -> BackendSelection {
 fn select_pcsx2_backend(input: BackendPolicyInput<'_>) -> BackendSelection {
     const RETRO_HW_CONTEXT_VULKAN: u32 = 6;
 
+    #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+    if pcsx2_metal_poc_enabled() {
+        return BackendSelection {
+            chosen: VideoBackendKind::MacosMetalView,
+            fallbacks: vec![],
+            allows_external_present: true,
+        };
+    }
+
     if input.requested_hw_context_type == Some(RETRO_HW_CONTEXT_VULKAN) {
         return BackendSelection {
             chosen: VideoBackendKind::Vulkan,
@@ -105,6 +116,17 @@ fn select_pcsx2_backend(input: BackendPolicyInput<'_>) -> BackendSelection {
         chosen: VideoBackendKind::Vulkan,
         fallbacks: vec![VideoBackendKind::Software],
         allows_external_present: cfg!(target_os = "macos"),
+    }
+}
+
+#[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+fn pcsx2_metal_poc_enabled() -> bool {
+    match std::env::var("ARCADE_PCSX2_METAL_POC") {
+        Ok(value) => {
+            let normalized = value.trim().to_ascii_lowercase();
+            !matches!(normalized.as_str(), "0" | "false" | "off" | "no")
+        }
+        Err(_) => false,
     }
 }
 
@@ -277,6 +299,20 @@ fn requested_context_is_gl_or_unspecified(requested_hw_context_type: Option<u32>
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Mutex, OnceLock};
+
+    fn pcsx2_metal_env_lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(())).lock().expect("lock")
+    }
+
+    fn restore_env(key: &str, previous: Option<std::ffi::OsString>) {
+        if let Some(previous) = previous {
+            std::env::set_var(key, previous);
+        } else {
+            std::env::remove_var(key);
+        }
+    }
 
     fn frontend(gl: bool, windowing: bool) -> FrontendCapabilities {
         FrontendCapabilities {
@@ -395,6 +431,11 @@ mod tests {
 
     #[test]
     fn pcsx2_defaults_to_vulkan_backend() {
+        let _guard = pcsx2_metal_env_lock();
+        let key = "ARCADE_PCSX2_METAL_POC";
+        let previous = std::env::var_os(key);
+        std::env::remove_var(key);
+
         let selection = select_backend(BackendPolicyInput {
             core_name: "pcsx2",
             requires_hw_render: false,
@@ -405,10 +446,17 @@ mod tests {
         assert_eq!(selection.chosen, VideoBackendKind::Vulkan);
         assert_eq!(selection.fallbacks, vec![VideoBackendKind::Software]);
         assert_eq!(selection.allows_external_present, cfg!(target_os = "macos"));
+
+        restore_env(key, previous);
     }
 
     #[test]
     fn pcsx2_accepts_vulkan_request() {
+        let _guard = pcsx2_metal_env_lock();
+        let key = "ARCADE_PCSX2_METAL_POC";
+        let previous = std::env::var_os(key);
+        std::env::remove_var(key);
+
         let selection = select_backend(BackendPolicyInput {
             core_name: "pcsx2",
             requires_hw_render: true,
@@ -419,6 +467,30 @@ mod tests {
         assert_eq!(selection.chosen, VideoBackendKind::Vulkan);
         assert_eq!(selection.fallbacks, vec![VideoBackendKind::Software]);
         assert_eq!(selection.allows_external_present, cfg!(target_os = "macos"));
+
+        restore_env(key, previous);
+    }
+
+    #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+    #[test]
+    fn pcsx2_metal_poc_env_selects_private_metal_backend() {
+        let _guard = pcsx2_metal_env_lock();
+        let key = "ARCADE_PCSX2_METAL_POC";
+        let previous = std::env::var_os(key);
+        std::env::set_var(key, "1");
+
+        let selection = select_backend(BackendPolicyInput {
+            core_name: "pcsx2",
+            requires_hw_render: true,
+            requested_hw_context_type: Some(6),
+            frontend_capabilities: &frontend(false, true),
+        });
+
+        assert_eq!(selection.chosen, VideoBackendKind::MacosMetalView);
+        assert!(selection.fallbacks.is_empty());
+        assert!(selection.allows_external_present);
+
+        restore_env(key, previous);
     }
 
     #[test]

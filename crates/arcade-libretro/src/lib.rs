@@ -4,6 +4,8 @@ mod content;
 mod core_variables;
 mod diagnostics;
 mod hardware_render;
+#[cfg(target_os = "macos")]
+mod macos_metal;
 mod vfs;
 mod video;
 mod vulkan_render;
@@ -21,7 +23,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Weak};
 
 use anyhow::{anyhow, Context, Result};
-use arcade_domain::{resolve_core, EmulationConfig, N64CpuCoreMode};
+use arcade_domain::{resolve_core, EmulationConfig};
 use ash::vk;
 #[cfg(feature = "audio")]
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
@@ -45,6 +47,8 @@ use self::core_variables::{
     apply_core_runtime_env_defaults, default_core_variables_for, store_default_variable,
 };
 use self::diagnostics::*;
+#[cfg(target_os = "macos")]
+use self::macos_metal::*;
 use self::video::{FrameDelivery, VideoCoordinator, VideoSessionInfo};
 use self::{audio::*, callbacks::*, hardware_render::*, vfs::*, vulkan_render::*};
 
@@ -680,6 +684,12 @@ struct HardwareRenderState {
     external_vulkan_window: Option<ExternalVulkanWindow>,
     external_vulkan_present_active: bool,
     external_vulkan_visibility_pending: Option<bool>,
+    #[cfg(target_os = "macos")]
+    external_macos_metal_window: Option<ExternalMacosMetalWindow>,
+    #[cfg(target_os = "macos")]
+    macos_metal_present_active: bool,
+    #[cfg(target_os = "macos")]
+    macos_metal_visibility_pending: Option<bool>,
     vulkan_fallback_frame_size: Option<(u32, u32)>,
     vulkan_negotiation: Option<VulkanNegotiationCallbacks>,
     vulkan: Option<VulkanInterfaceState>,
@@ -1207,12 +1217,74 @@ fn default_core_library_filename(core_name: &str) -> String {
     format!("{core_name}_libretro.dylib")
 }
 
-fn core_library_filename_candidates(core_name: &str, emulation: &EmulationConfig) -> Vec<String> {
+fn pcsx2_metal_poc_enabled() -> bool {
+    #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+    {
+        return env_flag_enabled("ARCADE_PCSX2_METAL_POC");
+    }
+    #[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
+    {
+        false
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn configure_arcade_lrps2_metal_host(
+    library: &Library,
+    runtime: &Arc<HostRuntime>,
+    core_path: &Path,
+) -> Result<()> {
+    if runtime.video_coordinator.lock().current_backend_kind() != VideoBackendKind::MacosMetalView {
+        return Ok(());
+    }
+
+    let set_host: Symbol<ArcadeLrps2SetMetalHostV1Fn> = unsafe {
+        library
+            .get(b"arcade_lrps2_set_metal_host_v1\0")
+            .with_context(|| {
+                format!(
+                    "Metal PoC core {} does not export arcade_lrps2_set_metal_host_v1",
+                    core_path.display()
+                )
+            })?
+    };
+
+    let payload = {
+        let state = runtime.hw_render_state.lock();
+        let Some(window) = state.external_macos_metal_window.as_ref() else {
+            return Err(anyhow!(
+                "Metal PoC selected, but no Arcade Metal NSView host window was created"
+            ));
+        };
+        window.host_payload(Arc::as_ptr(runtime).cast_mut().cast())
+    };
+
+    let accepted = unsafe { set_host(&payload as *const ArcadeLrps2MetalHostV1) };
+    if !accepted {
+        return Err(anyhow!(
+            "Metal PoC core {} rejected Arcade's Metal host payload",
+            core_path.display()
+        ));
+    }
+
+    Ok(())
+}
+
+#[cfg(not(target_os = "macos"))]
+fn configure_arcade_lrps2_metal_host(
+    _library: &Library,
+    _runtime: &Arc<HostRuntime>,
+    _core_path: &Path,
+) -> Result<()> {
+    Ok(())
+}
+
+fn core_library_filename_candidates(core_name: &str, _emulation: &EmulationConfig) -> Vec<String> {
     let mut candidates = Vec::new();
 
     #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
     if core_name.eq_ignore_ascii_case("mupen64plus_next")
-        && emulation.n64.cpu_core_mode == N64CpuCoreMode::DynamicRecompiler
+        && _emulation.n64.cpu_core_mode == arcade_domain::N64CpuCoreMode::DynamicRecompiler
     {
         candidates.push(String::from(
             "mupen64plus_next_dynarec_arm64_libretro.dylib",
@@ -1362,8 +1434,26 @@ impl LibretroHost {
     pub fn presentation_status(&self) -> PresentationStatus {
         let expects_external_present = self.expects_external_vulkan_present_window();
         let hw_state = self.runtime.hw_render_state.lock();
-        let external_window_created = hw_state.external_vulkan_window.is_some();
-        let external_present_active = hw_state.external_vulkan_present_active;
+        let external_window_created = hw_state.external_vulkan_window.is_some() || {
+            #[cfg(target_os = "macos")]
+            {
+                hw_state.external_macos_metal_window.is_some()
+            }
+            #[cfg(not(target_os = "macos"))]
+            {
+                false
+            }
+        };
+        let external_present_active = hw_state.external_vulkan_present_active || {
+            #[cfg(target_os = "macos")]
+            {
+                hw_state.macos_metal_present_active
+            }
+            #[cfg(not(target_os = "macos"))]
+            {
+                false
+            }
+        };
         drop(hw_state);
         let metrics = self.runtime.vulkan_present_metrics.lock();
         PresentationStatus {
@@ -1382,6 +1472,10 @@ impl LibretroHost {
         state.external_vulkan_window_title = title;
         let title = state.external_vulkan_window_title.clone();
         if let Some(window) = state.external_vulkan_window.as_mut() {
+            window.set_title(&title);
+        }
+        #[cfg(target_os = "macos")]
+        if let Some(window) = state.external_macos_metal_window.as_mut() {
             window.set_title(&title);
         }
     }
@@ -1448,6 +1542,16 @@ impl LibretroHost {
     }
 
     pub fn resolve_core_candidates(&self, core_name: &str) -> Vec<PathBuf> {
+        if core_name.eq_ignore_ascii_case("pcsx2") && pcsx2_metal_poc_enabled() {
+            if let Ok(path) = std::env::var("ARCADE_PCSX2_METAL_CORE_PATH") {
+                let path = path.trim();
+                if !path.is_empty() {
+                    return vec![PathBuf::from(path)];
+                }
+            }
+            return vec![self.core_root.join("pcsx2_metal_poc_libretro.dylib")];
+        }
+
         core_library_filename_candidates(core_name, &self.emulation)
             .into_iter()
             .map(|file_name| self.core_root.join(file_name))
@@ -1612,6 +1716,7 @@ impl LibretroHost {
 
             let library = unsafe { Library::new(core_path) }
                 .with_context(|| format!("failed to load core {}", core_path.display()))?;
+            configure_arcade_lrps2_metal_host(&library, &self.runtime, core_path)?;
             let api = unsafe { load_api(&library)? };
             register_active_runtime(&self.runtime);
 
@@ -2871,7 +2976,18 @@ mod tests {
     use super::*;
 
     static ACTIVE_RUNTIME_TEST_LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
+    #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+    static PCSX2_METAL_ENV_TEST_LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
     use tempfile::tempdir;
+
+    #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+    fn restore_env(key: &str, previous: Option<std::ffi::OsString>) {
+        if let Some(previous) = previous {
+            std::env::set_var(key, previous);
+        } else {
+            std::env::remove_var(key);
+        }
+    }
 
     #[test]
     fn controller_device_prefers_joypad_over_none() {
@@ -2977,6 +3093,98 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert_eq!(file_names, vec!["dolphin_libretro.dylib"]);
+    }
+
+    #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+    #[test]
+    fn resolve_core_candidates_keeps_stable_pcsx2_when_metal_env_absent() {
+        let _guard = PCSX2_METAL_ENV_TEST_LOCK.lock();
+        let enabled_key = "ARCADE_PCSX2_METAL_POC";
+        let path_key = "ARCADE_PCSX2_METAL_CORE_PATH";
+        let previous_enabled = std::env::var_os(enabled_key);
+        let previous_path = std::env::var_os(path_key);
+        std::env::remove_var(enabled_key);
+        std::env::set_var(path_key, "/tmp/arcade/pcsx2-metal.dylib");
+
+        let dir = tempdir().expect("tempdir");
+        let host = LibretroHost::new(
+            dir.path().join("cores"),
+            dir.path().join("bios"),
+            dir.path().join("saves"),
+            EmulationConfig::default(),
+        );
+
+        let candidates = host.resolve_core_candidates("pcsx2");
+        let file_names = candidates
+            .iter()
+            .map(|path| path.file_name().and_then(|f| f.to_str()).unwrap_or(""))
+            .collect::<Vec<_>>();
+
+        assert_eq!(file_names, vec!["pcsx2_libretro.dylib"]);
+
+        restore_env(enabled_key, previous_enabled);
+        restore_env(path_key, previous_path);
+    }
+
+    #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+    #[test]
+    fn resolve_core_candidates_prefers_pcsx2_metal_poc_when_env_enabled() {
+        let _guard = PCSX2_METAL_ENV_TEST_LOCK.lock();
+        let enabled_key = "ARCADE_PCSX2_METAL_POC";
+        let path_key = "ARCADE_PCSX2_METAL_CORE_PATH";
+        let previous_enabled = std::env::var_os(enabled_key);
+        let previous_path = std::env::var_os(path_key);
+        std::env::set_var(enabled_key, "1");
+        std::env::remove_var(path_key);
+
+        let dir = tempdir().expect("tempdir");
+        let host = LibretroHost::new(
+            dir.path().join("cores"),
+            dir.path().join("bios"),
+            dir.path().join("saves"),
+            EmulationConfig::default(),
+        );
+
+        let candidates = host.resolve_core_candidates("pcsx2");
+        let file_names = candidates
+            .iter()
+            .map(|path| path.file_name().and_then(|f| f.to_str()).unwrap_or(""))
+            .collect::<Vec<_>>();
+
+        assert_eq!(file_names, vec!["pcsx2_metal_poc_libretro.dylib"]);
+
+        restore_env(enabled_key, previous_enabled);
+        restore_env(path_key, previous_path);
+    }
+
+    #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+    #[test]
+    fn resolve_core_candidates_uses_pcsx2_metal_core_path_override() {
+        let _guard = PCSX2_METAL_ENV_TEST_LOCK.lock();
+        let enabled_key = "ARCADE_PCSX2_METAL_POC";
+        let path_key = "ARCADE_PCSX2_METAL_CORE_PATH";
+        let previous_enabled = std::env::var_os(enabled_key);
+        let previous_path = std::env::var_os(path_key);
+        std::env::set_var(enabled_key, "1");
+        std::env::set_var(path_key, "/tmp/arcade/pcsx2-metal.dylib");
+
+        let dir = tempdir().expect("tempdir");
+        let host = LibretroHost::new(
+            dir.path().join("cores"),
+            dir.path().join("bios"),
+            dir.path().join("saves"),
+            EmulationConfig::default(),
+        );
+
+        let candidates = host.resolve_core_candidates("pcsx2");
+
+        assert_eq!(
+            candidates,
+            vec![PathBuf::from("/tmp/arcade/pcsx2-metal.dylib")]
+        );
+
+        restore_env(enabled_key, previous_enabled);
+        restore_env(path_key, previous_path);
     }
 
     #[cfg(unix)]
@@ -3132,7 +3340,7 @@ mod tests {
     fn resolve_core_candidates_uses_default_n64_filename_for_cached_lane() {
         let dir = tempdir().expect("tempdir");
         let mut emulation = EmulationConfig::default();
-        emulation.n64.cpu_core_mode = N64CpuCoreMode::CachedInterpreter;
+        emulation.n64.cpu_core_mode = arcade_domain::N64CpuCoreMode::CachedInterpreter;
         let host = LibretroHost::new(
             dir.path().join("cores"),
             dir.path().join("bios"),
@@ -3154,7 +3362,7 @@ mod tests {
     fn resolve_core_candidates_prefers_experimental_n64_dynarec_binary_on_arm64() {
         let dir = tempdir().expect("tempdir");
         let mut emulation = EmulationConfig::default();
-        emulation.n64.cpu_core_mode = N64CpuCoreMode::DynamicRecompiler;
+        emulation.n64.cpu_core_mode = arcade_domain::N64CpuCoreMode::DynamicRecompiler;
         let host = LibretroHost::new(
             dir.path().join("cores"),
             dir.path().join("bios"),
@@ -3241,6 +3449,49 @@ mod tests {
         assert_eq!(frame.height, 1);
         assert_eq!(frame.data, pixels);
         assert_eq!(frame.pixel_format, PixelFormat::Rgba8888);
+
+        clear_active_runtime(&runtime);
+    }
+
+    #[test]
+    fn input_state_reports_joypad_mask_from_pressed_buttons() {
+        const RETRO_DEVICE_JOYPAD: u32 = 1;
+        const RETRO_DEVICE_ID_JOYPAD_B: u32 = 0;
+        const RETRO_DEVICE_ID_JOYPAD_START: u32 = 3;
+        const RETRO_DEVICE_ID_JOYPAD_R3: u32 = 15;
+        const RETRO_DEVICE_ID_JOYPAD_MASK: u32 = 256;
+
+        let _guard = ACTIVE_RUNTIME_TEST_LOCK.lock();
+        *ACTIVE_RUNTIME.lock() = None;
+        let runtime = Arc::new(HostRuntime::default());
+        register_active_runtime(&runtime);
+
+        {
+            let mut state = runtime.callback_state.lock();
+            state.input_state.insert(
+                (0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_B),
+                i16::MAX,
+            );
+            state.input_state.insert(
+                (0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_START),
+                i16::MAX,
+            );
+            state.input_state.insert(
+                (0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_R3),
+                i16::MAX,
+            );
+        }
+
+        let mask =
+            unsafe { retro_input_state(0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_MASK) }
+                as u16;
+
+        assert_eq!(
+            mask,
+            (1_u16 << RETRO_DEVICE_ID_JOYPAD_B)
+                | (1_u16 << RETRO_DEVICE_ID_JOYPAD_START)
+                | (1_u16 << RETRO_DEVICE_ID_JOYPAD_R3)
+        );
 
         clear_active_runtime(&runtime);
     }

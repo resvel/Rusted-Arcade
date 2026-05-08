@@ -163,6 +163,11 @@ fn apply_parallel_n64_forced(
                 // directly via the settings UI.)
             }
         }
+        #[cfg(target_os = "macos")]
+        VideoBackendKind::MacosMetalView => {
+            insert_core_variable(variables, "parallel-n64-gfxplugin", "parallel");
+            insert_core_variable(variables, "parallel-n64-rspplugin", "parallel");
+        }
     }
     #[cfg(target_os = "macos")]
     if rosetta && !variables.contains_key("parallel-n64-cpucore") {
@@ -191,6 +196,10 @@ fn apply_pcsx2_forced(variables: &mut HashMap<String, CString>, backend: VideoBa
         }
         VideoBackendKind::OpenGl => {
             insert_core_variable(variables, "pcsx2_renderer", "OpenGL");
+        }
+        #[cfg(target_os = "macos")]
+        VideoBackendKind::MacosMetalView => {
+            insert_core_variable(variables, "pcsx2_renderer", "Metal");
         }
         VideoBackendKind::Software => {}
     }
@@ -655,6 +664,53 @@ mod tests {
         if let Some(previous) = previous {
             std::env::set_var(key, previous);
         }
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn default_core_variables_force_pcsx2_metal_renderer_when_backend_is_macos_metal() {
+        let emulation = emulation_with("pcsx2", "pcsx2_renderer", "Vulkan");
+        let variables =
+            default_core_variables_for("pcsx2", VideoBackendKind::MacosMetalView, &emulation);
+        let renderer = variables
+            .get("pcsx2_renderer")
+            .expect("pcsx2 renderer override");
+
+        assert_eq!(renderer.to_str().expect("utf8"), "Metal");
+    }
+
+    #[test]
+    fn default_core_variables_enable_pcsx2_speedhack_baseline() {
+        let variables = default_core_variables_for(
+            "pcsx2",
+            VideoBackendKind::Vulkan,
+            &EmulationConfig::default(),
+        );
+
+        assert_eq!(
+            variables
+                .get("pcsx2_speedhacks_toggles")
+                .expect("pcsx2 speedhacks default")
+                .to_str()
+                .expect("utf8"),
+            "enabled"
+        );
+        assert_eq!(
+            variables
+                .get("pcsx2_mtvu")
+                .expect("pcsx2 mtvu default")
+                .to_str()
+                .expect("utf8"),
+            "enabled"
+        );
+        assert_eq!(
+            variables
+                .get("pcsx2_ee_cycle_rate")
+                .expect("pcsx2 ee cycle rate default")
+                .to_str()
+                .expect("utf8"),
+            "0"
+        );
     }
 
     #[test]

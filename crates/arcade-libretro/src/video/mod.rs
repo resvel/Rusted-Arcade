@@ -1,4 +1,6 @@
 mod gl;
+#[cfg(target_os = "macos")]
+mod macos_metal;
 mod policy;
 mod software;
 mod vulkan;
@@ -256,10 +258,14 @@ impl VideoCoordinator {
         let mut software_backend = software::SoftwareBackend;
         let mut gl_backend = gl::OpenGlBackend;
         let mut vulkan_backend = vulkan::VulkanBackend;
+        #[cfg(target_os = "macos")]
+        let mut macos_metal_backend = macos_metal::MacosMetalViewBackend;
         let _ = runtime;
         f(&mut software_backend)?;
         f(&mut gl_backend)?;
         f(&mut vulkan_backend)?;
+        #[cfg(target_os = "macos")]
+        f(&mut macos_metal_backend)?;
         Ok(())
     }
 
@@ -268,6 +274,8 @@ impl VideoCoordinator {
             VideoBackendKind::Software => f(&software::SoftwareBackend),
             VideoBackendKind::OpenGl => f(&gl::OpenGlBackend),
             VideoBackendKind::Vulkan => f(&vulkan::VulkanBackend),
+            #[cfg(target_os = "macos")]
+            VideoBackendKind::MacosMetalView => f(&macos_metal::MacosMetalViewBackend),
         }
     }
 
@@ -288,6 +296,11 @@ impl VideoCoordinator {
             }
             VideoBackendKind::Vulkan => {
                 let mut backend = vulkan::VulkanBackend;
+                f(&mut backend)
+            }
+            #[cfg(target_os = "macos")]
+            VideoBackendKind::MacosMetalView => {
+                let mut backend = macos_metal::MacosMetalViewBackend;
                 f(&mut backend)
             }
         }
