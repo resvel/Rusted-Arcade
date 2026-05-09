@@ -1212,10 +1212,16 @@ fn default_core_library_filename(core_name: &str) -> String {
     format!("{core_name}_libretro.dylib")
 }
 
-fn pcsx2_metal_poc_enabled() -> bool {
+fn pcsx2_metal_poc_enabled(core_name: &str) -> bool {
     #[cfg(target_os = "macos")]
     {
-        return env_flag_enabled("ARCADE_PCSX2_METAL_POC");
+        match std::env::var("ARCADE_PCSX2_METAL_POC") {
+            Ok(value) => {
+                let normalized = value.trim().to_ascii_lowercase();
+                !matches!(normalized.as_str(), "0" | "false" | "off" | "no")
+            }
+            Err(_) => cfg!(target_arch = "x86_64") && core_name.eq_ignore_ascii_case("pcsx2"),
+        }
     }
     #[cfg(not(target_os = "macos"))]
     {
@@ -1547,7 +1553,7 @@ impl LibretroHost {
             return vec![self.core_root.join("pcarmsx2_libretro.dylib")];
         }
 
-        if core_name.eq_ignore_ascii_case("pcsx2") && pcsx2_metal_poc_enabled() {
+        if core_name.eq_ignore_ascii_case("pcsx2") && pcsx2_metal_poc_enabled(core_name) {
             if let Ok(path) = std::env::var("ARCADE_PCSX2_METAL_CORE_PATH") {
                 let path = path.trim();
                 if !path.is_empty() {
@@ -3031,7 +3037,7 @@ mod tests {
 
     #[cfg(target_os = "macos")]
     #[test]
-    fn resolve_core_candidates_keeps_stable_pcsx2_when_metal_env_absent() {
+    fn resolve_core_candidates_default_pcsx2_matches_macos_arch() {
         let _guard = PCSX2_METAL_ENV_TEST_LOCK.lock();
         let enabled_key = "ARCADE_PCSX2_METAL_POC";
         let path_key = "ARCADE_PCSX2_METAL_CORE_PATH";
@@ -3054,7 +3060,12 @@ mod tests {
             .map(|path| path.file_name().and_then(|f| f.to_str()).unwrap_or(""))
             .collect::<Vec<_>>();
 
-        assert_eq!(file_names, vec!["pcsx2_libretro.dylib"]);
+        let expected = if cfg!(target_arch = "x86_64") {
+            vec!["pcsx2-metal.dylib"]
+        } else {
+            vec!["pcsx2_libretro.dylib"]
+        };
+        assert_eq!(file_names, expected);
 
         restore_env(enabled_key, previous_enabled);
         restore_env(path_key, previous_path);
@@ -3086,6 +3097,37 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert_eq!(file_names, vec!["pcsx2_metal_poc_libretro.dylib"]);
+
+        restore_env(enabled_key, previous_enabled);
+        restore_env(path_key, previous_path);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn resolve_core_candidates_can_disable_default_pcsx2_metal_poc_with_env() {
+        let _guard = PCSX2_METAL_ENV_TEST_LOCK.lock();
+        let enabled_key = "ARCADE_PCSX2_METAL_POC";
+        let path_key = "ARCADE_PCSX2_METAL_CORE_PATH";
+        let previous_enabled = std::env::var_os(enabled_key);
+        let previous_path = std::env::var_os(path_key);
+        std::env::set_var(enabled_key, "0");
+        std::env::set_var(path_key, "/tmp/arcade/pcsx2-metal.dylib");
+
+        let dir = tempdir().expect("tempdir");
+        let host = LibretroHost::new(
+            dir.path().join("cores"),
+            dir.path().join("bios"),
+            dir.path().join("saves"),
+            EmulationConfig::default(),
+        );
+
+        let candidates = host.resolve_core_candidates("pcsx2");
+        let file_names = candidates
+            .iter()
+            .map(|path| path.file_name().and_then(|f| f.to_str()).unwrap_or(""))
+            .collect::<Vec<_>>();
+
+        assert_eq!(file_names, vec!["pcsx2_libretro.dylib"]);
 
         restore_env(enabled_key, previous_enabled);
         restore_env(path_key, previous_path);

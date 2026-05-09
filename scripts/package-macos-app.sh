@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-APP_NAME="${APP_NAME:-Rusted Arcade}"
-BUNDLE_IDENTIFIER="${BUNDLE_IDENTIFIER:-com.jules.rusted-arcade}"
+APP_NAME="${APP_NAME:-}"
+BUNDLE_IDENTIFIER="${BUNDLE_IDENTIFIER:-}"
 PROFILE="${PROFILE:-release}"
 TARGET="${TARGET:-}"
 CODESIGN="${CODESIGN:-1}"
@@ -17,6 +17,11 @@ if [[ -z "${APP_VERSION}" ]]; then
   APP_VERSION="0.1.0"
 fi
 
+case "${TARGET}" in
+  x86_64) TARGET="x86_64-apple-darwin" ;;
+  arm64 | aarch64) TARGET="aarch64-apple-darwin" ;;
+esac
+
 EFFECTIVE_TARGET="${TARGET}"
 if [[ -z "${EFFECTIVE_TARGET}" ]]; then
   case "$(uname -m)" in
@@ -25,13 +30,18 @@ if [[ -z "${EFFECTIVE_TARGET}" ]]; then
   esac
 fi
 
-PLIST_ENVIRONMENT=""
-if [[ "${EFFECTIVE_TARGET}" == "x86_64-apple-darwin" ]]; then
-  PLIST_ENVIRONMENT='  <key>LSEnvironment</key>
-  <dict>
-    <key>ARCADE_PCSX2_METAL_POC</key>
-    <string>1</string>
-  </dict>'
+if [[ -z "${APP_NAME}" ]]; then
+  case "${EFFECTIVE_TARGET}" in
+    x86_64-apple-darwin) APP_NAME="RustedArcade_Universal_" ;;
+    *) APP_NAME="RustedArcade" ;;
+  esac
+fi
+
+if [[ -z "${BUNDLE_IDENTIFIER}" ]]; then
+  case "${EFFECTIVE_TARGET}" in
+    x86_64-apple-darwin) BUNDLE_IDENTIFIER="com.jules.rusted-arcade.universal" ;;
+    *) BUNDLE_IDENTIFIER="com.jules.rusted-arcade" ;;
+  esac
 fi
 
 if [[ "${PROFILE}" == "release" ]]; then
@@ -101,16 +111,11 @@ cat > "${CONTENTS_DIR}/Info.plist" <<PLIST
   <string>${APP_VERSION}</string>
   <key>LSMinimumSystemVersion</key>
   <string>13.0</string>
-${PLIST_ENVIRONMENT}
   <key>NSHighResolutionCapable</key>
   <true/>
 </dict>
 </plist>
 PLIST
-
-if [[ -n "${PLIST_ENVIRONMENT}" ]]; then
-  echo "Baked ARCADE_PCSX2_METAL_POC=1 into Info.plist LSEnvironment."
-fi
 
 echo "APPL????" > "${CONTENTS_DIR}/PkgInfo"
 

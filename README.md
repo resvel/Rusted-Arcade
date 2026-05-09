@@ -146,7 +146,7 @@ See [CORES.md](CORES.md) for core distribution policy and platform-specific note
 | Nintendo 64 | `mupen64plus_next` |
 | Arcade | `fbneo` |
 | PlayStation | `mednafen_psx_hw` |
-| PlayStation 2 | `play` on Apple Silicon macOS |
+| PlayStation 2 | `pcarmsx2` on Apple Silicon macOS, `pcsx2` on x86_64/Rosetta |
 | Dreamcast | `flycast` |
 | GameCube | `dolphin` |
 | Sega Saturn | `mednafen_saturn` |
