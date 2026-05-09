@@ -399,9 +399,6 @@ struct EnvironmentContext {
     frame_time_reference_usecs: i64,
     frame_time_last_instant: Option<std::time::Instant>,
     runtime_video_fps: Option<f64>,
-    run_fps_probe_start: Option<std::time::Instant>,
-    run_fps_probe_frames: u32,
-    run_fps_probe_logged: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -831,7 +828,6 @@ fn is_audio_master_pacing_core_name(core_name: &str) -> bool {
         || core_name.eq_ignore_ascii_case("mednafen_psx_hw")
         || core_name.eq_ignore_ascii_case("mednafen_saturn")
         || core_name.eq_ignore_ascii_case("pcsx2")
-        || core_name.eq_ignore_ascii_case("play")
 }
 
 fn frame_time_usecs_for_core(
@@ -1584,21 +1580,6 @@ impl LibretroHost {
         rom_path: &Path,
     ) -> Result<String> {
         let core_name = resolve_core(system, core_override);
-        if core_name.eq_ignore_ascii_case("play")
-            && !self
-                .runtime
-                .video_coordinator
-                .lock()
-                .frontend_capabilities()
-                .supports_play_gl_backend()
-        {
-            return Err(anyhow!(
-                "Play native PS2 requires either ARCADE_MACOS_RENDERER=glow or the macOS wgpu private GL bridge; current frontend cannot provide an OpenGL hardware context."
-            ));
-        }
-        if core_name.eq_ignore_ascii_case("play") {
-            ensure_private_play_gl_context_for_wgpu(&self.runtime)?;
-        }
         let candidates = self.resolve_core_candidates(&core_name);
         let core_path = candidates
             .iter()
@@ -1788,28 +1769,6 @@ impl LibretroHost {
                     context.runtime_video_fps = sanitized_video_fps(av_info.timing.fps);
                 }
                 let _version = unsafe { (api.api_version)() };
-                let normalized_video_fps = normalize_display_fps(av_info.timing.fps);
-                let pacing_interval_ms =
-                    if normalized_video_fps.is_finite() && normalized_video_fps > 0.0 {
-                        1000.0 / normalized_video_fps
-                    } else {
-                        0.0
-                    };
-                if core_name.eq_ignore_ascii_case("play") {
-                    info!(
-                        target: "arcade_libretro::core_loader",
-                        core = core_name,
-                        reported_video_fps = av_info.timing.fps,
-                        normalized_video_fps,
-                        pacing_interval_ms,
-                        sample_rate_hz = av_info.timing.sample_rate,
-                        base_width = av_info.geometry.base_width,
-                        base_height = av_info.geometry.base_height,
-                        max_width = av_info.geometry.max_width,
-                        max_height = av_info.geometry.max_height,
-                        "play startup AV timing"
-                    );
-                }
                 let preferred_sample_rate_hz =
                     if av_info.timing.sample_rate.is_finite() && av_info.timing.sample_rate > 0.0 {
                         Some(av_info.timing.sample_rate.round() as u32)
@@ -2165,41 +2124,6 @@ impl LibretroHost {
                 run_duration.as_secs_f64() * 1000.0
             );
         }
-        {
-            let mut context = self.runtime.environment_context.lock();
-            if !context.run_fps_probe_logged
-                && context
-                    .loaded_core_name
-                    .as_deref()
-                    .is_some_and(|name| name.eq_ignore_ascii_case("play"))
-            {
-                let now = std::time::Instant::now();
-                let start = context.run_fps_probe_start.unwrap_or(now);
-                if context.run_fps_probe_start.is_none() {
-                    context.run_fps_probe_start = Some(now);
-                }
-                context.run_fps_probe_frames = context.run_fps_probe_frames.saturating_add(1);
-                let elapsed = now.saturating_duration_since(start);
-                if context.run_fps_probe_frames >= 180
-                    && elapsed >= std::time::Duration::from_millis(500)
-                {
-                    let measured_run_fps =
-                        context.run_fps_probe_frames as f64 / elapsed.as_secs_f64();
-                    info!(
-                        target: "arcade_libretro::core_loader",
-                        core = "play",
-                        reported_video_fps = loaded.video_fps,
-                        normalized_video_fps = normalize_display_fps(loaded.video_fps),
-                        measured_run_fps,
-                        sample_frames = context.run_fps_probe_frames,
-                        sample_secs = elapsed.as_secs_f64(),
-                        "play startup measured run cadence"
-                    );
-                    context.run_fps_probe_logged = true;
-                }
-            }
-        }
-
         let present_started_at = std::time::Instant::now();
         if uses_hw_render {
             restore_frontend_gl_context(&self.runtime, "before frame delivery");
@@ -3767,7 +3691,6 @@ mod tests {
         assert!(is_audio_master_pacing_core_name("mednafen_psx_hw"));
         assert!(is_audio_master_pacing_core_name("mednafen_saturn"));
         assert!(is_audio_master_pacing_core_name("pcsx2"));
-        assert!(is_audio_master_pacing_core_name("play"));
         assert!(!is_audio_master_pacing_core_name("fceumm"));
     }
 

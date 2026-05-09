@@ -42,9 +42,6 @@ pub(super) fn configure_environment_context(
         context.frame_time_reference_usecs = 0;
         context.frame_time_last_instant = None;
         context.runtime_video_fps = None;
-        context.run_fps_probe_start = None;
-        context.run_fps_probe_frames = 0;
-        context.run_fps_probe_logged = false;
         let should_log_core_vars = vulkan_debug_enabled()
             || vulkan_handoff_trace_enabled()
             || env_flag_enabled("ARCADE_PARALLEL_RDP_SAFE_DIAG")
@@ -97,40 +94,6 @@ pub(super) fn configure_environment_context(
                     cpucore,
                     count_per_op,
                     count_per_op_denom
-                );
-            }
-        }
-
-        if core_name.eq_ignore_ascii_case("play") {
-            let res_multi = context
-                .variables
-                .get("play_res_multi")
-                .and_then(|value| value.to_str().ok())
-                .unwrap_or("<unset>");
-            let presentation_mode = context
-                .variables
-                .get("play_presentation_mode")
-                .and_then(|value| value.to_str().ok())
-                .unwrap_or("<unset>");
-            let bilinear = context
-                .variables
-                .get("play_bilinear_filtering")
-                .and_then(|value| value.to_str().ok())
-                .unwrap_or("<unset>");
-
-            eprintln!(
-                "[CORE-VARS] backend={:?} play_res_multi={} play_presentation_mode={} play_bilinear_filtering={}",
-                backend, res_multi, presentation_mode, bilinear
-            );
-
-            if should_log_core_vars {
-                info!(
-                    target: "arcade_libretro::core_loader",
-                    "configured play core vars backend={:?} play_res_multi={} play_presentation_mode={} play_bilinear_filtering={}",
-                    backend,
-                    res_multi,
-                    presentation_mode,
-                    bilinear
                 );
             }
         }

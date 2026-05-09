@@ -38,10 +38,6 @@ pub(super) fn select_backend(input: BackendPolicyInput<'_>) -> BackendSelection 
         return select_pcsx2_backend(input);
     }
 
-    if input.core_name == "play" {
-        return select_play_backend(input);
-    }
-
     if input.requires_hw_render
         && input.frontend_capabilities.supports_gl_backend()
         && requested_context_is_gl_or_unspecified(input.requested_hw_context_type)
@@ -55,17 +51,6 @@ pub(super) fn select_backend(input: BackendPolicyInput<'_>) -> BackendSelection 
 
     BackendSelection {
         chosen: VideoBackendKind::Software,
-        fallbacks: vec![],
-        allows_external_present: false,
-    }
-}
-
-fn select_play_backend(_input: BackendPolicyInput<'_>) -> BackendSelection {
-    // Play! relies on a GL hardware-render path in libretro.
-    // Do not fall back to software here: forcing software can lead to unstable
-    // startup behavior (including hard crashes) instead of a clean launch error.
-    BackendSelection {
-        chosen: VideoBackendKind::OpenGl,
         fallbacks: vec![],
         allows_external_present: false,
     }
@@ -328,16 +313,6 @@ mod tests {
         }
     }
 
-    #[cfg(target_os = "macos")]
-    fn macos_wgpu_frontend() -> FrontendCapabilities {
-        FrontendCapabilities {
-            renderer_name: Some(String::from("eframe_wgpu")),
-            gl_context: None,
-            window_handle_kind: Some(String::from("AppKit")),
-            display_handle_kind: Some(String::from("AppKit")),
-        }
-    }
-
     #[test]
     fn gl_hardware_core_uses_opengl_when_frontend_gl_exists() {
         let selection = select_backend(BackendPolicyInput {
@@ -399,41 +374,6 @@ mod tests {
         assert_eq!(selection.chosen, VideoBackendKind::Vulkan);
         assert_eq!(selection.fallbacks, vec![VideoBackendKind::Software]);
         assert!(selection.allows_external_present);
-    }
-
-    #[test]
-    fn play_core_forces_opengl_without_software_fallback() {
-        let selection = select_backend(BackendPolicyInput {
-            core_name: "play",
-            requires_hw_render: false,
-            requested_hw_context_type: None,
-            force_macos_metal_view: false,
-            frontend_capabilities: &frontend(false, false),
-        });
-
-        assert_eq!(selection.chosen, VideoBackendKind::OpenGl);
-        assert!(selection.fallbacks.is_empty());
-        assert!(!selection.allows_external_present);
-    }
-
-    #[cfg(target_os = "macos")]
-    #[test]
-    fn play_core_accepts_wgpu_frontend_via_private_gl_bridge_capability() {
-        let frontend = macos_wgpu_frontend();
-        assert!(frontend.supports_play_gl_backend());
-        assert!(frontend.supports_private_macos_play_gl_bridge());
-
-        let selection = select_backend(BackendPolicyInput {
-            core_name: "play",
-            requires_hw_render: false,
-            requested_hw_context_type: None,
-            force_macos_metal_view: false,
-            frontend_capabilities: &frontend,
-        });
-
-        assert_eq!(selection.chosen, VideoBackendKind::OpenGl);
-        assert!(selection.fallbacks.is_empty());
-        assert!(!selection.allows_external_present);
     }
 
     #[test]

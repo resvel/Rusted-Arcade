@@ -172,28 +172,6 @@ mod tests {
 
     #[cfg(target_os = "macos")]
     #[test]
-    fn macos_default_renderer_stays_wgpu_even_when_play_core_exists() {
-        let previous = std::env::var_os("ARCADE_MACOS_RENDERER");
-        std::env::remove_var("ARCADE_MACOS_RENDERER");
-        let core_root =
-            std::env::temp_dir().join(format!("arcade-renderer-test-{}", std::process::id()));
-        std::fs::create_dir_all(&core_root).expect("create core root");
-        std::fs::write(core_root.join("play_libretro.dylib"), b"core").expect("write core marker");
-
-        assert!(matches!(
-            select_native_renderer(Some(&core_root)),
-            eframe::Renderer::Wgpu
-        ));
-
-        let _ = std::fs::remove_dir_all(&core_root);
-        match previous {
-            Some(value) => std::env::set_var("ARCADE_MACOS_RENDERER", value),
-            None => std::env::remove_var("ARCADE_MACOS_RENDERER"),
-        }
-    }
-
-    #[cfg(target_os = "macos")]
-    #[test]
     fn macos_explicit_glow_renderer_override_still_works() {
         let previous = std::env::var_os("ARCADE_MACOS_RENDERER");
         std::env::set_var("ARCADE_MACOS_RENDERER", "glow");

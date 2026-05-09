@@ -42,11 +42,10 @@ fn is_audio_master_pacing_core(core_name: &str) -> bool {
         || core_name.eq_ignore_ascii_case("mupen64plus_next")
         || core_name.eq_ignore_ascii_case("mednafen_psx_hw")
         || core_name.eq_ignore_ascii_case("mednafen_saturn")
-        || core_name.eq_ignore_ascii_case("play")
 }
 
 fn is_tight_frame_clock_core(core_name: &str) -> bool {
-    core_name.eq_ignore_ascii_case("play") || core_name.eq_ignore_ascii_case("pcsx2")
+    core_name.eq_ignore_ascii_case("pcsx2")
 }
 
 fn play_frames_to_run_for_elapsed(
@@ -999,7 +998,6 @@ mod tests {
         assert!(is_audio_master_pacing_core("mupen64plus_next"));
         assert!(is_audio_master_pacing_core("mednafen_psx_hw"));
         assert!(is_audio_master_pacing_core("mednafen_saturn"));
-        assert!(is_audio_master_pacing_core("play"));
         assert!(!is_audio_master_pacing_core("pcsx2"));
         assert!(!is_audio_master_pacing_core("fceumm"));
     }
@@ -1029,8 +1027,7 @@ mod tests {
     }
 
     #[test]
-    fn tight_frame_clock_cores_include_play_and_pcsx2() {
-        assert!(is_tight_frame_clock_core("play"));
+    fn tight_frame_clock_cores_include_pcsx2() {
         assert!(is_tight_frame_clock_core("pcsx2"));
         assert!(!is_tight_frame_clock_core("flycast"));
     }
@@ -1045,7 +1042,10 @@ mod tests {
             tight_frame_clock_max_catch_up_frames(Some("pcsx2"), false),
             2
         );
-        assert_eq!(tight_frame_clock_max_catch_up_frames(Some("play"), true), 2);
+        assert_eq!(
+            tight_frame_clock_max_catch_up_frames(Some("pcarmsx2"), true),
+            2
+        );
     }
 
     #[test]

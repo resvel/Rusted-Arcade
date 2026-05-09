@@ -113,7 +113,6 @@ pub fn core_profiles() -> Vec<CoreProfile> {
         mednafen_psx_hw_profile(),
         pcsx2_profile(),
         pcarmsx2_profile(),
-        play_profile(),
         flycast_profile(),
         dolphin_profile(),
         mednafen_saturn_profile(),
@@ -1951,42 +1950,6 @@ fn pcarmsx2_profile() -> CoreProfile {
 }
 
 // ---------------------------------------------------------------------------
-// PlayStation 2: play
-// ---------------------------------------------------------------------------
-
-fn play_profile() -> CoreProfile {
-    CoreProfile {
-        core_name: "play",
-        display_name: if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
-            "Play! Native PS2"
-        } else {
-            "Play!"
-        },
-        system: "PS2",
-        variables: vec![
-            var(
-                "play_res_multi",
-                "Resolution Multiplier",
-                "Display",
-                vec![opt_d("1x", "1x Native"), opt("2x"), opt("4x"), opt("8x")],
-            ),
-            var(
-                "play_presentation_mode",
-                "Presentation Mode",
-                "Display",
-                vec![opt("Fit Screen"), opt("Fill Screen"), opt("Original Size")],
-            ),
-            var(
-                "play_bilinear_filtering",
-                "Force Bilinear Filtering",
-                "Display",
-                vec![opt("false"), opt("true")],
-            ),
-        ],
-    }
-}
-
-// ---------------------------------------------------------------------------
 // Dreamcast: flycast
 // ---------------------------------------------------------------------------
 
@@ -2459,7 +2422,6 @@ mod tests {
     fn lookup_by_core_name_works() {
         assert!(core_profile_for("mupen64plus_next").is_some());
         assert!(core_profile_for("fceumm").is_some());
-        assert!(core_profile_for("play").is_some());
         assert!(core_profile_for("pcarmsx2").is_some());
         assert!(core_profile_for("mednafen_saturn").is_some());
         assert!(core_profile_for("mednafen_pce_fast").is_some());

@@ -26,17 +26,6 @@ pub(super) fn make_gl_ctx_current(ctx_id: usize) -> bool {
 
 #[cfg(target_os = "macos")]
 unsafe extern "C" {
-    fn CGLChoosePixelFormat(
-        attribs: *const i32,
-        pix: *mut *mut std::ffi::c_void,
-        npix: *mut i32,
-    ) -> i32;
-    fn CGLCreateContext(
-        pix: *mut std::ffi::c_void,
-        share: *mut std::ffi::c_void,
-        ctx: *mut *mut std::ffi::c_void,
-    ) -> i32;
-    fn CGLSetCurrentContext(ctx: *const std::ffi::c_void) -> i32;
     fn CGLGetCurrentContext() -> *const std::ffi::c_void;
     fn CGLTexImageIOSurface2D(
         ctx: *const std::ffi::c_void,
@@ -65,126 +54,6 @@ const MACOS_GL_TEXTURE_BINDING_RECTANGLE: u32 = 0x84F6;
 
 #[cfg(target_os = "macos")]
 const MACOS_IOSURFACE_RING_SIZE: usize = 2;
-
-#[cfg(target_os = "macos")]
-pub(super) fn ensure_private_play_gl_context_for_wgpu(runtime: &HostRuntime) -> Result<()> {
-    let capabilities = runtime
-        .video_coordinator
-        .lock()
-        .frontend_capabilities()
-        .clone();
-    if capabilities.gl_context.is_some() || !capabilities.supports_private_macos_play_gl_bridge() {
-        return Ok(());
-    }
-    if runtime
-        .hw_render_state
-        .lock()
-        .private_play_gl_context
-        .is_some()
-    {
-        return Ok(());
-    }
-
-    let context = create_private_play_gl_context()
-        .context("failed to set up private macOS Play OpenGL bridge context")?;
-    let raw_context = context.raw_context;
-    let gl = context.gl.clone();
-    {
-        let mut state = runtime.hw_render_state.lock();
-        state.frontend_gl_context = Some(gl);
-        state.eframe_gl_ctx_id = raw_context;
-        state.private_play_gl_context = Some(context);
-        state.using_private_play_gl_context = true;
-    }
-    info!(
-        target: "arcade_libretro::core_loader",
-        "Play macOS private GL bridge initialized CGL context=0x{raw_context:x}"
-    );
-    Ok(())
-}
-
-#[cfg(not(target_os = "macos"))]
-pub(super) fn ensure_private_play_gl_context_for_wgpu(_runtime: &HostRuntime) -> Result<()> {
-    Ok(())
-}
-
-#[cfg(target_os = "macos")]
-fn create_private_play_gl_context() -> Result<MacosPrivateGlContext> {
-    const KCGL_PFA_ACCELERATED: i32 = 73;
-    const KCGL_PFA_OPENGL_PROFILE: i32 = 99;
-    const KCGL_PFA_COLOR_SIZE: i32 = 8;
-    const KCGL_PFA_DEPTH_SIZE: i32 = 12;
-    const KCGL_PFA_STENCIL_SIZE: i32 = 13;
-    const KCGLOGLP_VERSION_3_2_CORE: i32 = 0x3200;
-
-    let attrs = [
-        KCGL_PFA_OPENGL_PROFILE,
-        KCGLOGLP_VERSION_3_2_CORE,
-        KCGL_PFA_ACCELERATED,
-        KCGL_PFA_COLOR_SIZE,
-        24,
-        KCGL_PFA_DEPTH_SIZE,
-        24,
-        KCGL_PFA_STENCIL_SIZE,
-        8,
-        0,
-    ];
-    let mut pixel_format = std::ptr::null_mut();
-    let mut pixel_format_count = 0;
-    let choose_status =
-        unsafe { CGLChoosePixelFormat(attrs.as_ptr(), &mut pixel_format, &mut pixel_format_count) };
-    if choose_status != 0 || pixel_format.is_null() || pixel_format_count <= 0 {
-        return Err(anyhow!(
-            "CGLChoosePixelFormat failed for private Play bridge (status={choose_status}, count={pixel_format_count})"
-        ));
-    }
-
-    let mut raw_context = std::ptr::null_mut();
-    let create_status =
-        unsafe { CGLCreateContext(pixel_format, std::ptr::null_mut(), &mut raw_context) };
-    if create_status != 0 || raw_context.is_null() {
-        unsafe {
-            CGLReleasePixelFormat(pixel_format);
-        }
-        return Err(anyhow!(
-            "CGLCreateContext failed for private Play bridge (status={create_status})"
-        ));
-    }
-    let current_status = unsafe { CGLSetCurrentContext(raw_context.cast_const()) };
-    if current_status != 0 {
-        unsafe {
-            let _ = CGLDestroyContext(raw_context);
-            CGLReleasePixelFormat(pixel_format);
-        }
-        return Err(anyhow!(
-            "CGLSetCurrentContext failed for private Play bridge (status={current_status})"
-        ));
-    }
-
-    let opengl_library =
-        unsafe { Library::new("/System/Library/Frameworks/OpenGL.framework/OpenGL") }
-            .context("failed to open OpenGL.framework for private Play bridge")?;
-    let gl = unsafe {
-        glow::Context::from_loader_function(|name| {
-            let Ok(symbol_name) = CString::new(name) else {
-                return std::ptr::null();
-            };
-            opengl_library
-                .get::<*const std::ffi::c_void>(symbol_name.as_bytes_with_nul())
-                .map(|symbol| *symbol)
-                .unwrap_or(std::ptr::null())
-        })
-    };
-    let gl = Arc::new(gl);
-    log_frontend_gl_context(&gl);
-
-    Ok(MacosPrivateGlContext {
-        raw_context: raw_context as usize,
-        raw_pixel_format: pixel_format as usize,
-        gl,
-        _opengl_library: opengl_library,
-    })
-}
 
 #[cfg(not(target_os = "macos"))]
 pub(super) fn current_gl_ctx_id() -> usize {
@@ -1389,22 +1258,12 @@ pub(super) fn force_default_gl_framebuffer(runtime: &HostRuntime) -> bool {
     std::env::var_os("ARCADE_GL_FORCE_DEFAULT_FRAMEBUFFER").is_some()
 }
 
-fn should_use_strict_gl_texture_match(runtime: &HostRuntime) -> bool {
-    !runtime
-        .environment_context
-        .lock()
-        .loaded_core_name
-        .as_deref()
-        .is_some_and(|core| core.eq_ignore_ascii_case("play"))
+fn should_use_strict_gl_texture_match(_runtime: &HostRuntime) -> bool {
+    true
 }
 
 fn should_allow_default_gl_fallback(runtime: &HostRuntime) -> bool {
-    !runtime
-        .environment_context
-        .lock()
-        .loaded_core_name
-        .as_deref()
-        .is_some_and(|core| core.eq_ignore_ascii_case("play"))
+    !is_direct_gl_texture_core(runtime)
 }
 
 fn should_allow_generic_gl_texture_scan(runtime: &HostRuntime) -> bool {
@@ -1416,15 +1275,13 @@ fn core_name_allows_generic_gl_texture_scan(core_name: Option<&str>) -> bool {
     !core_name.is_some_and(|core| core.eq_ignore_ascii_case("dolphin"))
 }
 
-fn is_play_core(runtime: &HostRuntime) -> bool {
+fn is_direct_gl_texture_core(runtime: &HostRuntime) -> bool {
     runtime
         .environment_context
         .lock()
         .loaded_core_name
         .as_deref()
-        .is_some_and(|core| {
-            core.eq_ignore_ascii_case("play") || core.eq_ignore_ascii_case("flycast")
-        })
+        .is_some_and(|core| core.eq_ignore_ascii_case("flycast"))
 }
 
 fn is_dolphin_core(runtime: &HostRuntime) -> bool {
@@ -1467,8 +1324,8 @@ fn read_gl_framebuffer_rgba(
 }
 
 pub(super) fn should_use_play_direct_gl_texture(runtime: &HostRuntime) -> bool {
-    let play_direct =
-        is_play_core(runtime) && std::env::var_os("ARCADE_PLAY_GL_CPU_READBACK").is_none();
+    let play_direct = is_direct_gl_texture_core(runtime)
+        && std::env::var_os("ARCADE_PLAY_GL_CPU_READBACK").is_none();
     let dolphin_direct =
         is_dolphin_core(runtime) && std::env::var_os("ARCADE_DOLPHIN_GL_CPU_READBACK").is_none();
     play_direct || dolphin_direct
@@ -1618,7 +1475,7 @@ pub(super) fn take_play_direct_gl_texture_frame(
 #[cfg(target_os = "macos")]
 pub(super) fn using_private_play_gl_bridge(runtime: &HostRuntime) -> bool {
     let state = runtime.hw_render_state.lock();
-    state.using_private_play_gl_context && is_play_core(runtime)
+    state.using_private_play_gl_context && is_direct_gl_texture_core(runtime)
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -2169,7 +2026,7 @@ pub(super) fn read_opengl_render_frame(
 ) -> Result<FrameBuffer> {
     const PLAY_TEXTURE_SCAN_WARMUP_FRAMES: u32 = 90;
 
-    let is_play = is_play_core(runtime);
+    let is_play = is_direct_gl_texture_core(runtime);
     let strict_texture_match = should_use_strict_gl_texture_match(runtime);
     let allow_default_fallback = should_allow_default_gl_fallback(runtime);
     let allow_generic_texture_scan = should_allow_generic_gl_texture_scan(runtime);
