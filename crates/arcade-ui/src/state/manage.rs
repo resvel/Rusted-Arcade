@@ -1,6 +1,6 @@
 use std::collections::{BTreeSet, HashMap};
 
-use arcade_domain::{ManageOperationSummary, ManageRomStatus};
+use arcade_domain::{DependencyReport, ManageOperationSummary, ManageRomStatus};
 
 pub(crate) struct ManageState {
     pub(crate) open: bool,
@@ -31,6 +31,7 @@ pub(crate) struct ManageState {
     pub(crate) progress_processed: usize,
     pub(crate) progress_total: Option<usize>,
     pub(crate) last_summary: Option<ManageOperationSummary>,
+    pub(crate) dependency_report: Option<DependencyReport>,
 }
 
 impl ManageState {
@@ -83,6 +84,7 @@ impl Default for ManageState {
             progress_processed: 0,
             progress_total: None,
             last_summary: None,
+            dependency_report: None,
         }
     }
 }

@@ -264,6 +264,19 @@ impl NativeArcadeUiApp {
         }
         app.sync_manage_settings_from_services();
         app.refresh_manage_rows();
+        if app
+            .state
+            .manage
+            .dependency_report
+            .as_ref()
+            .is_some_and(|report| report.has_missing_required())
+        {
+            app.state.current_view = AppView::Settings;
+            app.state.settings_scroll_target =
+                Some(crate::state::SettingsScrollTarget::Dependencies);
+            app.state.status =
+                String::from("Runtime dependencies are missing. Opened Dependency Installer.");
+        }
 
         app
     }

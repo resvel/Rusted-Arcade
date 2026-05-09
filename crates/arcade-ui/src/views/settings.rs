@@ -4,7 +4,7 @@ use eframe::egui;
 use crate::app::NativeArcadeUiApp;
 use crate::state::{
     ControllerAssignmentSource, ControllerInputButtonDebug, ControllerInputDebugSnapshot,
-    SettingsScrollTarget,
+    MenuFocusRegion, SettingsScrollTarget,
 };
 use crate::theme::SYSTEM_FILTERS;
 
@@ -45,39 +45,72 @@ impl NativeArcadeUiApp {
                                 );
                                 ui.add_space(8.0);
                                 ui.spacing_mut().item_spacing = egui::vec2(6.0, 0.0);
-                                for (label, target) in [
-                                    ("Input Settings", SettingsScrollTarget::InputSettings),
-                                    ("TheGamesDB Config", SettingsScrollTarget::TheGamesDbConfig),
-                                ] {
-                                    let button =
-                                        egui::Button::new(egui::RichText::new(label).size(11.0))
-                                            .min_size(egui::vec2(0.0, 24.0))
-                                            .fill(palette.panel_alt)
-                                            .stroke(egui::Stroke::new(1.0, palette.border))
-                                            .corner_radius(egui::CornerRadius::same(255));
-                                    if ui.add(button).clicked() {
+                                let active_section = self
+                                    .state
+                                    .settings_scroll_target
+                                    .unwrap_or(SettingsScrollTarget::AppConfig);
+                                for (index, target) in
+                                    SettingsScrollTarget::ALL.iter().copied().enumerate()
+                                {
+                                    let selected = active_section == target;
+                                    let focused = self.state.menu_nav.focus_region
+                                        == MenuFocusRegion::SettingsSectionNav
+                                        && self.state.menu_nav.settings_section_index == index;
+                                    let button = egui::Button::new(
+                                        egui::RichText::new(target.label()).size(11.0).strong(),
+                                    )
+                                    .min_size(egui::vec2(0.0, 24.0))
+                                    .fill(if selected {
+                                        palette.accent_soft
+                                    } else {
+                                        palette.panel_alt
+                                    })
+                                    .stroke(egui::Stroke::new(
+                                        if selected { 1.4 } else { 1.0 },
+                                        if selected {
+                                            palette.accent
+                                        } else {
+                                            palette.border
+                                        },
+                                    ))
+                                    .corner_radius(egui::CornerRadius::same(255));
+                                    let response = ui.add(button);
+                                    if focused {
+                                        Self::paint_selection_glow(
+                                            ui,
+                                            response.rect,
+                                            255,
+                                            palette.accent,
+                                            0.78,
+                                        );
+                                    }
+                                    if response.clicked() {
+                                        self.state.menu_nav.focus_region =
+                                            MenuFocusRegion::SettingsSectionNav;
+                                        self.state.menu_nav.settings_section_index = index;
                                         self.state.settings_scroll_target = Some(target);
                                     }
                                 }
                             });
                             ui.add_space(8.0);
-                            self.draw_manage_app_config_panel(ui, palette);
-                            ui.add_space(10.0);
-                            if self.state.settings_scroll_target
-                                == Some(SettingsScrollTarget::TheGamesDbConfig)
+                            match self
+                                .state
+                                .settings_scroll_target
+                                .unwrap_or(SettingsScrollTarget::AppConfig)
                             {
-                                self.state.settings_scroll_target = None;
-                                ui.scroll_to_cursor(Some(egui::Align::TOP));
+                                SettingsScrollTarget::Dependencies => {
+                                    self.draw_dependency_installer_panel(ui, palette);
+                                }
+                                SettingsScrollTarget::AppConfig => {
+                                    self.draw_manage_app_config_panel(ui, palette);
+                                }
+                                SettingsScrollTarget::TheGamesDbConfig => {
+                                    self.draw_manage_settings_panel(ui, palette);
+                                }
+                                SettingsScrollTarget::InputSettings => {
+                                    self.draw_input_settings_section(ctx, ui);
+                                }
                             }
-                            self.draw_manage_settings_panel(ui, palette);
-                            ui.add_space(10.0);
-                            if self.state.settings_scroll_target
-                                == Some(SettingsScrollTarget::InputSettings)
-                            {
-                                self.state.settings_scroll_target = None;
-                                ui.scroll_to_cursor(Some(egui::Align::TOP));
-                            }
-                            self.draw_input_settings_section(ctx, ui);
                             ui.add_space(12.0);
                         },
                     );

@@ -11,8 +11,39 @@ use super::{
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SettingsScrollTarget {
+    AppConfig,
+    Dependencies,
     InputSettings,
     TheGamesDbConfig,
+}
+
+impl SettingsScrollTarget {
+    pub(crate) const ALL: [Self; 4] = [
+        Self::Dependencies,
+        Self::AppConfig,
+        Self::TheGamesDbConfig,
+        Self::InputSettings,
+    ];
+
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Dependencies => "Dependencies",
+            Self::AppConfig => "App Config",
+            Self::TheGamesDbConfig => "TheGamesDB",
+            Self::InputSettings => "Input",
+        }
+    }
+
+    pub(crate) fn nav_index(self) -> usize {
+        Self::ALL
+            .iter()
+            .position(|section| *section == self)
+            .unwrap_or(0)
+    }
+
+    pub(crate) fn from_nav_index(index: usize) -> Self {
+        Self::ALL.get(index).copied().unwrap_or(Self::Dependencies)
+    }
 }
 
 #[derive(Default, Clone)]

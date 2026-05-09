@@ -3,9 +3,11 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 
 use arcade_domain::{
-    CoverScrapeRunOptions, CoverScrapeSettingsInput, LocalCoverRelinkRunOptions,
-    ManageOperationKind, ManageScope, N64CpuCoreMode, PathsConfig,
+    CoverScrapeRunOptions, CoverScrapeSettingsInput, DependencyComponentKind, DependencySource,
+    DependencyState, LocalCoverRelinkRunOptions, ManageOperationKind, ManageScope, N64CpuCoreMode,
+    PathsConfig,
 };
+use arcade_services::DependencyInstallRequest;
 use eframe::egui;
 
 use crate::app::{ManageUiMessage, NativeArcadeUiApp};
@@ -69,6 +71,7 @@ impl NativeArcadeUiApp {
         self.state.manage.settings_delay_ms = scrape.default_delay_ms.to_string();
         self.state.manage.scrape_limit = scrape.default_limit.to_string();
         self.state.manage.scrape_delay_ms = scrape.default_delay_ms.to_string();
+        self.refresh_dependency_report();
     }
 
     pub(crate) fn refresh_manage_rows(&mut self) {
@@ -123,6 +126,7 @@ impl NativeArcadeUiApp {
                     if let Err(err) = self.refresh_all() {
                         self.state.status = format!("Refresh warning: {err}");
                     }
+                    self.refresh_dependency_report();
                     self.refresh_manage_rows();
                 }
                 Err(err) => {
@@ -421,6 +425,212 @@ impl NativeArcadeUiApp {
             if save_response.clicked() {
                 self.state.menu_nav.focus_region = MenuFocusRegion::SettingsAppConfigSave;
                 self.save_manage_app_settings();
+            }
+        });
+    }
+
+    pub(crate) fn draw_dependency_installer_panel(
+        &mut self,
+        ui: &mut egui::Ui,
+        palette: crate::theme::ThemePalette,
+    ) {
+        self.panel_frame().show(ui, |ui| {
+            ui.set_min_width(ui.available_width());
+            ui.horizontal_wrapped(|ui| {
+                ui.heading("Dependency Installer");
+                if ui
+                    .add_enabled(
+                        !self.state.manage.job_running,
+                        manage_button("Rescan", false, false, palette),
+                    )
+                    .clicked()
+                {
+                    self.refresh_dependency_report();
+                }
+            });
+            ui.add_space(4.0);
+
+            let Some(report) = self.state.manage.dependency_report.clone() else {
+                ui.label(
+                    egui::RichText::new("Dependency status has not been scanned yet.").small(),
+                );
+                return;
+            };
+
+            ui.horizontal_wrapped(|ui| {
+                ui.label(format!("Ready: {}", report.ready_count()));
+                ui.label(format!(
+                    "Missing required: {}",
+                    report.missing_required_count()
+                ));
+                ui.label(format!(
+                    "Missing optional: {}",
+                    report.missing_optional_count()
+                ));
+            });
+            if report.has_missing_required() {
+                ui.label(
+                    egui::RichText::new(
+                        "Missing runtime dependencies are blocking at least one system.",
+                    )
+                    .small()
+                    .color(palette.accent),
+                );
+            }
+            ui.add_space(8.0);
+
+            let mut statuses = report.components;
+            statuses.sort_by(|left, right| {
+                left.component
+                    .system
+                    .cmp(&right.component.system)
+                    .then(left.ready().cmp(&right.ready()))
+                    .then(left.component.title.cmp(&right.component.title))
+            });
+
+            for status in statuses {
+                egui::Frame::new()
+                    .fill(palette.panel_alt)
+                    .stroke(egui::Stroke::new(1.0, palette.border))
+                    .corner_radius(egui::CornerRadius::same(8))
+                    .inner_margin(egui::Margin::same(8))
+                    .show(ui, |ui| {
+                        ui.horizontal_wrapped(|ui| {
+                            ui.label(
+                                egui::RichText::new(&status.component.title)
+                                    .strong()
+                                    .color(palette.text),
+                            );
+                            ui.label(
+                                egui::RichText::new(&status.component.system)
+                                    .small()
+                                    .color(palette.text_muted),
+                            );
+                            ui.label(
+                                egui::RichText::new(status.component.kind.label())
+                                    .small()
+                                    .color(palette.text_muted),
+                            );
+                            ui.label(
+                                egui::RichText::new(if status.component.required {
+                                    "Required"
+                                } else {
+                                    "Optional"
+                                })
+                                .small()
+                                .color(
+                                    if status.component.required {
+                                        palette.accent
+                                    } else {
+                                        palette.text_muted
+                                    },
+                                ),
+                            );
+                            ui.label(
+                                egui::RichText::new(match status.state {
+                                    DependencyState::Ready => "Ready",
+                                    DependencyState::Missing => "Missing",
+                                })
+                                .small()
+                                .color(match status.state {
+                                    DependencyState::Ready => palette.text_muted,
+                                    DependencyState::Missing => palette.accent,
+                                }),
+                            );
+                        });
+                        ui.add_space(2.0);
+                        ui.label(
+                            egui::RichText::new(&status.component.description)
+                                .small()
+                                .color(palette.text_muted),
+                        );
+                        ui.label(
+                            egui::RichText::new(&status.detail)
+                                .monospace()
+                                .small()
+                                .color(palette.text_muted),
+                        );
+                        ui.horizontal_wrapped(|ui| {
+                            ui.label(
+                                egui::RichText::new(format!(
+                                    "Source: {}",
+                                    status.component.source.label()
+                                ))
+                                .small()
+                                .color(palette.text_muted),
+                            );
+                            if matches!(
+                                status.component.kind,
+                                DependencyComponentKind::Bios | DependencyComponentKind::Romset
+                            ) {
+                                ui.label(
+                                    egui::RichText::new("User-owned files only")
+                                        .small()
+                                        .color(palette.text_muted),
+                                );
+                            }
+                        });
+                        ui.add_space(4.0);
+                        ui.horizontal_wrapped(|ui| {
+                            if ui
+                                .add_enabled(
+                                    !self.state.manage.job_running,
+                                    manage_button("Open Folder", false, false, palette),
+                                )
+                                .clicked()
+                            {
+                                self.open_dependency_target(&status.component.id);
+                            }
+
+                            match &status.component.source {
+                                DependencySource::LibretroBuildbot { .. }
+                                | DependencySource::Homebrew { .. }
+                                | DependencySource::UpstreamDownload { .. } => {
+                                    let label = if status.ready() { "Repair" } else { "Install" };
+                                    if ui
+                                        .add_enabled(
+                                            !self.state.manage.job_running,
+                                            manage_button(label, false, false, palette),
+                                        )
+                                        .clicked()
+                                    {
+                                        self.start_dependency_install_job(
+                                            status.component.id.clone(),
+                                            None,
+                                        );
+                                    }
+                                }
+                                DependencySource::LocalImport => {
+                                    let label = if status.ready() { "Reimport" } else { "Import" };
+                                    if ui
+                                        .add_enabled(
+                                            !self.state.manage.job_running,
+                                            manage_button(label, false, false, palette),
+                                        )
+                                        .clicked()
+                                    {
+                                        self.start_dependency_import_job(&status.component);
+                                    }
+                                }
+                                DependencySource::ExternalGuided { .. } => {
+                                    if ui
+                                        .add_enabled(
+                                            !self.state.manage.job_running,
+                                            manage_button("Open Source", false, false, palette),
+                                        )
+                                        .clicked()
+                                    {
+                                        self.start_dependency_install_job(
+                                            status.component.id.clone(),
+                                            None,
+                                        );
+                                    }
+                                }
+                                DependencySource::UserProvided => {}
+                            }
+                        });
+                    });
+                ui.add_space(8.0);
             }
         });
     }
@@ -1063,6 +1273,76 @@ impl NativeArcadeUiApp {
         let services = self.services.clone();
         std::thread::spawn(move || {
             let result = services.relink_local_covers(run, |progress| {
+                let _ = tx.send(ManageUiMessage::Progress(progress));
+            });
+            let _ = tx.send(ManageUiMessage::Finished(result));
+        });
+    }
+
+    pub(crate) fn refresh_dependency_report(&mut self) {
+        match self.services.dependency_report() {
+            Ok(report) => {
+                self.state.manage.dependency_report = Some(report);
+            }
+            Err(err) => {
+                self.state.manage.status_message = format!("Failed to scan dependencies: {err}");
+                self.state.status = self.state.manage.status_message.clone();
+            }
+        }
+    }
+
+    fn open_dependency_target(&mut self, component_id: &str) {
+        match self.services.open_dependency_target(component_id) {
+            Ok(()) => {
+                self.state.manage.status_message = String::from("Opened dependency folder.");
+                self.state.status = self.state.manage.status_message.clone();
+            }
+            Err(err) => {
+                self.state.manage.status_message =
+                    format!("Failed to open dependency folder: {err}");
+                self.state.status = self.state.manage.status_message.clone();
+            }
+        }
+    }
+
+    fn start_dependency_import_job(&mut self, component: &arcade_domain::DependencyComponent) {
+        let source = if component
+            .target_path
+            .extension()
+            .and_then(|ext| ext.to_str())
+            == Some("dylib")
+        {
+            rfd::FileDialog::new()
+                .add_filter("Libretro Core", &["dylib"])
+                .pick_file()
+        } else {
+            rfd::FileDialog::new().pick_folder()
+        };
+
+        let Some(source) = source else {
+            self.state.manage.status_message = String::from("Import cancelled.");
+            self.state.status = self.state.manage.status_message.clone();
+            return;
+        };
+
+        self.start_dependency_install_job(component.id.clone(), Some(source));
+    }
+
+    fn start_dependency_install_job(
+        &mut self,
+        component_id: String,
+        local_source: Option<PathBuf>,
+    ) {
+        let Some(tx) = self.begin_manage_job("Installing dependency...") else {
+            return;
+        };
+        let services = self.services.clone();
+        std::thread::spawn(move || {
+            let request = DependencyInstallRequest {
+                component_id,
+                local_source,
+            };
+            let result = services.install_dependency(request, |progress| {
                 let _ = tx.send(ManageUiMessage::Progress(progress));
             });
             let _ = tx.send(ManageUiMessage::Finished(result));

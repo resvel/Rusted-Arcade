@@ -16,6 +16,7 @@ pub(crate) enum MenuFocusRegion {
     ManageScrapeSystems,
     ManageScrapeActions,
     ManageList,
+    SettingsSectionNav,
     /// Core/system selector tabs in the settings panel.
     SettingsAppConfigCoreTab,
     /// A specific core variable row (index tracked separately).
@@ -44,6 +45,8 @@ pub(crate) struct MenuNavState {
     pub(crate) manage_scrape_system_index: usize,
     pub(crate) manage_scrape_action_index: usize,
     pub(crate) manage_list_index: usize,
+    /// Which Settings subview is focused in the Settings section selector.
+    pub(crate) settings_section_index: usize,
     /// Which core tab is focused in the system/core selector.
     pub(crate) settings_core_tab_index: usize,
     /// Which variable row is focused within the selected core.
@@ -88,6 +91,7 @@ impl Default for MenuNavState {
             manage_scrape_system_index: 0,
             manage_scrape_action_index: 0,
             manage_list_index: 0,
+            settings_section_index: 1,
             settings_core_tab_index: 0,
             settings_core_variable_index: 0,
             settings_core_option_index: 0,
@@ -283,6 +287,7 @@ impl MenuNavState {
             MenuFocusRegion::ManageScrapeSystems => MenuFocusRegion::ManageSettings,
             MenuFocusRegion::ManageScrapeActions => MenuFocusRegion::ManageScrapeSystems,
             MenuFocusRegion::ManageList => MenuFocusRegion::ManageScrapeActions,
+            MenuFocusRegion::SettingsSectionNav => MenuFocusRegion::TopNav,
             MenuFocusRegion::SettingsAppConfigCoreTab => MenuFocusRegion::TopNav,
             MenuFocusRegion::SettingsAppConfigCoreVariable => {
                 if self.settings_core_variable_index == 0 {
@@ -296,7 +301,7 @@ impl MenuNavState {
             MenuFocusRegion::SettingsAppConfigSave => {
                 MenuFocusRegion::SettingsAppConfigCoreVariable
             }
-            MenuFocusRegion::SettingsCoverSettings => MenuFocusRegion::SettingsAppConfigSave,
+            MenuFocusRegion::SettingsCoverSettings => MenuFocusRegion::SettingsSectionNav,
             MenuFocusRegion::Grid => {
                 if matches!(current_view, AppView::Home | AppView::Library) {
                     if filters_expanded {

@@ -27,7 +27,7 @@ use crate::state::{
 use crate::{
     app::NativeArcadeUiApp,
     controller_mapper::{assign_physical_input_to_action, VisualControlId},
-    state::{ControllerMappingCacheKey, MenuFocusRegion, MenuNavDirection},
+    state::{ControllerMappingCacheKey, MenuFocusRegion, MenuNavDirection, SettingsScrollTarget},
 };
 #[cfg(feature = "gamepad")]
 use gilrs::{ev::Code, Axis, Button, GamepadId};
@@ -1550,6 +1550,7 @@ impl NativeArcadeUiApp {
             | MenuFocusRegion::ManageScrapeSystems
             | MenuFocusRegion::ManageScrapeActions
             | MenuFocusRegion::ManageList
+            | MenuFocusRegion::SettingsSectionNav
             | MenuFocusRegion::SettingsAppConfigCoreTab
             | MenuFocusRegion::SettingsAppConfigCoreVariable
             | MenuFocusRegion::SettingsAppConfigSave
@@ -1655,6 +1656,7 @@ impl NativeArcadeUiApp {
             | MenuFocusRegion::ManageScrapeSystems
             | MenuFocusRegion::ManageScrapeActions
             | MenuFocusRegion::ManageList
+            | MenuFocusRegion::SettingsSectionNav
             | MenuFocusRegion::SettingsAppConfigCoreTab
             | MenuFocusRegion::SettingsAppConfigCoreVariable
             | MenuFocusRegion::SettingsAppConfigSave
@@ -1873,6 +1875,7 @@ impl NativeArcadeUiApp {
             | MenuFocusRegion::FiltersSystem
             | MenuFocusRegion::FiltersAlpha
             | MenuFocusRegion::Grid
+            | MenuFocusRegion::SettingsSectionNav
             | MenuFocusRegion::SettingsAppConfigCoreTab
             | MenuFocusRegion::SettingsAppConfigCoreVariable
             | MenuFocusRegion::SettingsAppConfigSave
@@ -1933,6 +1936,7 @@ impl NativeArcadeUiApp {
             | MenuFocusRegion::FiltersSystem
             | MenuFocusRegion::FiltersAlpha
             | MenuFocusRegion::Grid
+            | MenuFocusRegion::SettingsSectionNav
             | MenuFocusRegion::SettingsAppConfigCoreTab
             | MenuFocusRegion::SettingsAppConfigCoreVariable
             | MenuFocusRegion::SettingsAppConfigSave
@@ -1958,6 +1962,7 @@ impl NativeArcadeUiApp {
             | MenuFocusRegion::FiltersSystem
             | MenuFocusRegion::FiltersAlpha
             | MenuFocusRegion::Grid
+            | MenuFocusRegion::SettingsSectionNav
             | MenuFocusRegion::SettingsAppConfigCoreTab
             | MenuFocusRegion::SettingsAppConfigCoreVariable
             | MenuFocusRegion::SettingsAppConfigSave
@@ -1995,23 +2000,46 @@ impl NativeArcadeUiApp {
         match self.state.menu_nav.focus_region {
             MenuFocusRegion::TopNav => match direction {
                 MenuNavDirection::Down => {
-                    self.state.menu_nav.focus_region = MenuFocusRegion::SettingsAppConfigCoreTab;
-                    self.state.menu_nav.settings_core_tab_index = self
+                    let active = self
                         .state
-                        .menu_nav
-                        .settings_core_tab_index
-                        .min(num_tabs.saturating_sub(1));
+                        .settings_scroll_target
+                        .unwrap_or(SettingsScrollTarget::AppConfig);
+                    self.state.menu_nav.settings_section_index = active.nav_index();
+                    self.state.menu_nav.focus_region = MenuFocusRegion::SettingsSectionNav;
                 }
                 _ => self
                     .state
                     .menu_nav
                     .move_top_nav(direction, self.state.current_view),
             },
-            MenuFocusRegion::SettingsAppConfigCoreTab => match direction {
+            MenuFocusRegion::SettingsSectionNav => match direction {
                 MenuNavDirection::Up => {
                     self.state
                         .menu_nav
                         .focus_top_nav_for_view(self.state.current_view);
+                }
+                MenuNavDirection::Down => {
+                    self.state.menu_nav.focus_region = self.settings_section_content_focus_target();
+                }
+                MenuNavDirection::Left => {
+                    self.state.menu_nav.settings_section_index =
+                        self.state.menu_nav.settings_section_index.saturating_sub(1);
+                    self.state.settings_scroll_target = Some(SettingsScrollTarget::from_nav_index(
+                        self.state.menu_nav.settings_section_index,
+                    ));
+                }
+                MenuNavDirection::Right => {
+                    self.state.menu_nav.settings_section_index =
+                        (self.state.menu_nav.settings_section_index + 1)
+                            .min(SettingsScrollTarget::ALL.len().saturating_sub(1));
+                    self.state.settings_scroll_target = Some(SettingsScrollTarget::from_nav_index(
+                        self.state.menu_nav.settings_section_index,
+                    ));
+                }
+            },
+            MenuFocusRegion::SettingsAppConfigCoreTab => match direction {
+                MenuNavDirection::Up => {
+                    self.state.menu_nav.focus_region = MenuFocusRegion::SettingsSectionNav;
                 }
                 MenuNavDirection::Down => {
                     if num_vars > 0 {
@@ -2096,13 +2124,13 @@ impl NativeArcadeUiApp {
                     }
                 }
                 MenuNavDirection::Down => {
-                    self.state.menu_nav.focus_region = MenuFocusRegion::SettingsCoverSettings;
+                    self.state.menu_nav.focus_region = MenuFocusRegion::SettingsSectionNav;
                 }
                 MenuNavDirection::Left | MenuNavDirection::Right => {}
             },
             MenuFocusRegion::SettingsCoverSettings => match direction {
                 MenuNavDirection::Up => {
-                    self.state.menu_nav.focus_region = MenuFocusRegion::SettingsAppConfigSave;
+                    self.state.menu_nav.focus_region = MenuFocusRegion::SettingsSectionNav;
                 }
                 MenuNavDirection::Down => {}
                 MenuNavDirection::Left => {
@@ -2118,7 +2146,7 @@ impl NativeArcadeUiApp {
                 }
             },
             _ => {
-                self.state.menu_nav.focus_region = MenuFocusRegion::SettingsAppConfigCoreTab;
+                self.state.menu_nav.focus_region = MenuFocusRegion::SettingsSectionNav;
             }
         }
     }
@@ -2128,6 +2156,13 @@ impl NativeArcadeUiApp {
             MenuFocusRegion::TopNav => {
                 let view = self.state.menu_nav.selected_top_nav_view();
                 self.navigate_to_view(view);
+            }
+            MenuFocusRegion::SettingsSectionNav => {
+                let section = SettingsScrollTarget::from_nav_index(
+                    self.state.menu_nav.settings_section_index,
+                );
+                self.state.settings_scroll_target = Some(section);
+                self.state.menu_nav.focus_region = self.settings_section_content_focus_target();
             }
             MenuFocusRegion::SettingsAppConfigCoreTab => {
                 // Selecting a tab moves focus into the first variable.
@@ -2201,7 +2236,7 @@ impl NativeArcadeUiApp {
                 }
             }
             _ => {
-                self.state.menu_nav.focus_region = MenuFocusRegion::SettingsAppConfigCoreTab;
+                self.state.menu_nav.focus_region = MenuFocusRegion::SettingsSectionNav;
             }
         }
     }
@@ -2209,7 +2244,8 @@ impl NativeArcadeUiApp {
     fn step_back_settings_focus(&mut self) {
         self.state.menu_nav.focus_region = match self.state.menu_nav.focus_region {
             MenuFocusRegion::TopNav => MenuFocusRegion::TopNav,
-            MenuFocusRegion::SettingsAppConfigCoreTab => MenuFocusRegion::TopNav,
+            MenuFocusRegion::SettingsSectionNav => MenuFocusRegion::TopNav,
+            MenuFocusRegion::SettingsAppConfigCoreTab => MenuFocusRegion::SettingsSectionNav,
             MenuFocusRegion::SettingsAppConfigCoreVariable => {
                 if self.state.menu_nav.settings_core_variable_index == 0 {
                     MenuFocusRegion::SettingsAppConfigCoreTab
@@ -2226,9 +2262,23 @@ impl NativeArcadeUiApp {
             MenuFocusRegion::SettingsAppConfigSave => {
                 MenuFocusRegion::SettingsAppConfigCoreVariable
             }
-            MenuFocusRegion::SettingsCoverSettings => MenuFocusRegion::SettingsAppConfigSave,
+            MenuFocusRegion::SettingsCoverSettings => MenuFocusRegion::SettingsSectionNav,
             _ => MenuFocusRegion::TopNav,
         };
+    }
+
+    fn settings_section_content_focus_target(&self) -> MenuFocusRegion {
+        match self
+            .state
+            .settings_scroll_target
+            .unwrap_or(SettingsScrollTarget::AppConfig)
+        {
+            SettingsScrollTarget::AppConfig => MenuFocusRegion::SettingsAppConfigCoreTab,
+            SettingsScrollTarget::TheGamesDbConfig => MenuFocusRegion::SettingsCoverSettings,
+            SettingsScrollTarget::Dependencies | SettingsScrollTarget::InputSettings => {
+                MenuFocusRegion::SettingsSectionNav
+            }
+        }
     }
 }
 

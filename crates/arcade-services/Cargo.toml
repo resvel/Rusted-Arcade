@@ -10,6 +10,7 @@ serde_json.workspace = true
 tracing.workspace = true
 sha1.workspace = true
 ureq.workspace = true
+zip.workspace = true
 arcade-domain = { path = "../arcade-domain" }
 arcade-data = { path = "../arcade-data" }
 

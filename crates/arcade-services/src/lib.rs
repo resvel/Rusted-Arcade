@@ -2,20 +2,22 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Context, Result};
 use arcade_data::{DataError, Database, ScanUpsertOutcome, ScannedRomInput};
 use arcade_domain::{
-    default_gamepad_mapping_for_system, get_arcade_compatibility, get_dolphin_sys_directory,
-    resolve_core, resolve_effective_core_override, resolve_path_from_root, AppConfig,
+    default_gamepad_mapping_for_system, dependency_buildbot_base_url, dependency_manifest,
+    get_arcade_compatibility, get_dolphin_sys_directory, resolve_core,
+    resolve_effective_core_override, resolve_path_from_root, scan_dependency_report, AppConfig,
     CoverScrapePlatformIds, CoverScrapeRunOptions, CoverScrapeSettingsInput, CoverScrapingConfig,
-    DetectedPadIdentity, LocalCoverRelinkRunOptions, ManageOperationKind, ManageOperationSummary,
-    ManageProgressEvent, ManageRomStatus, ManageScope, ManagementConfig, N64CpuCoreMode,
-    N64PrimaryStick, PathsConfig, RomCard, RomQuery, SaveLimits, SaveSlotData, SaveSlotSummary,
-    SavedGamepadMappingSummary, StoredGamepadMapping, PCECD_ACCEPTED_BIOS_FILES,
-    SATURN_ACCEPTED_BIOS_FILES, SYSTEM_DEFAULT_MAPPING_KEY,
+    DependencyReport, DependencySource, DetectedPadIdentity, LocalCoverRelinkRunOptions,
+    ManageOperationKind, ManageOperationSummary, ManageProgressEvent, ManageRomStatus, ManageScope,
+    ManagementConfig, N64CpuCoreMode, N64PrimaryStick, PathsConfig, RomCard, RomQuery, SaveLimits,
+    SaveSlotData, SaveSlotSummary, SavedGamepadMappingSummary, StoredGamepadMapping,
+    PCECD_ACCEPTED_BIOS_FILES, SATURN_ACCEPTED_BIOS_FILES, SYSTEM_DEFAULT_MAPPING_KEY,
 };
 use sha1::{Digest, Sha1};
 use tracing::warn;
@@ -56,6 +58,12 @@ pub struct LaunchPlan {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AppConfigUpdateOutcome {
     pub restart_required: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct DependencyInstallRequest {
+    pub component_id: String,
+    pub local_source: Option<PathBuf>,
 }
 
 impl NativeServices {
@@ -729,6 +737,134 @@ impl NativeServices {
             .map(|config| config.clone())
             .map_err(|_| anyhow!("config lock poisoned"))
     }
+
+    pub fn dependency_report(&self) -> Result<DependencyReport> {
+        let config = self.current_config()?;
+        Ok(scan_dependency_report(&config.paths))
+    }
+
+    pub fn open_dependency_target(&self, component_id: &str) -> Result<()> {
+        let config = self.current_config()?;
+        let component = dependency_manifest(&config.paths)
+            .into_iter()
+            .find(|component| component.id == component_id)
+            .ok_or_else(|| anyhow!("unknown dependency component: {component_id}"))?;
+        let path = if component.target_path.is_file()
+            || component
+                .target_path
+                .extension()
+                .and_then(|ext| ext.to_str())
+                .is_some()
+        {
+            component
+                .target_path
+                .parent()
+                .map(Path::to_path_buf)
+                .unwrap_or_else(|| component.target_path.clone())
+        } else {
+            component.target_path.clone()
+        };
+        fs::create_dir_all(&path)
+            .with_context(|| format!("failed to create {}", path.display()))?;
+        open_path_in_finder(&path)
+    }
+
+    pub fn install_dependency(
+        &self,
+        request: DependencyInstallRequest,
+        progress: impl Fn(ManageProgressEvent),
+    ) -> Result<ManageOperationSummary> {
+        let config = self.current_config()?;
+        let component = dependency_manifest(&config.paths)
+            .into_iter()
+            .find(|component| component.id == request.component_id)
+            .ok_or_else(|| anyhow!("unknown dependency component: {}", request.component_id))?;
+
+        progress(ManageProgressEvent {
+            kind: ManageOperationKind::InstallDependency,
+            processed: 0,
+            total: Some(1),
+            message: format!("Installing {}...", component.title),
+        });
+
+        match &component.source {
+            DependencySource::LibretroBuildbot { file_name } => {
+                install_buildbot_core(file_name, &component.target_path)?;
+            }
+            DependencySource::Homebrew { package_name } => {
+                install_homebrew_package(package_name)?;
+            }
+            DependencySource::UpstreamDownload { url } => {
+                install_upstream_download(url, &component.target_path)?;
+            }
+            DependencySource::ExternalGuided { url } => {
+                open_url(url)?;
+                return Ok(ManageOperationSummary {
+                    kind: Some(ManageOperationKind::InstallDependency),
+                    skipped: 1,
+                    message: format!(
+                        "Opened upstream source for {}. Import the downloaded file when ready.",
+                        component.title
+                    ),
+                    ..ManageOperationSummary::default()
+                });
+            }
+            DependencySource::LocalImport => {
+                let Some(source) = request.local_source.as_ref() else {
+                    return Err(anyhow!(
+                        "{} needs a local file or folder import.",
+                        component.title
+                    ));
+                };
+                import_local_dependency(source, &component.target_path)?;
+            }
+            DependencySource::UserProvided => {
+                return Err(anyhow!(
+                    "{} is user-provided. Place the files in {}.",
+                    component.title,
+                    component.target_path.display()
+                ));
+            }
+        }
+
+        if component
+            .target_path
+            .extension()
+            .and_then(|ext| ext.to_str())
+            == Some("dylib")
+        {
+            ad_hoc_codesign(&component.target_path)?;
+        }
+
+        let report = scan_dependency_report(&config.paths);
+        let ready = report
+            .components
+            .iter()
+            .find(|status| status.component.id == component.id)
+            .map(|status| status.ready())
+            .unwrap_or(false);
+
+        if !ready {
+            return Err(anyhow!(
+                "installed {}, but validation still reports it missing",
+                component.title
+            ));
+        }
+
+        progress(ManageProgressEvent {
+            kind: ManageOperationKind::InstallDependency,
+            processed: 1,
+            total: Some(1),
+            message: format!("Installed {}.", component.title),
+        });
+
+        Ok(ManageOperationSummary {
+            kind: Some(ManageOperationKind::InstallDependency),
+            updated: 1,
+            message: format!("Installed {}.", component.title),
+            ..ManageOperationSummary::default()
+        })
+    }
 }
 
 fn native_arcade_core_note(system: &str, core_override: Option<&str>) -> Option<&'static str> {
@@ -810,6 +946,192 @@ fn ensure_system_launch_dependencies(
         ));
     }
 
+    Ok(())
+}
+
+fn install_buildbot_core(file_name: &str, target_path: &Path) -> Result<()> {
+    let base_url = dependency_buildbot_base_url().ok_or_else(|| {
+        anyhow!("no libretro buildbot source is configured for this architecture")
+    })?;
+    let url = format!("{base_url}/{file_name}.zip");
+    let bytes = download_bytes(&url)?;
+    let parent = target_path
+        .parent()
+        .ok_or_else(|| anyhow!("target path has no parent: {}", target_path.display()))?;
+    fs::create_dir_all(parent)?;
+
+    let reader = std::io::Cursor::new(bytes);
+    let mut archive =
+        zip::ZipArchive::new(reader).with_context(|| format!("failed to read {url}"))?;
+    let mut extracted = false;
+    for index in 0..archive.len() {
+        let mut file = archive.by_index(index)?;
+        let Some(name) = Path::new(file.name())
+            .file_name()
+            .and_then(|name| name.to_str())
+        else {
+            continue;
+        };
+        if name != file_name {
+            continue;
+        }
+        let mut out = fs::File::create(target_path)
+            .with_context(|| format!("failed to create {}", target_path.display()))?;
+        std::io::copy(&mut file, &mut out)?;
+        extracted = true;
+        break;
+    }
+
+    if extracted {
+        Ok(())
+    } else {
+        Err(anyhow!("{url} did not contain {file_name}"))
+    }
+}
+
+fn install_upstream_download(url: &str, target_path: &Path) -> Result<()> {
+    let bytes = download_bytes(url)?;
+    let parent = target_path
+        .parent()
+        .ok_or_else(|| anyhow!("target path has no parent: {}", target_path.display()))?;
+    fs::create_dir_all(parent)?;
+    fs::write(target_path, bytes)
+        .with_context(|| format!("failed to write {}", target_path.display()))
+}
+
+fn download_bytes(url: &str) -> Result<Vec<u8>> {
+    let mut bytes = Vec::new();
+    ureq::get(url)
+        .call()
+        .map_err(|err| anyhow!("download failed from {url}: {err}"))?
+        .into_reader()
+        .read_to_end(&mut bytes)?;
+    Ok(bytes)
+}
+
+fn install_homebrew_package(package_name: &str) -> Result<()> {
+    let brew = find_brew_executable()
+        .ok_or_else(|| anyhow!("Homebrew is not installed or brew was not found in PATH."))?;
+    let status = Command::new(&brew)
+        .arg("install")
+        .arg(package_name)
+        .status()
+        .with_context(|| format!("failed to run {}", brew.display()))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(anyhow!(
+            "brew install {package_name} failed with status {status}"
+        ))
+    }
+}
+
+fn find_brew_executable() -> Option<PathBuf> {
+    let candidates = [
+        PathBuf::from("/opt/homebrew/bin/brew"),
+        PathBuf::from("/usr/local/bin/brew"),
+    ];
+    candidates
+        .into_iter()
+        .find(|path| path.is_file())
+        .or_else(|| {
+            std::env::var_os("PATH").and_then(|path| {
+                std::env::split_paths(&path)
+                    .map(|dir| dir.join("brew"))
+                    .find(|candidate| candidate.is_file())
+            })
+        })
+}
+
+fn import_local_dependency(source: &Path, target_path: &Path) -> Result<()> {
+    if source.is_dir() {
+        copy_directory(source, target_path)
+    } else {
+        let parent = target_path
+            .parent()
+            .ok_or_else(|| anyhow!("target path has no parent: {}", target_path.display()))?;
+        fs::create_dir_all(parent)?;
+        fs::copy(source, target_path).with_context(|| {
+            format!(
+                "failed to copy {} to {}",
+                source.display(),
+                target_path.display()
+            )
+        })?;
+        Ok(())
+    }
+}
+
+fn copy_directory(source: &Path, target: &Path) -> Result<()> {
+    fs::create_dir_all(target)?;
+    for entry in fs::read_dir(source).with_context(|| format!("read {}", source.display()))? {
+        let entry = entry?;
+        let source_path = entry.path();
+        let target_path = target.join(entry.file_name());
+        if source_path.is_dir() {
+            copy_directory(&source_path, &target_path)?;
+        } else if source_path.is_file() {
+            if let Some(parent) = target_path.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            fs::copy(&source_path, &target_path).with_context(|| {
+                format!(
+                    "failed to copy {} to {}",
+                    source_path.display(),
+                    target_path.display()
+                )
+            })?;
+        }
+    }
+    Ok(())
+}
+
+fn ad_hoc_codesign(path: &Path) -> Result<()> {
+    if !cfg!(target_os = "macos") {
+        return Ok(());
+    }
+    let status = Command::new("/usr/bin/codesign")
+        .arg("--force")
+        .arg("--sign")
+        .arg("-")
+        .arg(path)
+        .status()
+        .with_context(|| format!("failed to codesign {}", path.display()))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(anyhow!(
+            "codesign failed for {} with status {status}",
+            path.display()
+        ))
+    }
+}
+
+fn open_path_in_finder(path: &Path) -> Result<()> {
+    if cfg!(target_os = "macos") {
+        let status = Command::new("/usr/bin/open")
+            .arg(path)
+            .status()
+            .with_context(|| format!("failed to open {}", path.display()))?;
+        if status.success() {
+            return Ok(());
+        }
+        return Err(anyhow!("open failed for {}", path.display()));
+    }
+    Ok(())
+}
+
+fn open_url(url: &str) -> Result<()> {
+    if cfg!(target_os = "macos") {
+        let status = Command::new("/usr/bin/open")
+            .arg(url)
+            .status()
+            .with_context(|| format!("failed to open {url}"))?;
+        if status.success() {
+            return Ok(());
+        }
+        return Err(anyhow!("open failed for {url}"));
+    }
     Ok(())
 }
 
