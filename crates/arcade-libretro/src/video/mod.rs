@@ -80,6 +80,7 @@ pub(super) struct VideoSessionInfo {
     pub core_name: String,
     pub requires_hw_render: bool,
     pub requested_hw_context_type: Option<u32>,
+    pub force_macos_metal_view: bool,
 }
 
 pub(super) trait VideoBackend {
@@ -162,6 +163,7 @@ impl VideoCoordinator {
             core_name: &session_info.core_name,
             requires_hw_render: session_info.requires_hw_render,
             requested_hw_context_type: session_info.requested_hw_context_type,
+            force_macos_metal_view: session_info.force_macos_metal_view,
             frontend_capabilities: &self.frontend_capabilities,
         });
         self.session = Some(ResolvedVideoSession {

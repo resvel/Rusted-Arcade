@@ -1895,6 +1895,58 @@ fn pcarmsx2_profile() -> CoreProfile {
     let mut profile = pcsx2_profile();
     profile.core_name = "pcarmsx2";
     profile.display_name = "pcarmsx2 ARM64 PoC";
+    let mut variables = vec![
+        var(
+            "pcarmsx2_metal_host",
+            "Metal Host View",
+            "ARM64 PoC",
+            enabled_options(true),
+        ),
+        var(
+            "pcarmsx2_audio_backend",
+            "Audio Backend",
+            "ARM64 PoC",
+            vec![opt("Cubeb"), opt("Null"), opt("SDL")],
+        ),
+        var(
+            "pcarmsx2_enable_ee_rec",
+            "EE Recompiler",
+            "Recompilers",
+            enabled_options(true),
+        ),
+        var(
+            "pcarmsx2_enable_vu0_rec",
+            "VU0 Recompiler",
+            "Recompilers",
+            enabled_options(true),
+        ),
+        var(
+            "pcarmsx2_enable_vu1_rec",
+            "VU1 Recompiler",
+            "Recompilers",
+            enabled_options(true),
+        ),
+        var(
+            "pcarmsx2_enable_iop_rec",
+            "IOP Recompiler",
+            "Recompilers",
+            enabled_options(true),
+        ),
+        var(
+            "pcarmsx2_use_jita64",
+            "jitA64 Stub Path",
+            "Recompilers",
+            enabled_options(false),
+        ),
+        var(
+            "pcarmsx2_enable_xgkick_hack",
+            "XGKICK Gamefix",
+            "Gamefixes",
+            enabled_options(false),
+        ),
+    ];
+    variables.extend(profile.variables);
+    profile.variables = variables;
     profile
 }
 
@@ -2408,10 +2460,31 @@ mod tests {
         assert!(core_profile_for("mupen64plus_next").is_some());
         assert!(core_profile_for("fceumm").is_some());
         assert!(core_profile_for("play").is_some());
+        assert!(core_profile_for("pcarmsx2").is_some());
         assert!(core_profile_for("mednafen_saturn").is_some());
         assert!(core_profile_for("mednafen_pce_fast").is_some());
         assert!(core_profile_for("dolphin").is_some());
         assert!(core_profile_for("nonexistent").is_none());
+    }
+
+    #[test]
+    fn pcarmsx2_profile_exposes_runtime_toggles() {
+        let profile = core_profile_for("pcarmsx2").unwrap();
+        for key in [
+            "pcarmsx2_metal_host",
+            "pcarmsx2_audio_backend",
+            "pcarmsx2_enable_ee_rec",
+            "pcarmsx2_enable_vu0_rec",
+            "pcarmsx2_enable_vu1_rec",
+            "pcarmsx2_enable_iop_rec",
+            "pcarmsx2_use_jita64",
+            "pcarmsx2_enable_xgkick_hack",
+        ] {
+            assert!(
+                profile.variables.iter().any(|variable| variable.key == key),
+                "missing pcarmsx2 runtime toggle {key}"
+            );
+        }
     }
 
     #[test]

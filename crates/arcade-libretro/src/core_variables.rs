@@ -224,6 +224,90 @@ pub(super) fn apply_core_runtime_env_defaults(core_name: &str, backend: VideoBac
     }
 }
 
+pub(super) fn pcarmsx2_metal_host_enabled(core_name: &str, emulation: &EmulationConfig) -> bool {
+    core_name.eq_ignore_ascii_case("pcarmsx2")
+        && core_setting_enabled(emulation, "pcarmsx2", "pcarmsx2_metal_host", true)
+}
+
+pub(super) fn apply_core_runtime_env_settings(core_name: &str, emulation: &EmulationConfig) {
+    if !core_name.eq_ignore_ascii_case("pcarmsx2") {
+        return;
+    }
+
+    set_env_flag(
+        "PCARMSX2_ENABLE_EE_REC",
+        core_setting_enabled(emulation, "pcarmsx2", "pcarmsx2_enable_ee_rec", true),
+    );
+    set_env_flag(
+        "PCARMSX2_ENABLE_VU0_REC",
+        core_setting_enabled(emulation, "pcarmsx2", "pcarmsx2_enable_vu0_rec", true),
+    );
+    set_env_flag(
+        "PCARMSX2_ENABLE_VU1_REC",
+        core_setting_enabled(emulation, "pcarmsx2", "pcarmsx2_enable_vu1_rec", true),
+    );
+    set_env_flag(
+        "PCARMSX2_ENABLE_IOP_REC",
+        core_setting_enabled(emulation, "pcarmsx2", "pcarmsx2_enable_iop_rec", true),
+    );
+    set_env_flag(
+        "PCARMSX2_USE_JITA64",
+        core_setting_enabled(emulation, "pcarmsx2", "pcarmsx2_use_jita64", false),
+    );
+    set_env_flag(
+        "PCARMSX2_ENABLE_XGKICK_HACK",
+        core_setting_enabled(emulation, "pcarmsx2", "pcarmsx2_enable_xgkick_hack", false),
+    );
+
+    set_env_flag(
+        "PCARMSX2_DISABLE_MTVU",
+        !core_setting_enabled(emulation, "pcarmsx2", "pcsx2_mtvu", true),
+    );
+    set_env_flag(
+        "PCARMSX2_DISABLE_INSTANT_VU1",
+        !core_setting_enabled(emulation, "pcarmsx2", "pcsx2_instant_vu1", true),
+    );
+
+    let audio_backend =
+        core_setting_value(emulation, "pcarmsx2", "pcarmsx2_audio_backend", "Cubeb");
+    std::env::set_var("PCARMSX2_AUDIO_BACKEND", audio_backend);
+}
+
+fn core_setting_value(
+    emulation: &EmulationConfig,
+    core_name: &str,
+    key: &str,
+    default: &str,
+) -> String {
+    emulation
+        .get_core_variable(core_name, key)
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or(default)
+        .to_string()
+}
+
+fn core_setting_enabled(
+    emulation: &EmulationConfig,
+    core_name: &str,
+    key: &str,
+    default_enabled: bool,
+) -> bool {
+    let default = if default_enabled {
+        "enabled"
+    } else {
+        "disabled"
+    };
+    let value = core_setting_value(emulation, core_name, key, default);
+    matches!(
+        value.trim().to_ascii_lowercase().as_str(),
+        "1" | "true" | "yes" | "on" | "enabled"
+    )
+}
+
+fn set_env_flag(name: &str, enabled: bool) {
+    std::env::set_var(name, if enabled { "1" } else { "0" });
+}
+
 fn apply_pcsx2_vulkan_runtime_env_defaults() {
     if std::env::var_os("GRANITE_VULKAN_LIBRARY").is_some() {
         return;
@@ -690,6 +774,68 @@ mod tests {
             .expect("pcsx2 renderer override");
 
         assert_eq!(renderer.to_str().expect("utf8"), "Metal");
+    }
+
+    #[test]
+    fn pcarmsx2_metal_host_defaults_to_enabled() {
+        assert!(pcarmsx2_metal_host_enabled(
+            "pcarmsx2",
+            &EmulationConfig::default()
+        ));
+        assert!(!pcarmsx2_metal_host_enabled(
+            "pcsx2",
+            &EmulationConfig::default()
+        ));
+    }
+
+    #[test]
+    fn pcarmsx2_runtime_settings_update_env_flags() {
+        let _guard = pcsx2_renderer_env_lock();
+        let keys = [
+            "PCARMSX2_ENABLE_EE_REC",
+            "PCARMSX2_ENABLE_VU0_REC",
+            "PCARMSX2_ENABLE_VU1_REC",
+            "PCARMSX2_ENABLE_IOP_REC",
+            "PCARMSX2_USE_JITA64",
+            "PCARMSX2_ENABLE_XGKICK_HACK",
+            "PCARMSX2_DISABLE_MTVU",
+            "PCARMSX2_DISABLE_INSTANT_VU1",
+            "PCARMSX2_AUDIO_BACKEND",
+        ];
+        let previous = keys.map(|key| (key, std::env::var_os(key)));
+
+        let mut emulation = EmulationConfig::default();
+        let settings = emulation
+            .core_settings
+            .entry("pcarmsx2".into())
+            .or_insert_with(StdHashMap::new);
+        settings.insert("pcarmsx2_enable_ee_rec".into(), "disabled".into());
+        settings.insert("pcarmsx2_enable_iop_rec".into(), "enabled".into());
+        settings.insert("pcarmsx2_use_jita64".into(), "enabled".into());
+        settings.insert("pcarmsx2_enable_xgkick_hack".into(), "enabled".into());
+        settings.insert("pcsx2_mtvu".into(), "disabled".into());
+        settings.insert("pcsx2_instant_vu1".into(), "enabled".into());
+        settings.insert("pcarmsx2_audio_backend".into(), "Null".into());
+
+        apply_core_runtime_env_settings("pcarmsx2", &emulation);
+
+        assert_eq!(std::env::var("PCARMSX2_ENABLE_EE_REC").unwrap(), "0");
+        assert_eq!(std::env::var("PCARMSX2_ENABLE_VU0_REC").unwrap(), "1");
+        assert_eq!(std::env::var("PCARMSX2_ENABLE_VU1_REC").unwrap(), "1");
+        assert_eq!(std::env::var("PCARMSX2_ENABLE_IOP_REC").unwrap(), "1");
+        assert_eq!(std::env::var("PCARMSX2_USE_JITA64").unwrap(), "1");
+        assert_eq!(std::env::var("PCARMSX2_ENABLE_XGKICK_HACK").unwrap(), "1");
+        assert_eq!(std::env::var("PCARMSX2_DISABLE_MTVU").unwrap(), "1");
+        assert_eq!(std::env::var("PCARMSX2_DISABLE_INSTANT_VU1").unwrap(), "0");
+        assert_eq!(std::env::var("PCARMSX2_AUDIO_BACKEND").unwrap(), "Null");
+
+        for (key, value) in previous {
+            if let Some(value) = value {
+                std::env::set_var(key, value);
+            } else {
+                std::env::remove_var(key);
+            }
+        }
     }
 
     #[test]

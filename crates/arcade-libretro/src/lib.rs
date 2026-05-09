@@ -44,7 +44,8 @@ use self::content::{
     strategy_uses_data, LaunchSession, LoadGameStrategy,
 };
 use self::core_variables::{
-    apply_core_runtime_env_defaults, default_core_variables_for, store_default_variable,
+    apply_core_runtime_env_defaults, apply_core_runtime_env_settings, default_core_variables_for,
+    pcarmsx2_metal_host_enabled, store_default_variable,
 };
 use self::diagnostics::*;
 #[cfg(target_os = "macos")]
@@ -1646,12 +1647,14 @@ impl LibretroHost {
             .store(false, Ordering::Relaxed);
         reset_vulkan_present_metrics(&self.runtime);
         let requirements = inspect_core_requirements(core_path)?;
+        apply_core_runtime_env_settings(core_name, &self.emulation);
         let selection = {
             let mut coordinator = self.runtime.video_coordinator.lock();
             coordinator.plan_session(VideoSessionInfo {
                 core_name: core_name.to_string(),
                 requires_hw_render: requirements.requires_hw_render,
                 requested_hw_context_type: None,
+                force_macos_metal_view: pcarmsx2_metal_host_enabled(core_name, &self.emulation),
             })
         };
         if std::env::var_os("LIBRETRO_TRACE_BACKEND").is_some() {
@@ -1883,6 +1886,7 @@ impl LibretroHost {
                     core_name: core_name.to_string(),
                     requires_hw_render: requirements.requires_hw_render,
                     requested_hw_context_type,
+                    force_macos_metal_view: pcarmsx2_metal_host_enabled(core_name, &self.emulation),
                 });
             }
             if let Some(reason) = last_load_error {

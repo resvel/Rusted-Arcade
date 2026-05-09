@@ -13,6 +13,7 @@ pub(super) struct BackendPolicyInput<'a> {
     pub core_name: &'a str,
     pub requires_hw_render: bool,
     pub requested_hw_context_type: Option<u32>,
+    pub force_macos_metal_view: bool,
     pub frontend_capabilities: &'a FrontendCapabilities,
 }
 
@@ -74,7 +75,7 @@ fn select_pcsx2_backend(input: BackendPolicyInput<'_>) -> BackendSelection {
     const RETRO_HW_CONTEXT_VULKAN: u32 = 6;
 
     #[cfg(target_os = "macos")]
-    if pcsx2_metal_poc_enabled() {
+    if input.force_macos_metal_view || pcsx2_metal_poc_enabled() {
         return BackendSelection {
             chosen: VideoBackendKind::MacosMetalView,
             fallbacks: vec![],
@@ -343,6 +344,7 @@ mod tests {
             core_name: "beetle_sgx",
             requires_hw_render: true,
             requested_hw_context_type: Some(1),
+            force_macos_metal_view: false,
             frontend_capabilities: &frontend(true, false),
         });
 
@@ -356,6 +358,7 @@ mod tests {
             core_name: "beetle_sgx",
             requires_hw_render: true,
             requested_hw_context_type: Some(1),
+            force_macos_metal_view: false,
             frontend_capabilities: &frontend(false, false),
         });
 
@@ -371,6 +374,7 @@ mod tests {
                 core_name: "mednafen_psx_hw",
                 requires_hw_render: true,
                 requested_hw_context_type: Some(6),
+                force_macos_metal_view: false,
                 frontend_capabilities: &frontend(gl, false),
             });
             // Under Rosetta (CI may vary) this would be Software; on native ARM64
@@ -388,6 +392,7 @@ mod tests {
             core_name: "mupen64plus_next",
             requires_hw_render: false,
             requested_hw_context_type: None,
+            force_macos_metal_view: false,
             frontend_capabilities: &frontend(true, false),
         });
 
@@ -402,6 +407,7 @@ mod tests {
             core_name: "play",
             requires_hw_render: false,
             requested_hw_context_type: None,
+            force_macos_metal_view: false,
             frontend_capabilities: &frontend(false, false),
         });
 
@@ -421,6 +427,7 @@ mod tests {
             core_name: "play",
             requires_hw_render: false,
             requested_hw_context_type: None,
+            force_macos_metal_view: false,
             frontend_capabilities: &frontend,
         });
 
@@ -440,6 +447,7 @@ mod tests {
             core_name: "pcsx2",
             requires_hw_render: false,
             requested_hw_context_type: None,
+            force_macos_metal_view: false,
             frontend_capabilities: &frontend(false, true),
         });
 
@@ -461,6 +469,7 @@ mod tests {
             core_name: "pcsx2",
             requires_hw_render: true,
             requested_hw_context_type: Some(6),
+            force_macos_metal_view: false,
             frontend_capabilities: &frontend(false, true),
         });
 
@@ -483,6 +492,7 @@ mod tests {
             core_name: "pcsx2",
             requires_hw_render: true,
             requested_hw_context_type: Some(6),
+            force_macos_metal_view: false,
             frontend_capabilities: &frontend(false, true),
         });
 
@@ -505,6 +515,30 @@ mod tests {
             core_name: "pcarmsx2",
             requires_hw_render: true,
             requested_hw_context_type: Some(6),
+            force_macos_metal_view: false,
+            frontend_capabilities: &frontend(false, true),
+        });
+
+        assert_eq!(selection.chosen, VideoBackendKind::MacosMetalView);
+        assert!(selection.fallbacks.is_empty());
+        assert!(selection.allows_external_present);
+
+        restore_env(key, previous);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn pcarmsx2_core_setting_selects_private_metal_backend_without_env() {
+        let _guard = pcsx2_metal_env_lock();
+        let key = "ARCADE_PCSX2_METAL_POC";
+        let previous = std::env::var_os(key);
+        std::env::remove_var(key);
+
+        let selection = select_backend(BackendPolicyInput {
+            core_name: "pcarmsx2",
+            requires_hw_render: true,
+            requested_hw_context_type: Some(6),
+            force_macos_metal_view: true,
             frontend_capabilities: &frontend(false, true),
         });
 
@@ -521,6 +555,7 @@ mod tests {
             core_name: "flycast",
             requires_hw_render: false,
             requested_hw_context_type: None,
+            force_macos_metal_view: false,
             frontend_capabilities: &frontend(false, true),
         });
 
@@ -535,6 +570,7 @@ mod tests {
             core_name: "dolphin",
             requires_hw_render: true,
             requested_hw_context_type: Some(6),
+            force_macos_metal_view: false,
             frontend_capabilities: &frontend(true, true),
         });
 
@@ -549,6 +585,7 @@ mod tests {
             core_name: "flycast",
             requires_hw_render: false,
             requested_hw_context_type: None,
+            force_macos_metal_view: false,
             frontend_capabilities: &frontend(true, true),
         });
 
@@ -562,6 +599,7 @@ mod tests {
             core_name: "flycast",
             requires_hw_render: true,
             requested_hw_context_type: Some(1),
+            force_macos_metal_view: false,
             frontend_capabilities: &frontend(true, true),
         });
 
@@ -575,6 +613,7 @@ mod tests {
             core_name: "dolphin",
             requires_hw_render: false,
             requested_hw_context_type: None,
+            force_macos_metal_view: false,
             frontend_capabilities: &frontend(true, true),
         });
 
@@ -589,6 +628,7 @@ mod tests {
             core_name: "dolphin",
             requires_hw_render: false,
             requested_hw_context_type: None,
+            force_macos_metal_view: false,
             frontend_capabilities: &frontend(false, true),
         });
 
@@ -603,6 +643,7 @@ mod tests {
             core_name: "dolphin",
             requires_hw_render: true,
             requested_hw_context_type: Some(1),
+            force_macos_metal_view: false,
             frontend_capabilities: &frontend(true, true),
         });
 
