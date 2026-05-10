@@ -1034,13 +1034,14 @@ impl NativeArcadeUiApp {
                 let dpad_right_debug = button_debug_data(&gamepad, Button::DPadRight);
                 let mut guide_debug = button_debug_data(&gamepad, Button::Mode);
                 let mut right_thumb_debug = button_debug_data(&gamepad, Button::RightThumb);
-                let dpad_up_pressed = (has_dpad_buttons && dpad_up_debug.is_pressed) || raw_dpad.up;
+                let dpad_up_pressed =
+                    dpad_button_pressed_for_runtime(&gamepad, Button::DPadUp, raw_dpad.up);
                 let dpad_down_pressed =
-                    (has_dpad_buttons && dpad_down_debug.is_pressed) || raw_dpad.down;
+                    dpad_button_pressed_for_runtime(&gamepad, Button::DPadDown, raw_dpad.down);
                 let dpad_left_pressed =
-                    (has_dpad_buttons && dpad_left_debug.is_pressed) || raw_dpad.left;
+                    dpad_button_pressed_for_runtime(&gamepad, Button::DPadLeft, raw_dpad.left);
                 let dpad_right_pressed =
-                    (has_dpad_buttons && dpad_right_debug.is_pressed) || raw_dpad.right;
+                    dpad_button_pressed_for_runtime(&gamepad, Button::DPadRight, raw_dpad.right);
                 let dpad_debugs = [
                     &dpad_up_debug,
                     &dpad_down_debug,
@@ -2945,15 +2946,54 @@ fn is_playable_gamepad(gamepad: &gilrs::Gamepad<'_>) -> bool {
 #[cfg(feature = "gamepad")]
 fn button_debug_data(gamepad: &gilrs::Gamepad<'_>, button: Button) -> ControllerInputButtonDebug {
     let data = gamepad.button_data(button);
-    let raw_pressed = digital_button_active(data.map(|entry| entry.is_pressed()));
+    let gilrs_pressed = gamepad.is_pressed(button);
+    let data_pressed = data.map(|entry| entry.is_pressed());
+    let data_value = data.map(|entry| entry.value());
+    let raw_pressed = physical_button_active(
+        gilrs_pressed,
+        data_pressed,
+        data_value,
+        BUTTON_ACTIVE_THRESHOLD,
+    );
     ControllerInputButtonDebug {
         code: gamepad.button_code(button).map(|code| code.into_u32()),
-        gilrs_is_pressed: gamepad.is_pressed(button),
+        gilrs_is_pressed: gilrs_pressed,
         is_pressed: raw_pressed,
         effective_is_pressed: raw_pressed,
-        data_pressed: data.map(|entry| entry.is_pressed()),
-        data_value: data.map(|entry| entry.value()),
+        data_pressed,
+        data_value,
     }
+}
+
+#[cfg(feature = "gamepad")]
+fn dpad_button_pressed_for_runtime(
+    gamepad: &gilrs::Gamepad<'_>,
+    button: Button,
+    raw_event_pressed: bool,
+) -> bool {
+    let data = gamepad.button_data(button);
+    dpad_button_active_for_runtime(
+        raw_event_pressed,
+        gamepad.button_code(button).is_some(),
+        gamepad.is_pressed(button),
+        data.map(|d| d.is_pressed()),
+        data.map(|d| d.value()),
+        BUTTON_ACTIVE_THRESHOLD,
+    )
+}
+
+#[cfg(any(feature = "gamepad", test))]
+fn dpad_button_active_for_runtime(
+    raw_event_pressed: bool,
+    has_button_code: bool,
+    gilrs_pressed: bool,
+    data_pressed: Option<bool>,
+    data_value: Option<f32>,
+    threshold: f32,
+) -> bool {
+    raw_event_pressed
+        || valued_button_active(data_pressed, data_value, threshold)
+        || (has_button_code && gilrs_pressed)
 }
 
 #[cfg(any(feature = "gamepad", test))]
@@ -2970,16 +3010,32 @@ fn valued_button_active(
     digital_button_active(data_pressed) || data_value.unwrap_or(0.0) >= threshold
 }
 
+#[cfg(any(feature = "gamepad", test))]
+fn physical_button_active(
+    gilrs_pressed: bool,
+    data_pressed: Option<bool>,
+    data_value: Option<f32>,
+    threshold: f32,
+) -> bool {
+    gilrs_pressed || valued_button_active(data_pressed, data_value, threshold)
+}
+
 #[cfg(feature = "gamepad")]
 fn button_pressed_digital(gamepad: &gilrs::Gamepad<'_>, button: Button) -> bool {
     let data = gamepad.button_data(button);
-    digital_button_active(data.map(|d| d.is_pressed()))
+    physical_button_active(
+        gamepad.is_pressed(button),
+        data.map(|d| d.is_pressed()),
+        data.map(|d| d.value()),
+        BUTTON_ACTIVE_THRESHOLD,
+    )
 }
 
 #[cfg(feature = "gamepad")]
 fn button_pressed_with_value_fallback(gamepad: &gilrs::Gamepad<'_>, button: Button) -> bool {
     let data = gamepad.button_data(button);
-    valued_button_active(
+    physical_button_active(
+        gamepad.is_pressed(button),
         data.map(|d| d.is_pressed()),
         data.map(|d| d.value()),
         BUTTON_ACTIVE_THRESHOLD,
@@ -4490,6 +4546,38 @@ mod tests {
             &suspect,
             &[&dpad_up, &dpad_down, &dpad_left, &dpad_right],
             dpad_active
+        ));
+    }
+
+    #[test]
+    fn physical_button_active_accepts_gilrs_pressed_without_button_data() {
+        assert!(physical_button_active(true, None, None, 0.5));
+    }
+
+    #[test]
+    fn physical_button_active_accepts_value_fallback() {
+        assert!(physical_button_active(false, Some(false), Some(0.75), 0.5));
+        assert!(!physical_button_active(false, Some(false), Some(0.25), 0.5));
+    }
+
+    #[test]
+    fn dpad_runtime_input_ignores_uncoded_gilrs_aliases() {
+        assert!(!dpad_button_active_for_runtime(
+            false, false, true, None, None, 0.5
+        ));
+        assert!(dpad_button_active_for_runtime(
+            false, true, true, None, None, 0.5
+        ));
+        assert!(dpad_button_active_for_runtime(
+            true, false, false, None, None, 0.5
+        ));
+        assert!(dpad_button_active_for_runtime(
+            false,
+            false,
+            false,
+            Some(false),
+            Some(0.75),
+            0.5
         ));
     }
 
