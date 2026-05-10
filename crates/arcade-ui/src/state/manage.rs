@@ -54,7 +54,7 @@ impl Default for ManageState {
             .map(String::from)
             .collect();
 
-        let default_core = arcade_domain::core_profiles()
+        let default_core = arcade_domain::configurable_core_profiles()
             .first()
             .map(|p| p.core_name.to_string())
             .unwrap_or_default();

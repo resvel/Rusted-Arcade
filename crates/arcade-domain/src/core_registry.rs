@@ -121,6 +121,17 @@ pub fn core_profiles() -> Vec<CoreProfile> {
     ]
 }
 
+/// Returns core profiles that are valid for the current platform's supported
+/// core matrix.
+pub fn configurable_core_profiles() -> Vec<CoreProfile> {
+    core_profiles()
+        .into_iter()
+        .filter(|profile| {
+            crate::core::supported_cores_for_system(profile.system).contains(&profile.core_name)
+        })
+        .collect()
+}
+
 // ---------------------------------------------------------------------------
 // GameCube: dolphin
 // ---------------------------------------------------------------------------
@@ -2427,6 +2438,38 @@ mod tests {
         assert!(core_profile_for("mednafen_pce_fast").is_some());
         assert!(core_profile_for("dolphin").is_some());
         assert!(core_profile_for("nonexistent").is_none());
+    }
+
+    #[test]
+    fn configurable_profiles_follow_platform_core_allowlist() {
+        let profiles = configurable_core_profiles();
+        let core_names = profiles
+            .iter()
+            .map(|profile| profile.core_name)
+            .collect::<Vec<_>>();
+
+        let expected_ps2_core = if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
+            "pcarmsx2"
+        } else {
+            "pcsx2"
+        };
+        let hidden_ps2_core = if expected_ps2_core == "pcarmsx2" {
+            "pcsx2"
+        } else {
+            "pcarmsx2"
+        };
+
+        assert!(core_names.contains(&expected_ps2_core));
+        assert!(!core_names.contains(&hidden_ps2_core));
+        for profile in profiles {
+            assert!(
+                crate::core::supported_cores_for_system(profile.system)
+                    .contains(&profile.core_name),
+                "profile {} should be supported for {}",
+                profile.core_name,
+                profile.system
+            );
+        }
     }
 
     #[test]

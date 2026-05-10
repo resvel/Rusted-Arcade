@@ -44,6 +44,7 @@ impl NativeArcadeUiApp {
         // Populate the generic core_values map from the persisted core_settings,
         // resolving defaults from the registry for any keys not yet stored.
         let profiles = arcade_domain::core_profiles();
+        let configurable_profiles = arcade_domain::configurable_core_profiles();
         let mut core_values: HashMap<String, HashMap<String, String>> = HashMap::new();
         for profile in &profiles {
             let mut vars = HashMap::new();
@@ -59,9 +60,13 @@ impl NativeArcadeUiApp {
         }
         self.state.manage.settings_core_values = core_values;
 
-        // Default to the first core tab if the current selection is empty.
-        if self.state.manage.settings_selected_core.is_empty() {
-            if let Some(first) = profiles.first() {
+        // Default to the first visible core tab if the current selection is empty
+        // or no longer belongs to this platform's supported core matrix.
+        let selected_core_is_configurable = configurable_profiles
+            .iter()
+            .any(|profile| profile.core_name == self.state.manage.settings_selected_core);
+        if self.state.manage.settings_selected_core.is_empty() || !selected_core_is_configurable {
+            if let Some(first) = configurable_profiles.first() {
                 self.state.manage.settings_selected_core = first.core_name.to_string();
             }
         }
@@ -240,7 +245,7 @@ impl NativeArcadeUiApp {
             ui.add_space(4.0);
 
             // --- Core/system tab selector ---
-            let profiles = arcade_domain::core_profiles();
+            let profiles = arcade_domain::configurable_core_profiles();
             let tab_idx = self
                 .state
                 .menu_nav

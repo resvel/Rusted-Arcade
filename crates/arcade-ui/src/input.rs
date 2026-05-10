@@ -1986,7 +1986,7 @@ impl NativeArcadeUiApp {
     }
 
     fn handle_settings_direction(&mut self, direction: MenuNavDirection) {
-        let profiles = arcade_domain::core_profiles();
+        let profiles = arcade_domain::configurable_core_profiles();
         let num_tabs = profiles.len();
         let tab_idx = self
             .state
@@ -2167,7 +2167,7 @@ impl NativeArcadeUiApp {
             }
             MenuFocusRegion::SettingsAppConfigCoreTab => {
                 // Selecting a tab moves focus into the first variable.
-                let profiles = arcade_domain::core_profiles();
+                let profiles = arcade_domain::configurable_core_profiles();
                 let tab_idx = self
                     .state
                     .menu_nav
@@ -2189,7 +2189,7 @@ impl NativeArcadeUiApp {
             }
             MenuFocusRegion::SettingsAppConfigCoreVariable => {
                 // Apply the currently highlighted option to the in-memory settings map.
-                let profiles = arcade_domain::core_profiles();
+                let profiles = arcade_domain::configurable_core_profiles();
                 let tab_idx = self
                     .state
                     .menu_nav
