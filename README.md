@@ -1,180 +1,240 @@
 # Rusted Arcade
 
-Rusted Arcade is a Rust desktop libretro frontend for a local game library. It is built around `eframe`/`egui`, SQLite, native audio/input, and dynamically loaded libretro cores.
+Rusted Arcade is a native desktop frontend for a local retro game library. It
+loads libretro cores, manages your library and save states, supports controller
+mapping, and gives each supported system a consistent arcade-style launcher.
 
-The current development target is macOS, especially Apple Silicon. Release readiness and runtime validation are focused on macOS.
+The current primary target is macOS, with stable runtime lanes for both native
+Apple Silicon and whole-app x86_64 under Rosetta. The app can be built and run
+from source today, and the macOS package script can create local `.app` bundles
+for testing.
 
-## Repository Status
+## What This App Does
 
-This repository is intended to publish source code and bundled UI assets only.
+- Presents a native `egui` desktop UI for Favorites, Library, Settings, and
+  gameplay.
+- Scans local ROM folders into a SQLite library.
+- Loads libretro cores dynamically from your runtime core folder.
+- Provides video, audio, input, save state, VFS, and core-option integration.
+- Includes system-aware controller mapping with visual controller layouts.
+- Includes an in-app Dependency Installer under Settings for runtime setup,
+  repairs, imports, and diagnostics.
+- Supports separate native ARM64 and Rosetta/x86_64 macOS core folders.
+- Builds local macOS app bundles with bundled UI assets and ad-hoc signing.
 
-Included:
+## What You Must Provide
 
-- Rust workspace source under `crates/`
-- SQLite bootstrap schema under `sql/`
-- Bundled UI art under `assets/`
-- Example configuration in `config.example.toml`
-- Top-level project docs and license
-- A gitlink/submodule entry for `third_party/mupen64plus-libretro-nx`
+Rusted Arcade does not include games, BIOS files, or proprietary runtime
+packages.
 
-Not included:
+You are responsible for providing:
 
-- ROMs or game archives
-- BIOS files
-- Libretro core binaries
-- Local `config.toml`
-- Local agent instructions and LLM wiki notes
-- Local SQLite databases, save states, and generated cover art
-- Build output such as `target/`, `dist/`, or `build/`
+- ROMs and disc images you legally own.
+- BIOS files required by systems such as PS2, Saturn, and PCE-CD.
+- Compatibility cores and resource folders that are not available as standard
+  libretro buildbot downloads.
+- Any third-party runtime resources whose licenses require you to obtain them
+  directly from their upstream source.
 
-The `.gitignore` keeps those local/runtime paths out of Git. Release artifacts should ship app binaries separately from libretro cores.
+The Dependency Installer can download standard libretro cores from the upstream
+libretro buildbot where configured, and it can import local files or folders
+that you select. It never downloads BIOS files or ROMs.
 
-## Features
+## Runtime Folder
 
-- Native `egui` library shell with Home, Library, Settings, and Play views
-- SQLite-backed ROM library, favorites, save states, and controller mappings
-- Dynamic libretro core loading from a configured `core_root`
-- Video, audio, input, environment variables, VFS, and save-state integration for libretro cores
-- System-aware controller mapping with visual mapper assets and hotspot overlays
-- Cover scraping and local cover relinking workflows
-- macOS renderer selection between Metal-backed `wgpu` and OpenGL `glow`
-- Apple Silicon N64 path with cached interpreter and experimental dynarec lanes
+By default, Rusted Arcade uses:
 
-## Workspace
+```text
+~/Documents/Arcade
+```
 
-- `arcade-app`: desktop entry point and app wiring
-- `arcade-ui`: native `egui` UI, rendering, views, assets, and input handling
-- `arcade-libretro`: libretro host, callbacks, video/audio, VFS, and core lifecycle
-- `arcade-domain`: configuration, system/core policy, platform helpers, and shared models
-- `arcade-data`: SQLite schema/bootstrap and repositories
-- `arcade-services`: library, launch, save-state, cover, and controller mapping services
+The app creates and uses paths like:
 
-## Requirements
+```text
+~/Documents/Arcade/config.toml
+~/Documents/Arcade/roms/
+~/Documents/Arcade/cores/
+~/Documents/Arcade/cores/x86_64/
+~/Documents/Arcade/bios/
+~/Documents/Arcade/data/arcade.db
+~/Documents/Arcade/data/save-states/
+~/Documents/Arcade/covers/
+```
 
-- Stable Rust toolchain
-- macOS for the primary supported runtime path
-- Libretro core binaries you are legally allowed to use
-- ROM and BIOS assets you legally own
-- For Vulkan hardware-rendered cores on macOS, a working Vulkan/MoltenVK installation may be required depending on the core
+Native Apple Silicon cores live in `cores/`. Rosetta/x86_64 cores live in
+`cores/x86_64/`.
 
-## Quick Start
+## First Launch
 
-Clone with submodules:
+On first launch, the app scans its runtime dependencies. If required pieces are
+missing, it opens Settings to the Dependencies view.
+
+Use that view to:
+
+- Install standard libretro cores from the configured libretro buildbot.
+- Import local compatibility cores, such as PS2 or ARM64 N64 dynarec builds.
+- Import required resource folders, such as Dolphin `Sys` or PS2 Metal
+  resources.
+- Open BIOS target folders and see accepted filenames.
+- Re-scan after installing or importing files.
+
+On macOS, imported or downloaded `.dylib` cores are ad-hoc codesigned by the
+app after installation.
+
+## Running From Source
+
+Install a stable Rust toolchain. On macOS, Xcode Command Line Tools are also
+recommended.
+
+Clone the repository:
 
 ```bash
 git clone --recurse-submodules <repo-url>
-cd native
+cd Rusted-Arcade
 ```
 
-Or initialize submodules after cloning:
+If you already cloned without submodules:
 
 ```bash
 git submodule update --init
 ```
 
-Copy and edit the example config:
-
-```bash
-cp config.example.toml config.toml
-```
-
-Set these paths in `config.toml`:
-
-- `paths.rom_root`
-- `paths.db_path`
-- `paths.save_state_root`
-- `paths.core_root`
-- `paths.bios_root`
-
-Run the app:
+Run the native Apple Silicon build:
 
 ```bash
 cargo run -p arcade-app
 ```
 
-Run with an explicit config path:
+Or build and run the binary directly:
 
 ```bash
-cargo run -p arcade-app -- /path/to/config.toml
+cargo build -p arcade-app
+target/debug/arcade-app
 ```
 
-Build a release binary:
+Run with a log file:
 
 ```bash
-cargo build -p arcade-app --release
+ARCADE_LOG_FILE=run-arm64.log target/debug/arcade-app
 ```
 
-The release executable is written to `target/release/arcade-app`.
+## Running The Rosetta/x86_64 Lane
 
-## Runtime Layout
+On Apple Silicon, the Rosetta build is useful for x86_64-only cores and for the
+current Rosetta PS2 path.
 
-A typical local layout is:
+```bash
+cargo build --target x86_64-apple-darwin -p arcade-app
+target/x86_64-apple-darwin/debug/arcade-app
+```
+
+With logs:
+
+```bash
+ARCADE_LOG_FILE=run-rosetta.log target/x86_64-apple-darwin/debug/arcade-app
+```
+
+The app should log `Rosetta: true` and use `~/Documents/Arcade/cores/x86_64`
+when that folder exists.
+
+## Building macOS App Bundles
+
+Native Apple Silicon bundle:
+
+```bash
+scripts/package-macos-app.sh
+```
+
+This creates:
 
 ```text
-config.toml
-roms/
-cores/
-bios/
-data/arcade.db
-data/save-states/
-covers/
+dist/RustedArcade.app
 ```
 
-Those directories are local runtime content and should not be committed.
+Rosetta/x86_64 bundle:
 
-## Libretro Cores
+```bash
+TARGET=x86_64-apple-darwin scripts/package-macos-app.sh
+```
 
-This project ships app binaries only. Libretro cores are not bundled in source or release artifacts.
+This creates:
 
-Core binaries should be placed in the configured `core_root` directory. On macOS, core files use the libretro suffix form:
+```text
+dist/RustedArcade_Universal_.app
+```
+
+The packaging script copies bundled UI assets, writes `Info.plist`, removes
+macOS metadata, and ad-hoc signs the bundle. Runtime data remains in
+`~/Documents/Arcade`.
+
+## Adding Games
+
+Place your games under `~/Documents/Arcade/roms/` using the system folders that
+the Smart Scan understands:
+
+| System | Folder | Common extensions |
+| --- | --- | --- |
+| NES | `nes` | `.nes` |
+| SNES | `snes` | `.sfc`, `.smc` |
+| Genesis / Mega Drive | `genesis` | `.gen`, `.smd`, `.md`, `.bin` |
+| Game Boy / Game Boy Color | `gb` | `.gb`, `.gbc`, `.zip` |
+| Game Boy Advance | `gba` | `.gba`, `.zip` |
+| Nintendo 64 | `n64` | `.n64`, `.z64`, `.v64`, `.zip` |
+| Arcade | `arcade` or `arcade-mame2003` | `.zip` |
+| PlayStation | `psx` | `.cue`, `.img`, `.iso`, `.pbp`, `.chd` |
+| PlayStation 2 | `ps2` | `.iso`, `.chd`, `.gz`, `.cso`, `.bin` |
+| Dreamcast | `dreamcast` | `.cdi`, `.gdi`, `.chd` |
+| GameCube | `gamecube` | `.iso`, `.gcm`, `.rvz`, `.gcz`, `.wbfs`, `.ciso`, `.tgc` |
+| Saturn | `saturn` | `.chd`, `.cue`, `.ccd`, `.toc`, `.m3u` |
+| PCE-CD / TurboGrafx | `pcecd` | `.chd`, `.cue`, `.ccd`, `.toc`, `.m3u`, `.pce`, `.sgx` |
+| DOS | `dos` | `.zip`, `.exe`, `.com`, `.bat` |
+
+Then open the app and use the Library management tools to run Smart Scan.
+
+## Supported Systems And Core Paths
+
+| System | Native Apple Silicon | Rosetta/x86_64 |
+| --- | --- | --- |
+| NES | `fceumm` | `fceumm` |
+| SNES | `snes9x` | `snes9x` |
+| Genesis / Mega Drive | `genesis_plus_gx` | `genesis_plus_gx` |
+| Game Boy / Game Boy Color | `gambatte` | `gambatte` |
+| Game Boy Advance | `mgba` | `mgba` |
+| Nintendo 64 | `mupen64plus_next`, with optional ARM64 dynarec compatibility build | `mupen64plus_next` |
+| Arcade | `fbneo`, optional `mame2003` / `mame2003_plus` | `fbneo`, optional `mame2003` / `mame2003_plus` |
+| PlayStation | `mednafen_psx_hw` | `mednafen_psx_hw` |
+| PlayStation 2 | `pcarmsx2` | `pcsx2_metal_poc_libretro.dylib` through `pcsx2` |
+| Dreamcast | `flycast` | `flycast` |
+| GameCube | `dolphin` | `dolphin` |
+| Saturn | `mednafen_saturn` | `mednafen_saturn` |
+| PCE-CD / TurboGrafx | `mednafen_pce_fast` | `mednafen_pce_fast` |
+| DOS | `dosbox_pure` | `dosbox_pure` |
+
+Standard libretro cores use this filename form on macOS:
 
 ```text
 <core_name>_libretro.dylib
 ```
 
-See [CORES.md](CORES.md) for core distribution policy and platform-specific notes.
+Compatibility builds are treated separately from stock buildbot cores. The app
+does not silently substitute a standard upstream core when a compatibility
+build is required.
 
-## Supported Systems
+## BIOS And Resources
 
-| System | Default core |
-| --- | --- |
-| NES | `fceumm` |
-| SNES | `snes9x` |
-| Genesis / Mega Drive | `genesis_plus_gx` |
-| Game Boy | `gambatte` |
-| Game Boy Advance | `mgba` |
-| Nintendo 64 | `mupen64plus_next` |
-| Arcade | `fbneo` |
-| PlayStation | `mednafen_psx_hw` |
-| PlayStation 2 | `pcarmsx2` on Apple Silicon macOS, `pcsx2` on x86_64/Rosetta |
-| Dreamcast | `flycast` |
-| GameCube | `dolphin` |
-| Sega Saturn | `mednafen_saturn` |
-| PC Engine / TurboGrafx-16 | `mednafen_pce_fast` |
-| DOS | `dosbox_pure` |
+BIOS files are user-owned files. Rusted Arcade does not download them.
 
-Arcade also supports `mame2003` and `mame2003_plus` for title-specific compatibility.
+Important locations:
 
-## macOS Notes
-
-- Default frontend rendering uses `wgpu`.
-- Set `ARCADE_MACOS_RENDERER=glow` to force the OpenGL frontend path.
-- If `ARCADE_MACOS_RENDERER` is unset and `play_libretro.dylib` is detected in `core_root`, the app auto-selects `glow` for Play! compatibility.
-- The N64 `Stable Cached` lane uses `mupen64plus_next_libretro.dylib`.
-- The N64 `Experimental Dynarec` lane prefers `mupen64plus_next_dynarec_arm64_libretro.dylib` on Apple Silicon.
-- If the dynarec lane fails to launch, the host retries once with the cached lane.
-
-## Arcade Setup
-
-- Default `ARCADE` core: `fbneo`
-- Place arcade ROM archives under `<rom_root>/arcade-mame2003/`
-- Shared arcade BIOS archives are resolved from:
-  - `<bios_root>/arcade-mame2003`
-  - `<bios_root>`
-  - `<bios_root>/roms/arcade-mame2003`
-  - `<rom_root>/arcade-mame2003`
-  - `<rom_root>/roms/arcade-mame2003`
-- Common shared BIOS archives include `neogeo.zip`, `qsound.zip`, and `pgm.zip`
+- PS2 BIOS: `~/Documents/Arcade/bios/pcsx2/bios/`
+- PCE-CD BIOS: shown in the Dependencies view
+- Saturn BIOS: shown in the Dependencies view
+- Shared arcade BIOS archives: place with your arcade BIOS/ROM set as guided
+  by the Dependencies view
+- Dolphin Sys folder: import a valid Dolphin `Sys` folder through the
+  Dependencies view
+- PS2 Metal/resource folders: import the resources required by the selected
+  PS2 compatibility core
 
 ## Controls
 
@@ -192,27 +252,73 @@ Default controller frontend shortcuts:
 - Hold `Right Shoulder`: Exit
 - Hold `Left Shoulder`: Reset
 - `Quick Save`, `Quick Load`, and `Next Save Slot` can be assigned per system
-- Recognized PlayStation/Xbox-family controllers auto-fill common shortcut controls
+- Recognized PlayStation/Xbox-family controllers auto-fill common shortcut
+  controls
+
+Controller mappings can be edited and saved per system in Settings.
+
+## Core Settings
+
+Core Settings exposes per-core options such as N64 CPU mode, PS2 renderer/audio
+choices, and PS2 recompiler toggles where supported. The native Apple Silicon
+PS2 path uses `pcarmsx2`; Rosetta uses the PCSX2 Metal PoC path by default.
+You should not need to launch with long environment-variable commands for
+normal PS2 testing.
+
+## macOS Rendering Notes
+
+- The default frontend renderer is Metal-backed `wgpu`.
+- `ARCADE_MACOS_RENDERER=glow` forces the older OpenGL frontend path for
+  diagnostics.
+- Native Apple Silicon uses `pcarmsx2` for PS2 by default.
+- Rosetta/x86_64 uses the PCSX2 Metal PoC path by default for PS2.
+- `ARCADE_PCSX2_METAL_POC=0` is only for diagnosing the older Rosetta Vulkan
+  path.
+
+## Repository Contents
+
+Included in Git:
+
+- Rust workspace source under `crates/`
+- macOS packaging script under `scripts/`
+- SQLite bootstrap schema under `sql/`
+- Bundled UI art under `assets/`
+- Example configuration in `config.example.toml`
+- Top-level docs and license
+- A gitlink/submodule entry for `third_party/mupen64plus-libretro-nx`
+
+Not included in Git:
+
+- ROMs, game archives, or disc images
+- BIOS files
+- Libretro core binaries
+- Local compatibility-core source snapshots
+- Local `config.toml`
+- Local SQLite databases, save states, and generated cover art
+- Build output such as `target/`, `dist/`, or `build/`
 
 ## Theme Assets
 
-The app loads bundled UI art from `assets/`. GitHub includes only the default header and background art: `assets/system-logos/all_header.jpg` and `assets/system-logos/All-background.jpg`. Per-system header and background art can be added locally by placing files in `assets/system-logos/`.
-
-See [UI.md](UI.md) for the full header, background, logo, and controller art assignment map.
-
-Header override pattern:
+The app loads bundled UI art from `assets/`. GitHub includes the default header
+and background art:
 
 ```text
-<system>_header.(png|webp|jpg|jpeg)
+assets/system-logos/all_header.jpg
+assets/system-logos/All-background.jpg
 ```
 
-Background override pattern:
+Per-system header and background art can be added locally:
 
 ```text
-<system>_background.(png|webp|jpg|jpeg)
+assets/system-logos/<system>_header.(png|webp|jpg|jpeg)
+assets/system-logos/<system>_background.(png|webp|jpg|jpeg)
 ```
 
-`<system>` is the lowercase system key used by the UI, such as `nes`, `snes`, `genesis`, `n64`, `arcade`, `psx`, `ps2`, `dreamcast`, or `dos`. If no override exists, the app uses the default bundled art.
+`<system>` is the lowercase system key used by the UI, such as `nes`, `snes`,
+`genesis`, `n64`, `arcade`, `psx`, `ps2`, `dreamcast`, or `dos`.
+
+See [UI.md](UI.md) for the full header, background, logo, and controller art
+assignment map.
 
 ## License
 
