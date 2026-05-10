@@ -214,39 +214,6 @@ Background override pattern:
 
 `<system>` is the lowercase system key used by the UI, such as `nes`, `snes`, `genesis`, `n64`, `arcade`, `psx`, `ps2`, `dreamcast`, or `dos`. If no override exists, the app uses the default bundled art.
 
-## Development Checks
-
-Useful validation commands:
-
-```bash
-cargo fmt --all
-cargo check --workspace
-cargo test -p arcade-domain
-cargo test -p arcade-data
-cargo test -p arcade-services
-cargo test -p arcade-ui
-cargo test -p arcade-libretro
-cargo check -p arcade-app
-```
-
-Before publishing or cutting a release, also check:
-
-```bash
-git status --short --ignored
-git submodule status
-```
-
-Confirm that ignored local content such as `roms/`, `bios/`, `cores/`, `data/`, `covers/`, and `target/` is not staged.
-
-## Release Gates
-
-Still required before final public release sign-off:
-
-- Broader macOS dynarec stability validation across more N64 titles
-- Longer gameplay testing across newly added systems
-- Final clean-machine smoke test on target macOS versions
-- Packaging, signing, and notarization decisions for macOS distribution
-
 ## License
 
 This project is licensed under GPL-3.0-only. See [LICENSE](LICENSE).
