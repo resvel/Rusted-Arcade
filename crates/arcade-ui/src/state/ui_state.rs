@@ -27,7 +27,7 @@ impl SettingsScrollTarget {
 
     pub(crate) fn label(self) -> &'static str {
         match self {
-            Self::Dependencies => "Dependencies",
+            Self::Dependencies => "Runtime Setup",
             Self::AppConfig => "App Config",
             Self::TheGamesDbConfig => "TheGamesDB",
             Self::InputSettings => "Input",

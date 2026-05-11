@@ -140,6 +140,248 @@ impl DependencyReport {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DependencySystemReadiness {
+    Ready,
+    Blocked,
+    ReadyWithOptionalUpgrades,
+}
+
+impl Default for DependencySystemReadiness {
+    fn default() -> Self {
+        Self::Ready
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DependencySystemGroup {
+    pub system: String,
+    pub readiness: DependencySystemReadiness,
+    pub components: Vec<DependencyComponentStatus>,
+    pub missing_required: usize,
+    pub missing_optional: usize,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct DependencySystemSetup {
+    pub system: String,
+    pub readiness: DependencySystemReadiness,
+    pub automatic_actions: Vec<DependencyComponentStatus>,
+    pub user_actions: Vec<DependencyComponentStatus>,
+    pub optional_upgrades: Vec<DependencyComponentStatus>,
+    pub advanced_components: Vec<DependencyComponentStatus>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct DependencySetupView {
+    pub needs_attention: Vec<DependencyComponentStatus>,
+    pub system_groups: Vec<DependencySystemGroup>,
+    pub optional_upgrades: Vec<DependencyComponentStatus>,
+    pub advanced_components: Vec<DependencyComponentStatus>,
+    pub ready_system_count: usize,
+    pub blocked_system_count: usize,
+}
+
+impl DependencySetupView {
+    pub fn from_report(report: &DependencyReport) -> Self {
+        use std::collections::BTreeMap;
+
+        let mut needs_attention = report
+            .components
+            .iter()
+            .filter(|status| status.component.required && !status.ready())
+            .cloned()
+            .collect::<Vec<_>>();
+        needs_attention.sort_by(component_action_sort);
+
+        let mut optional_upgrades = report
+            .components
+            .iter()
+            .filter(|status| !status.component.required && !status.ready())
+            .cloned()
+            .collect::<Vec<_>>();
+        optional_upgrades.sort_by(component_action_sort);
+
+        let mut advanced_components = report.components.clone();
+        advanced_components.sort_by(component_inventory_sort);
+
+        let mut by_system: BTreeMap<String, Vec<DependencyComponentStatus>> = BTreeMap::new();
+        for status in &report.components {
+            by_system
+                .entry(status.component.system.clone())
+                .or_default()
+                .push(status.clone());
+        }
+
+        let mut system_groups = by_system
+            .into_iter()
+            .map(|(system, mut components)| {
+                components.sort_by(component_inventory_sort);
+                let missing_required = components
+                    .iter()
+                    .filter(|status| status.component.required && !status.ready())
+                    .count();
+                let missing_optional = components
+                    .iter()
+                    .filter(|status| !status.component.required && !status.ready())
+                    .count();
+                let readiness = if missing_required > 0 {
+                    DependencySystemReadiness::Blocked
+                } else if missing_optional > 0 {
+                    DependencySystemReadiness::ReadyWithOptionalUpgrades
+                } else {
+                    DependencySystemReadiness::Ready
+                };
+                DependencySystemGroup {
+                    system,
+                    readiness,
+                    components,
+                    missing_required,
+                    missing_optional,
+                }
+            })
+            .collect::<Vec<_>>();
+        system_groups.sort_by(|left, right| {
+            system_readiness_rank(left.readiness)
+                .cmp(&system_readiness_rank(right.readiness))
+                .then(left.system.cmp(&right.system))
+        });
+
+        let ready_system_count = system_groups
+            .iter()
+            .filter(|group| group.readiness != DependencySystemReadiness::Blocked)
+            .count();
+        let blocked_system_count = system_groups.len().saturating_sub(ready_system_count);
+
+        Self {
+            needs_attention,
+            system_groups,
+            optional_upgrades,
+            advanced_components,
+            ready_system_count,
+            blocked_system_count,
+        }
+    }
+
+    pub fn missing_required_standard_core_ids(&self) -> Vec<String> {
+        self.needs_attention
+            .iter()
+            .filter(|status| {
+                matches!(
+                    status.component.source,
+                    DependencySource::LibretroBuildbot { .. }
+                )
+            })
+            .map(|status| status.component.id.clone())
+            .collect()
+    }
+
+    pub fn system_setup(&self, system: &str) -> Option<DependencySystemSetup> {
+        let normalized = system.trim().to_ascii_uppercase();
+        let group = self
+            .system_groups
+            .iter()
+            .find(|group| group.system.eq_ignore_ascii_case(&normalized))?;
+
+        let mut automatic_actions = group
+            .components
+            .iter()
+            .filter(|status| {
+                status.component.required
+                    && !status.ready()
+                    && matches!(
+                        status.component.source,
+                        DependencySource::LibretroBuildbot { .. }
+                            | DependencySource::Homebrew { .. }
+                            | DependencySource::UpstreamDownload { .. }
+                    )
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        automatic_actions.sort_by(component_action_sort);
+
+        let mut user_actions = group
+            .components
+            .iter()
+            .filter(|status| {
+                status.component.required
+                    && !status.ready()
+                    && matches!(
+                        status.component.source,
+                        DependencySource::LocalImport
+                            | DependencySource::ExternalGuided { .. }
+                            | DependencySource::UserProvided
+                    )
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        user_actions.sort_by(component_action_sort);
+
+        let mut optional_upgrades = group
+            .components
+            .iter()
+            .filter(|status| !status.component.required && !status.ready())
+            .cloned()
+            .collect::<Vec<_>>();
+        optional_upgrades.sort_by(component_action_sort);
+
+        Some(DependencySystemSetup {
+            system: group.system.clone(),
+            readiness: group.readiness,
+            automatic_actions,
+            user_actions,
+            optional_upgrades,
+            advanced_components: group.components.clone(),
+        })
+    }
+}
+
+fn component_action_sort(
+    left: &DependencyComponentStatus,
+    right: &DependencyComponentStatus,
+) -> std::cmp::Ordering {
+    component_action_rank(left)
+        .cmp(&component_action_rank(right))
+        .then(left.component.system.cmp(&right.component.system))
+        .then(left.component.title.cmp(&right.component.title))
+}
+
+fn component_inventory_sort(
+    left: &DependencyComponentStatus,
+    right: &DependencyComponentStatus,
+) -> std::cmp::Ordering {
+    left.component
+        .system
+        .cmp(&right.component.system)
+        .then(left.ready().cmp(&right.ready()))
+        .then(
+            left.component
+                .required
+                .cmp(&right.component.required)
+                .reverse(),
+        )
+        .then(left.component.title.cmp(&right.component.title))
+}
+
+fn component_action_rank(status: &DependencyComponentStatus) -> usize {
+    match status.component.source {
+        DependencySource::LibretroBuildbot { .. }
+        | DependencySource::Homebrew { .. }
+        | DependencySource::UpstreamDownload { .. } => 0,
+        DependencySource::LocalImport => 1,
+        DependencySource::ExternalGuided { .. } => 2,
+        DependencySource::UserProvided => 3,
+    }
+}
+
+fn system_readiness_rank(readiness: DependencySystemReadiness) -> usize {
+    match readiness {
+        DependencySystemReadiness::Blocked => 0,
+        DependencySystemReadiness::ReadyWithOptionalUpgrades => 1,
+        DependencySystemReadiness::Ready => 2,
+    }
+}
+
 pub fn dependency_manifest(paths: &PathsConfig) -> Vec<DependencyComponent> {
     let core_root = dependency_core_root(paths);
     let buildbot_core_names = [
@@ -550,5 +792,124 @@ mod tests {
             .components
             .iter()
             .any(|status| status.component.id == "ps2-bios" && !status.ready()));
+    }
+
+    fn status(
+        id: &str,
+        system: &str,
+        title: &str,
+        required: bool,
+        state: DependencyState,
+        source: DependencySource,
+    ) -> DependencyComponentStatus {
+        DependencyComponentStatus {
+            component: DependencyComponent {
+                id: id.to_string(),
+                system: system.to_string(),
+                title: title.to_string(),
+                description: title.to_string(),
+                kind: if matches!(source, DependencySource::UserProvided) {
+                    DependencyComponentKind::Bios
+                } else {
+                    DependencyComponentKind::Core
+                },
+                required,
+                target_path: PathBuf::from(format!("/tmp/{id}")),
+                check: DependencyCheck::PathExists(PathBuf::from(format!("/tmp/{id}"))),
+                source,
+            },
+            state,
+            detail: String::new(),
+        }
+    }
+
+    #[test]
+    fn setup_view_groups_blockers_systems_and_optional_upgrades() {
+        let report = DependencyReport {
+            components: vec![
+                status(
+                    "core-nes",
+                    "NES",
+                    "NES core",
+                    true,
+                    DependencyState::Ready,
+                    DependencySource::LibretroBuildbot {
+                        file_name: "fceumm_libretro.dylib".to_string(),
+                    },
+                ),
+                status(
+                    "core-snes",
+                    "SNES",
+                    "SNES core",
+                    true,
+                    DependencyState::Missing,
+                    DependencySource::LibretroBuildbot {
+                        file_name: "snes9x_libretro.dylib".to_string(),
+                    },
+                ),
+                status(
+                    "ps2-bios",
+                    "PS2",
+                    "PS2 BIOS",
+                    true,
+                    DependencyState::Missing,
+                    DependencySource::UserProvided,
+                ),
+                status(
+                    "compat-n64",
+                    "N64",
+                    "N64 dynarec core",
+                    false,
+                    DependencyState::Missing,
+                    DependencySource::LocalImport,
+                ),
+                status(
+                    "core-n64",
+                    "N64",
+                    "N64 core",
+                    true,
+                    DependencyState::Ready,
+                    DependencySource::LibretroBuildbot {
+                        file_name: "mupen64plus_next_libretro.dylib".to_string(),
+                    },
+                ),
+            ],
+        };
+
+        let view = DependencySetupView::from_report(&report);
+
+        assert_eq!(view.needs_attention.len(), 2);
+        assert_eq!(view.needs_attention[0].component.id, "core-snes");
+        assert_eq!(view.needs_attention[1].component.id, "ps2-bios");
+        assert_eq!(
+            view.missing_required_standard_core_ids(),
+            vec!["core-snes".to_string()]
+        );
+        assert_eq!(view.optional_upgrades.len(), 1);
+        assert_eq!(view.optional_upgrades[0].component.id, "compat-n64");
+        assert_eq!(view.ready_system_count, 2);
+        assert_eq!(view.blocked_system_count, 2);
+
+        let n64 = view
+            .system_groups
+            .iter()
+            .find(|group| group.system == "N64")
+            .expect("n64 group");
+        assert_eq!(
+            n64.readiness,
+            DependencySystemReadiness::ReadyWithOptionalUpgrades
+        );
+        assert_eq!(n64.missing_required, 0);
+        assert_eq!(n64.missing_optional, 1);
+
+        let snes = view.system_setup("SNES").expect("snes setup");
+        assert_eq!(snes.automatic_actions.len(), 1);
+        assert_eq!(snes.automatic_actions[0].component.id, "core-snes");
+        assert!(snes.user_actions.is_empty());
+
+        let ps2 = view.system_setup("PS2").expect("ps2 setup");
+        assert!(ps2.automatic_actions.is_empty());
+        assert_eq!(ps2.user_actions.len(), 1);
+        assert_eq!(ps2.user_actions[0].component.id, "ps2-bios");
     }
 }

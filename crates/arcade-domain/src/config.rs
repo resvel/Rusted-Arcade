@@ -530,6 +530,14 @@ pub struct AppConfig {
 pub struct ManagementConfig {
     #[serde(default)]
     pub cover_scraping: CoverScrapingConfig,
+    #[serde(default)]
+    pub runtime_setup: RuntimeSetupConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct RuntimeSetupConfig {
+    #[serde(default)]
+    pub welcome_completed: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -878,6 +886,7 @@ mod tests {
             config.management.cover_scraping.platform_ids.gamecube,
             vec![2]
         );
+        assert!(!config.management.runtime_setup.welcome_completed);
     }
 
     #[test]
@@ -1079,6 +1088,27 @@ bios_root = "/tmp/bios"
 
         assert_eq!(config.management.cover_scraping.default_limit, 200);
         assert_eq!(config.management.cover_scraping.default_delay_ms, 150);
+        assert!(!config.management.runtime_setup.welcome_completed);
+    }
+
+    #[test]
+    fn app_config_deserializes_runtime_setup_welcome_state() {
+        let config: AppConfig = toml::from_str(
+            r#"
+[paths]
+rom_root = "/tmp/roms"
+db_path = "/tmp/arcade.db"
+save_state_root = "/tmp/save-states"
+core_root = "/tmp/cores"
+bios_root = "/tmp/bios"
+
+[management.runtime_setup]
+welcome_completed = true
+"#,
+        )
+        .expect("config");
+
+        assert!(config.management.runtime_setup.welcome_completed);
     }
 
     #[test]

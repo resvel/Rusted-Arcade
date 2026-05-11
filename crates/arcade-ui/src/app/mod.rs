@@ -264,18 +264,30 @@ impl NativeArcadeUiApp {
         }
         app.sync_manage_settings_from_services();
         app.refresh_manage_rows();
-        if app
+        let welcome_needed = !app.services.runtime_setup_welcome_completed();
+        let missing_required_dependencies = app
             .state
             .manage
             .dependency_report
             .as_ref()
-            .is_some_and(|report| report.has_missing_required())
-        {
-            app.state.current_view = AppView::Settings;
+            .is_some_and(|report| report.has_missing_required());
+        if welcome_needed || missing_required_dependencies {
+            app.navigate_to_view(AppView::Settings);
             app.state.settings_scroll_target =
                 Some(crate::state::SettingsScrollTarget::Dependencies);
-            app.state.status =
-                String::from("Runtime dependencies are missing. Opened Dependency Installer.");
+            app.state.menu_nav.settings_section_index =
+                crate::state::SettingsScrollTarget::Dependencies.nav_index();
+            app.state.menu_nav.focus_region =
+                crate::state::MenuFocusRegion::SettingsRuntimeSetupSystem;
+            app.state.manage.runtime_setup_selected_system = String::from("ALL");
+            app.state.manage.runtime_setup_system_index = 0;
+            app.state.manage.runtime_setup_focus_index = 0;
+            app.state.manage.runtime_setup_advanced_open = false;
+            app.state.status = if welcome_needed {
+                String::from("Welcome to Rusted Arcade. Opened Runtime Setup.")
+            } else {
+                String::from("Runtime dependencies are missing. Opened Runtime Setup.")
+            };
         }
 
         app

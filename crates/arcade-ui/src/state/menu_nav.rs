@@ -17,6 +17,8 @@ pub(crate) enum MenuFocusRegion {
     ManageScrapeActions,
     ManageList,
     SettingsSectionNav,
+    SettingsRuntimeSetupSystem,
+    SettingsRuntimeSetup,
     /// Core/system selector tabs in the settings panel.
     SettingsAppConfigCoreTab,
     /// A specific core variable row (index tracked separately).
@@ -288,6 +290,8 @@ impl MenuNavState {
             MenuFocusRegion::ManageScrapeActions => MenuFocusRegion::ManageScrapeSystems,
             MenuFocusRegion::ManageList => MenuFocusRegion::ManageScrapeActions,
             MenuFocusRegion::SettingsSectionNav => MenuFocusRegion::TopNav,
+            MenuFocusRegion::SettingsRuntimeSetupSystem => MenuFocusRegion::SettingsSectionNav,
+            MenuFocusRegion::SettingsRuntimeSetup => MenuFocusRegion::SettingsRuntimeSetupSystem,
             MenuFocusRegion::SettingsAppConfigCoreTab => MenuFocusRegion::TopNav,
             MenuFocusRegion::SettingsAppConfigCoreVariable => {
                 if self.settings_core_variable_index == 0 {

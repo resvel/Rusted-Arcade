@@ -743,6 +743,30 @@ impl NativeServices {
         Ok(scan_dependency_report(&config.paths))
     }
 
+    pub fn runtime_setup_welcome_completed(&self) -> bool {
+        self.config().management.runtime_setup.welcome_completed
+    }
+
+    pub fn mark_runtime_setup_welcome_completed(&self) -> Result<()> {
+        let mut config = self
+            .config
+            .lock()
+            .map_err(|_| anyhow!("config lock poisoned"))?;
+        config.management.runtime_setup.welcome_completed = true;
+        config.save_to_path(self.config_path.as_ref())
+    }
+
+    pub fn prepare_safe_runtime_setup(&self) -> Result<()> {
+        let mut config = self
+            .config
+            .lock()
+            .map_err(|_| anyhow!("config lock poisoned"))?;
+        config.emulation.apply_platform_defaults();
+        config.management.runtime_setup.welcome_completed = true;
+        config.ensure_dirs()?;
+        config.save_to_path(self.config_path.as_ref())
+    }
+
     pub fn open_dependency_target(&self, component_id: &str) -> Result<()> {
         let config = self.current_config()?;
         let component = dependency_manifest(&config.paths)
@@ -763,6 +787,24 @@ impl NativeServices {
                 .unwrap_or_else(|| component.target_path.clone())
         } else {
             component.target_path.clone()
+        };
+        fs::create_dir_all(&path)
+            .with_context(|| format!("failed to create {}", path.display()))?;
+        open_path_in_finder(&path)
+    }
+
+    pub fn open_rom_folder(&self, system: Option<&str>) -> Result<()> {
+        let config = self.current_config()?;
+        let path = match system {
+            Some(system) if !system.eq_ignore_ascii_case("ALL") => {
+                let scope = ManageScope::System(system.to_ascii_uppercase());
+                let target = scan_targets(&scope)
+                    .into_iter()
+                    .next()
+                    .ok_or_else(|| anyhow!("unknown setup system: {system}"))?;
+                resolve_system_directory(&config.paths.rom_root, target.folder)?
+            }
+            _ => config.paths.rom_root,
         };
         fs::create_dir_all(&path)
             .with_context(|| format!("failed to create {}", path.display()))?;

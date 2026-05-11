@@ -32,6 +32,10 @@ pub(crate) struct ManageState {
     pub(crate) progress_total: Option<usize>,
     pub(crate) last_summary: Option<ManageOperationSummary>,
     pub(crate) dependency_report: Option<DependencyReport>,
+    pub(crate) runtime_setup_selected_system: String,
+    pub(crate) runtime_setup_system_index: usize,
+    pub(crate) runtime_setup_advanced_open: bool,
+    pub(crate) runtime_setup_focus_index: usize,
 }
 
 impl ManageState {
@@ -85,6 +89,10 @@ impl Default for ManageState {
             progress_total: None,
             last_summary: None,
             dependency_report: None,
+            runtime_setup_selected_system: String::from("ALL"),
+            runtime_setup_system_index: 0,
+            runtime_setup_advanced_open: false,
+            runtime_setup_focus_index: 0,
         }
     }
 }

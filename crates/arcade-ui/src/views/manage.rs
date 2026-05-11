@@ -3,8 +3,9 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 
 use arcade_domain::{
-    CoverScrapeRunOptions, CoverScrapeSettingsInput, DependencyComponentKind, DependencySource,
-    DependencyState, LocalCoverRelinkRunOptions, ManageOperationKind, ManageScope, N64CpuCoreMode,
+    CoverScrapeRunOptions, CoverScrapeSettingsInput, DependencyComponentKind, DependencySetupView,
+    DependencySource, DependencyState, DependencySystemReadiness, LocalCoverRelinkRunOptions,
+    ManageOperationKind, ManageOperationSummary, ManageProgressEvent, ManageScope, N64CpuCoreMode,
     PathsConfig,
 };
 use arcade_services::DependencyInstallRequest;
@@ -437,205 +438,605 @@ impl NativeArcadeUiApp {
     pub(crate) fn draw_dependency_installer_panel(
         &mut self,
         ui: &mut egui::Ui,
-        palette: crate::theme::ThemePalette,
+        _palette: crate::theme::ThemePalette,
     ) {
-        self.panel_frame().show(ui, |ui| {
-            ui.set_min_width(ui.available_width());
-            ui.horizontal_wrapped(|ui| {
-                ui.heading("Dependency Installer");
-                if ui
-                    .add_enabled(
-                        !self.state.manage.job_running,
-                        manage_button("Rescan", false, false, palette),
-                    )
-                    .clicked()
-                {
-                    self.refresh_dependency_report();
-                }
-            });
-            ui.add_space(4.0);
+        let setup_system = self.state.manage.runtime_setup_selected_system.clone();
+        let setup_palette = Self::palette_for_system(&setup_system);
+        let panel_width = ui.available_width();
+        self.panel_frame().fill(setup_palette.panel).show(ui, |ui| {
+            let inner_width = (panel_width - 24.0).max(0.0);
+            ui.set_width(inner_width);
+            ui.set_max_width(inner_width);
 
             let Some(report) = self.state.manage.dependency_report.clone() else {
+                ui.heading("Runtime Setup");
                 ui.label(
-                    egui::RichText::new("Dependency status has not been scanned yet.").small(),
+                    egui::RichText::new("Runtime dependency status has not been scanned yet.")
+                        .small(),
                 );
                 return;
             };
 
-            ui.horizontal_wrapped(|ui| {
-                ui.label(format!("Ready: {}", report.ready_count()));
-                ui.label(format!(
-                    "Missing required: {}",
-                    report.missing_required_count()
-                ));
-                ui.label(format!(
-                    "Missing optional: {}",
-                    report.missing_optional_count()
-                ));
-            });
-            if report.has_missing_required() {
-                ui.label(
-                    egui::RichText::new(
-                        "Missing runtime dependencies are blocking at least one system.",
-                    )
-                    .small()
-                    .color(palette.accent),
+            let view = DependencySetupView::from_report(&report);
+            let focus_count = self.runtime_setup_focus_count(&view);
+            self.state.manage.runtime_setup_focus_index = self
+                .state
+                .manage
+                .runtime_setup_focus_index
+                .min(focus_count.saturating_sub(1));
+
+            self.draw_runtime_setup_identity_header(ui, setup_palette, &setup_system, &view);
+            ui.add_space(8.0);
+            self.draw_runtime_setup_system_toolbar(ui, &view);
+            ui.add_space(10.0);
+
+            if setup_system == "ALL" {
+                self.draw_runtime_setup_all_page(ui, setup_palette, &view);
+            } else {
+                self.draw_runtime_setup_system_page(ui, setup_palette, &setup_system, &view);
+            }
+        });
+    }
+
+    fn draw_runtime_setup_identity_header(
+        &mut self,
+        ui: &mut egui::Ui,
+        palette: crate::theme::ThemePalette,
+        system: &str,
+        view: &DependencySetupView,
+    ) {
+        let width = ui.available_width();
+        let height = 104.0;
+        let (rect, _) = ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::hover());
+        let painter = ui.painter().with_clip_rect(rect);
+        painter.rect_filled(rect, 12.0, palette.panel_alt);
+        let bg = if system == "ALL" {
+            self.all_systems_background_texture(ui.ctx())
+        } else {
+            self.launch_system_background_texture(ui.ctx(), Some(system))
+        };
+        if let Some(texture) = bg {
+            let size = texture.size_vec2();
+            if size.x > 0.0 && size.y > 0.0 {
+                let scale = (rect.width() / size.x).max(rect.height() / size.y);
+                let draw_size = egui::vec2(size.x * scale, size.y * scale);
+                let draw_rect = egui::Rect::from_center_size(rect.center(), draw_size);
+                painter.image(
+                    texture.id(),
+                    draw_rect,
+                    egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)),
+                    egui::Color32::from_rgba_premultiplied(255, 255, 255, 58),
                 );
             }
-            ui.add_space(8.0);
+        }
+        let overlay_top = egui::Color32::from_rgba_premultiplied(
+            palette.bg_top.r(),
+            palette.bg_top.g(),
+            palette.bg_top.b(),
+            172,
+        );
+        let overlay_bottom = egui::Color32::from_rgba_premultiplied(
+            palette.bg_bottom.r(),
+            palette.bg_bottom.g(),
+            palette.bg_bottom.b(),
+            218,
+        );
+        paint_rect_gradient(ui, rect, overlay_top, overlay_bottom);
 
-            let mut statuses = report.components;
-            statuses.sort_by(|left, right| {
-                left.component
-                    .system
-                    .cmp(&right.component.system)
-                    .then(left.ready().cmp(&right.ready()))
-                    .then(left.component.title.cmp(&right.component.title))
+        let mut cursor = rect.left_top() + egui::vec2(16.0, 14.0);
+        if system != "ALL" {
+            if let Some(texture) = self.system_logo_texture(ui.ctx(), system) {
+                let draw_size =
+                    crate::render::fit_size(texture.size_vec2(), egui::vec2(160.0, 34.0));
+                let logo_rect = egui::Rect::from_min_size(cursor, draw_size);
+                painter.image(
+                    texture.id(),
+                    logo_rect,
+                    egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)),
+                    egui::Color32::WHITE,
+                );
+                cursor.y += draw_size.y + 8.0;
+            }
+        }
+
+        let title = if system == "ALL" {
+            "Welcome to Rusted Arcade"
+        } else {
+            runtime_system_display_name(system)
+        };
+        painter.text(
+            cursor,
+            egui::Align2::LEFT_TOP,
+            title,
+            egui::FontId::proportional(22.0),
+            palette.text,
+        );
+        let subtitle = if system == "ALL" {
+            format!(
+                "{} · {} ready · {} need files",
+                runtime_setup_lane_label(),
+                view.ready_system_count,
+                view.blocked_system_count
+            )
+        } else {
+            runtime_system_summary(system, view)
+        };
+        painter.text(
+            cursor + egui::vec2(0.0, 30.0),
+            egui::Align2::LEFT_TOP,
+            subtitle,
+            egui::FontId::proportional(12.0),
+            palette.text_muted,
+        );
+    }
+
+    fn draw_runtime_setup_system_toolbar(&mut self, ui: &mut egui::Ui, view: &DependencySetupView) {
+        let row_width = ui.available_width().max(1.0);
+        let gap_x = runtime_setup_pill_gap(row_width);
+        let pill_size = egui::vec2(runtime_setup_pill_width(row_width, gap_x), 27.0);
+
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing = egui::vec2(gap_x, 0.0);
+            for (index, system) in SYSTEM_FILTERS.iter().copied().enumerate() {
+                let selected = self.state.manage.runtime_setup_selected_system == system;
+                let focused = self.state.menu_nav.focus_region
+                    == MenuFocusRegion::SettingsRuntimeSetupSystem
+                    && self.state.manage.runtime_setup_system_index == index;
+                let status = runtime_setup_system_status_label(system, view);
+                let response = self
+                    .runtime_setup_system_pill(ui, system, status, selected, focused, pill_size);
+                if response.clicked() {
+                    self.state.menu_nav.focus_region = MenuFocusRegion::SettingsRuntimeSetupSystem;
+                    self.state.manage.runtime_setup_selected_system = system.to_string();
+                    self.state.manage.runtime_setup_system_index = index;
+                    self.state.manage.runtime_setup_focus_index = 0;
+                    self.state.manage.runtime_setup_advanced_open = false;
+                }
+            }
+        });
+    }
+
+    fn runtime_setup_system_pill(
+        &mut self,
+        ui: &mut egui::Ui,
+        system: &str,
+        status: &str,
+        selected: bool,
+        focused: bool,
+        size: egui::Vec2,
+    ) -> egui::Response {
+        let pill_palette = Self::palette_for_system(system);
+        let fill = if selected {
+            blend_runtime_color(pill_palette.panel_alt, pill_palette.accent_soft, 0.65)
+        } else {
+            blend_runtime_color(pill_palette.panel, pill_palette.accent_soft, 0.16)
+        };
+        let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
+        let stroke = egui::Stroke::new(
+            if selected || focused { 1.6 } else { 1.0 },
+            if selected || focused {
+                pill_palette.accent
+            } else {
+                pill_palette.border
+            },
+        );
+        ui.painter().rect(
+            rect,
+            egui::CornerRadius::same(255),
+            fill,
+            stroke,
+            egui::StrokeKind::Middle,
+        );
+
+        let content_rect = rect.shrink2(egui::vec2(8.0, 4.0));
+        let content_painter = ui.painter().with_clip_rect(content_rect);
+        let show_status = size.x >= 76.0;
+        if show_status {
+            let status_pos = egui::pos2(content_rect.right(), content_rect.center().y);
+            content_painter.text(
+                status_pos,
+                egui::Align2::RIGHT_CENTER,
+                status,
+                egui::FontId::proportional(9.0),
+                pill_palette.text_muted,
+            );
+        }
+        let logo_space = (content_rect.width() - if show_status { 38.0 } else { 0.0 }).max(16.0);
+        let logo_max = egui::vec2(
+            Self::system_logo_size(system).x.min(logo_space),
+            Self::system_logo_size(system).y.min(16.0),
+        );
+        if let Some(texture) = self.system_logo_texture(ui.ctx(), system) {
+            let draw_size = crate::render::fit_size(texture.size_vec2(), logo_max);
+            let logo_rect = egui::Rect::from_min_size(
+                egui::pos2(
+                    content_rect.left(),
+                    content_rect.center().y - draw_size.y * 0.5,
+                ),
+                draw_size,
+            );
+            content_painter.image(
+                texture.id(),
+                logo_rect,
+                egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)),
+                egui::Color32::WHITE,
+            );
+        } else {
+            content_painter.text(
+                egui::pos2(content_rect.left(), content_rect.center().y),
+                egui::Align2::LEFT_CENTER,
+                system,
+                egui::FontId::proportional(11.0),
+                pill_palette.text,
+            );
+        }
+
+        if focused {
+            Self::paint_selection_glow(ui, rect, 255, pill_palette.accent, 0.78);
+        }
+        response.on_hover_text(runtime_system_display_name(system))
+    }
+
+    fn draw_runtime_setup_all_page(
+        &mut self,
+        ui: &mut egui::Ui,
+        palette: crate::theme::ThemePalette,
+        view: &DependencySetupView,
+    ) {
+        let mut focus_cursor = 0usize;
+        self.draw_runtime_setup_primary_actions(ui, palette, view, "ALL", &mut focus_cursor);
+        ui.add_space(10.0);
+
+        if !self.services.runtime_setup_welcome_completed() {
+            draw_runtime_section_heading(ui, "First Run", palette);
+            ui.label(
+                egui::RichText::new(
+                    "Rusted Arcade can prepare folders, install standard cores, apply safe defaults, and scan your game folders. You stay in control of BIOS files, ROMs, and compatibility packages.",
+                )
+                .small()
+                .color(palette.text_muted),
+            );
+            ui.add_space(6.0);
+        }
+
+        draw_runtime_section_heading(ui, "Systems", palette);
+        for group in &view.system_groups {
+            let line = match group.readiness {
+                DependencySystemReadiness::Ready => "Ready to play",
+                DependencySystemReadiness::Blocked => "Needs your files",
+                DependencySystemReadiness::ReadyWithOptionalUpgrades => "Ready, optional upgrade",
+            };
+            ui.horizontal_wrapped(|ui| {
+                ui.label(
+                    egui::RichText::new(runtime_system_display_name(&group.system))
+                        .strong()
+                        .color(palette.text),
+                );
+                draw_status_chip(ui, line, runtime_readiness_color(group.readiness, palette));
+                if group.missing_required > 0 {
+                    ui.label(
+                        egui::RichText::new(format!("{} blocker(s)", group.missing_required))
+                            .small()
+                            .color(palette.accent),
+                    );
+                }
             });
+        }
 
-            for status in statuses {
-                egui::Frame::new()
-                    .fill(palette.panel_alt)
-                    .stroke(egui::Stroke::new(1.0, palette.border))
-                    .corner_radius(egui::CornerRadius::same(8))
-                    .inner_margin(egui::Margin::same(8))
-                    .show(ui, |ui| {
-                        ui.horizontal_wrapped(|ui| {
-                            ui.label(
-                                egui::RichText::new(&status.component.title)
-                                    .strong()
-                                    .color(palette.text),
-                            );
-                            ui.label(
-                                egui::RichText::new(&status.component.system)
-                                    .small()
-                                    .color(palette.text_muted),
-                            );
-                            ui.label(
-                                egui::RichText::new(status.component.kind.label())
-                                    .small()
-                                    .color(palette.text_muted),
-                            );
-                            ui.label(
-                                egui::RichText::new(if status.component.required {
-                                    "Required"
-                                } else {
-                                    "Optional"
-                                })
-                                .small()
-                                .color(
-                                    if status.component.required {
-                                        palette.accent
-                                    } else {
-                                        palette.text_muted
-                                    },
-                                ),
-                            );
-                            ui.label(
-                                egui::RichText::new(match status.state {
-                                    DependencyState::Ready => "Ready",
-                                    DependencyState::Missing => "Missing",
-                                })
-                                .small()
-                                .color(match status.state {
-                                    DependencyState::Ready => palette.text_muted,
-                                    DependencyState::Missing => palette.accent,
-                                }),
-                            );
-                        });
-                        ui.add_space(2.0);
-                        ui.label(
-                            egui::RichText::new(&status.component.description)
-                                .small()
-                                .color(palette.text_muted),
-                        );
-                        ui.label(
-                            egui::RichText::new(&status.detail)
-                                .monospace()
-                                .small()
-                                .color(palette.text_muted),
-                        );
-                        ui.horizontal_wrapped(|ui| {
-                            ui.label(
-                                egui::RichText::new(format!(
-                                    "Source: {}",
-                                    status.component.source.label()
-                                ))
-                                .small()
-                                .color(palette.text_muted),
-                            );
-                            if matches!(
-                                status.component.kind,
-                                DependencyComponentKind::Bios | DependencyComponentKind::Romset
-                            ) {
-                                ui.label(
-                                    egui::RichText::new("User-owned files only")
-                                        .small()
-                                        .color(palette.text_muted),
-                                );
-                            }
-                        });
-                        ui.add_space(4.0);
-                        ui.horizontal_wrapped(|ui| {
-                            if ui
-                                .add_enabled(
-                                    !self.state.manage.job_running,
-                                    manage_button("Open Folder", false, false, palette),
-                                )
-                                .clicked()
-                            {
-                                self.open_dependency_target(&status.component.id);
-                            }
+        if !view.optional_upgrades.is_empty() {
+            ui.add_space(8.0);
+            draw_runtime_section_heading(ui, "Optional Upgrades", palette);
+            for status in &view.optional_upgrades {
+                ui.label(
+                    egui::RichText::new(format!(
+                        "{}: {}",
+                        status.component.system, status.component.title
+                    ))
+                    .small()
+                    .color(palette.text_muted),
+                );
+            }
+        }
+    }
 
-                            match &status.component.source {
-                                DependencySource::LibretroBuildbot { .. }
-                                | DependencySource::Homebrew { .. }
-                                | DependencySource::UpstreamDownload { .. } => {
-                                    let label = if status.ready() { "Repair" } else { "Install" };
-                                    if ui
-                                        .add_enabled(
-                                            !self.state.manage.job_running,
-                                            manage_button(label, false, false, palette),
-                                        )
-                                        .clicked()
-                                    {
-                                        self.start_dependency_install_job(
-                                            status.component.id.clone(),
-                                            None,
-                                        );
-                                    }
-                                }
-                                DependencySource::LocalImport => {
-                                    let label = if status.ready() { "Reimport" } else { "Import" };
-                                    if ui
-                                        .add_enabled(
-                                            !self.state.manage.job_running,
-                                            manage_button(label, false, false, palette),
-                                        )
-                                        .clicked()
-                                    {
-                                        self.start_dependency_import_job(&status.component);
-                                    }
-                                }
-                                DependencySource::ExternalGuided { .. } => {
-                                    if ui
-                                        .add_enabled(
-                                            !self.state.manage.job_running,
-                                            manage_button("Open Source", false, false, palette),
-                                        )
-                                        .clicked()
-                                    {
-                                        self.start_dependency_install_job(
-                                            status.component.id.clone(),
-                                            None,
-                                        );
-                                    }
-                                }
-                                DependencySource::UserProvided => {}
-                            }
-                        });
-                    });
-                ui.add_space(8.0);
+    fn draw_runtime_setup_system_page(
+        &mut self,
+        ui: &mut egui::Ui,
+        palette: crate::theme::ThemePalette,
+        system: &str,
+        view: &DependencySetupView,
+    ) {
+        let Some(setup) = view.system_setup(system) else {
+            ui.label(
+                egui::RichText::new("This system is not in the runtime setup manifest.")
+                    .color(palette.text_muted),
+            );
+            return;
+        };
+        let mut focus_cursor = 0usize;
+        self.draw_runtime_setup_primary_actions(ui, palette, view, system, &mut focus_cursor);
+        ui.add_space(10.0);
+
+        draw_runtime_section_heading(ui, "Rusted Arcade Can", palette);
+        if setup.automatic_actions.is_empty() {
+            ui.label(
+                egui::RichText::new("No automatic dependency work is required for this system.")
+                    .small()
+                    .color(palette.text_muted),
+            );
+        } else {
+            for status in &setup.automatic_actions {
+                self.draw_runtime_dependency_row(ui, status, palette, &mut focus_cursor, false);
+                ui.separator();
+            }
+        }
+
+        ui.add_space(8.0);
+        draw_runtime_section_heading(ui, "You Provide", palette);
+        if setup.user_actions.is_empty() {
+            ui.label(
+                egui::RichText::new("No user-provided BIOS or resource files are missing.")
+                    .small()
+                    .color(palette.text_muted),
+            );
+        } else {
+            for status in &setup.user_actions {
+                self.draw_runtime_dependency_row(ui, status, palette, &mut focus_cursor, false);
+                ui.separator();
+            }
+        }
+
+        ui.add_space(8.0);
+        draw_runtime_section_heading(ui, "Ready Check", palette);
+        let ready_line = match setup.readiness {
+            DependencySystemReadiness::Ready => "Ready to play.",
+            DependencySystemReadiness::Blocked => {
+                "Needs user-provided files before games can launch."
+            }
+            DependencySystemReadiness::ReadyWithOptionalUpgrades => {
+                "Ready to play. Optional upgrades are available."
+            }
+        };
+        ui.label(
+            egui::RichText::new(ready_line)
+                .small()
+                .color(palette.text_muted),
+        );
+        if !setup.optional_upgrades.is_empty() {
+            ui.add_space(4.0);
+            for status in &setup.optional_upgrades {
+                self.draw_runtime_dependency_row(ui, status, palette, &mut focus_cursor, true);
+                ui.separator();
+            }
+        }
+
+        ui.add_space(8.0);
+        self.draw_runtime_advanced_inventory_toggle(ui, palette, &mut focus_cursor);
+        if self.state.manage.runtime_setup_advanced_open {
+            for status in &setup.advanced_components {
+                self.draw_runtime_dependency_row(ui, status, palette, &mut focus_cursor, true);
+                ui.separator();
+            }
+        }
+    }
+
+    fn draw_runtime_setup_primary_actions(
+        &mut self,
+        ui: &mut egui::Ui,
+        palette: crate::theme::ThemePalette,
+        view: &DependencySetupView,
+        system: &str,
+        focus_cursor: &mut usize,
+    ) {
+        ui.horizontal_wrapped(|ui| {
+            self.draw_runtime_action_button(ui, palette, focus_cursor, "Rescan", |app| {
+                app.refresh_dependency_report();
+            });
+            self.draw_runtime_action_button(ui, palette, focus_cursor, "Get What We Can", |app| {
+                app.start_safe_runtime_setup_job(system.to_string());
+            });
+            self.draw_runtime_action_button(ui, palette, focus_cursor, "Open ROM Folder", |app| {
+                app.open_runtime_rom_folder(system);
+            });
+            self.draw_runtime_action_button(ui, palette, focus_cursor, "Scan Games", |app| {
+                app.start_runtime_scan_job(system.to_string());
+            });
+            if system == "ALL" && !self.services.runtime_setup_welcome_completed() {
+                self.draw_runtime_action_button(
+                    ui,
+                    palette,
+                    focus_cursor,
+                    "Continue To Library",
+                    |app| {
+                        app.complete_runtime_setup_welcome();
+                    },
+                );
+            }
+        });
+        if system == "ALL" && !view.missing_required_standard_core_ids().is_empty() {
+            ui.label(
+                egui::RichText::new(format!(
+                    "Safe setup can install {} missing standard core(s).",
+                    view.missing_required_standard_core_ids().len()
+                ))
+                .small()
+                .color(palette.text_muted),
+            );
+        }
+    }
+
+    fn draw_runtime_action_button(
+        &mut self,
+        ui: &mut egui::Ui,
+        palette: crate::theme::ThemePalette,
+        focus_cursor: &mut usize,
+        label: &str,
+        action: impl FnOnce(&mut Self),
+    ) {
+        let focused = self.runtime_setup_action_focused(*focus_cursor);
+        let response = ui.add_enabled(
+            !self.state.manage.job_running,
+            manage_button(label, focused, false, palette),
+        );
+        if focused {
+            Self::paint_selection_glow(ui, response.rect, 255, palette.accent, 0.78);
+        }
+        *focus_cursor += 1;
+        if response.clicked() {
+            action(self);
+        }
+    }
+
+    fn draw_runtime_advanced_inventory_toggle(
+        &mut self,
+        ui: &mut egui::Ui,
+        palette: crate::theme::ThemePalette,
+        focus_cursor: &mut usize,
+    ) {
+        let advanced_label = if self.state.manage.runtime_setup_advanced_open {
+            "Hide Advanced"
+        } else {
+            "Show Advanced"
+        };
+        self.draw_runtime_action_button(ui, palette, focus_cursor, advanced_label, |app| {
+            app.state.manage.runtime_setup_advanced_open =
+                !app.state.manage.runtime_setup_advanced_open;
+        });
+    }
+
+    fn draw_runtime_dependency_row(
+        &mut self,
+        ui: &mut egui::Ui,
+        status: &arcade_domain::DependencyComponentStatus,
+        palette: crate::theme::ThemePalette,
+        focus_cursor: &mut usize,
+        compact: bool,
+    ) {
+        ui.horizontal_wrapped(|ui| {
+            ui.label(
+                egui::RichText::new(&status.component.title)
+                    .strong()
+                    .color(palette.text),
+            );
+            draw_status_chip(ui, &status.component.system, palette.text_muted);
+            draw_status_chip(ui, status.component.kind.label(), palette.text_muted);
+            draw_status_chip(
+                ui,
+                if status.component.required {
+                    "Required"
+                } else {
+                    "Optional"
+                },
+                if status.component.required {
+                    palette.accent
+                } else {
+                    palette.text_muted
+                },
+            );
+            draw_status_chip(
+                ui,
+                match status.state {
+                    DependencyState::Ready => "Ready",
+                    DependencyState::Missing => "Missing",
+                },
+                match status.state {
+                    DependencyState::Ready => palette.text_muted,
+                    DependencyState::Missing => palette.accent,
+                },
+            );
+        });
+        if !compact {
+            ui.label(
+                egui::RichText::new(&status.component.description)
+                    .small()
+                    .color(palette.text_muted),
+            );
+        }
+        ui.label(
+            egui::RichText::new(&status.detail)
+                .monospace()
+                .small()
+                .color(palette.text_muted),
+        );
+        ui.horizontal_wrapped(|ui| {
+            ui.label(
+                egui::RichText::new(format!("Source: {}", status.component.source.label()))
+                    .small()
+                    .color(palette.text_muted),
+            );
+            if matches!(
+                status.component.kind,
+                DependencyComponentKind::Bios | DependencyComponentKind::Romset
+            ) {
+                ui.label(
+                    egui::RichText::new("User-owned files only")
+                        .small()
+                        .color(palette.text_muted),
+                );
+            }
+        });
+        ui.horizontal_wrapped(|ui| {
+            let open_focused = self.runtime_setup_action_focused(*focus_cursor);
+            let response = ui.add_enabled(
+                !self.state.manage.job_running,
+                manage_button("Open Folder", open_focused, false, palette),
+            );
+            if open_focused {
+                Self::paint_selection_glow(ui, response.rect, 255, palette.accent, 0.78);
+            }
+            *focus_cursor += 1;
+            if response.clicked() {
+                self.open_dependency_target(&status.component.id);
+            }
+
+            match &status.component.source {
+                DependencySource::LibretroBuildbot { .. }
+                | DependencySource::Homebrew { .. }
+                | DependencySource::UpstreamDownload { .. } => {
+                    let action_focused = self.runtime_setup_action_focused(*focus_cursor);
+                    let label = if status.ready() { "Repair" } else { "Install" };
+                    let response = ui.add_enabled(
+                        !self.state.manage.job_running,
+                        manage_button(label, action_focused, false, palette),
+                    );
+                    if action_focused {
+                        Self::paint_selection_glow(ui, response.rect, 255, palette.accent, 0.78);
+                    }
+                    *focus_cursor += 1;
+                    if response.clicked() {
+                        self.start_dependency_install_job(status.component.id.clone(), None);
+                    }
+                }
+                DependencySource::LocalImport => {
+                    let action_focused = self.runtime_setup_action_focused(*focus_cursor);
+                    let label = if status.ready() { "Reimport" } else { "Import" };
+                    let response = ui.add_enabled(
+                        !self.state.manage.job_running,
+                        manage_button(label, action_focused, false, palette),
+                    );
+                    if action_focused {
+                        Self::paint_selection_glow(ui, response.rect, 255, palette.accent, 0.78);
+                    }
+                    *focus_cursor += 1;
+                    if response.clicked() {
+                        self.start_dependency_import_job(&status.component);
+                    }
+                }
+                DependencySource::ExternalGuided { .. } => {
+                    let action_focused = self.runtime_setup_action_focused(*focus_cursor);
+                    let response = ui.add_enabled(
+                        !self.state.manage.job_running,
+                        manage_button("Open Source", action_focused, false, palette),
+                    );
+                    if action_focused {
+                        Self::paint_selection_glow(ui, response.rect, 255, palette.accent, 0.78);
+                    }
+                    *focus_cursor += 1;
+                    if response.clicked() {
+                        self.start_dependency_install_job(status.component.id.clone(), None);
+                    }
+                }
+                DependencySource::UserProvided => {}
             }
         });
     }
@@ -1296,6 +1697,129 @@ impl NativeArcadeUiApp {
         }
     }
 
+    pub(crate) fn runtime_setup_focus_count(&self, view: &DependencySetupView) -> usize {
+        let selected = self.state.manage.runtime_setup_selected_system.as_str();
+        let mut count = 4; // Rescan, safe setup, open ROM folder, scan games.
+        if selected == "ALL" && !self.services.runtime_setup_welcome_completed() {
+            count += 1;
+        }
+        if selected != "ALL" {
+            if let Some(setup) = view.system_setup(selected) {
+                count += setup
+                    .automatic_actions
+                    .iter()
+                    .chain(setup.user_actions.iter())
+                    .chain(setup.optional_upgrades.iter())
+                    .map(runtime_setup_component_action_count)
+                    .sum::<usize>();
+                count += 1; // Advanced toggle.
+                if self.state.manage.runtime_setup_advanced_open {
+                    count += setup
+                        .advanced_components
+                        .iter()
+                        .map(runtime_setup_component_action_count)
+                        .sum::<usize>();
+                }
+            }
+        }
+        count
+    }
+
+    pub(crate) fn activate_runtime_setup_focus(&mut self) {
+        let Some(report) = self.state.manage.dependency_report.clone() else {
+            self.refresh_dependency_report();
+            return;
+        };
+        let view = DependencySetupView::from_report(&report);
+        let mut index = self.state.manage.runtime_setup_focus_index;
+        let selected = self.state.manage.runtime_setup_selected_system.clone();
+
+        if index == 0 {
+            self.refresh_dependency_report();
+            return;
+        }
+        index -= 1;
+
+        if index == 0 {
+            self.start_safe_runtime_setup_job(selected.clone());
+            return;
+        }
+        index -= 1;
+
+        if index == 0 {
+            self.open_runtime_rom_folder(&selected);
+            return;
+        }
+        index -= 1;
+
+        if index == 0 {
+            self.start_runtime_scan_job(selected.clone());
+            return;
+        }
+        index -= 1;
+
+        if selected == "ALL" && !self.services.runtime_setup_welcome_completed() {
+            if index == 0 {
+                self.complete_runtime_setup_welcome();
+                return;
+            }
+            index -= 1;
+        }
+
+        if let Some(setup) = view.system_setup(&selected) {
+            for status in setup
+                .automatic_actions
+                .iter()
+                .chain(setup.user_actions.iter())
+                .chain(setup.optional_upgrades.iter())
+            {
+                if index == 0 {
+                    self.open_dependency_target(&status.component.id);
+                    return;
+                }
+                index -= 1;
+
+                if runtime_setup_component_action_count(status) > 1 {
+                    if index == 0 {
+                        self.start_runtime_setup_component_action(status);
+                        return;
+                    }
+                    index -= 1;
+                }
+            }
+
+            if index == 0 {
+                self.state.manage.runtime_setup_advanced_open =
+                    !self.state.manage.runtime_setup_advanced_open;
+                return;
+            }
+            index -= 1;
+
+            if self.state.manage.runtime_setup_advanced_open {
+                for status in &setup.advanced_components {
+                    if index == 0 {
+                        self.open_dependency_target(&status.component.id);
+                        return;
+                    }
+                    index -= 1;
+
+                    if runtime_setup_component_action_count(status) > 1 {
+                        if index == 0 {
+                            self.start_runtime_setup_component_action(status);
+                            return;
+                        }
+                        index -= 1;
+                    }
+                }
+            }
+        }
+    }
+
+    fn runtime_setup_action_focused(&self, index: usize) -> bool {
+        self.state.menu_nav.focus_region == MenuFocusRegion::SettingsRuntimeSetup
+            && self.state.manage.runtime_setup_focus_index == index
+    }
+
     fn open_dependency_target(&mut self, component_id: &str) {
         match self.services.open_dependency_target(component_id) {
             Ok(()) => {
@@ -1307,6 +1831,54 @@ impl NativeArcadeUiApp {
                     format!("Failed to open dependency folder: {err}");
                 self.state.status = self.state.manage.status_message.clone();
             }
+        }
+    }
+
+    fn open_runtime_rom_folder(&mut self, system: &str) {
+        let target = (system != "ALL").then_some(system);
+        match self.services.open_rom_folder(target) {
+            Ok(()) => {
+                self.state.manage.status_message = String::from("Opened ROM folder.");
+                self.state.status = self.state.manage.status_message.clone();
+            }
+            Err(err) => {
+                self.state.manage.status_message = format!("Failed to open ROM folder: {err}");
+                self.state.status = self.state.manage.status_message.clone();
+            }
+        }
+    }
+
+    fn complete_runtime_setup_welcome(&mut self) {
+        match self.services.mark_runtime_setup_welcome_completed() {
+            Ok(()) => {
+                self.navigate_to_view(crate::app::AppView::Library);
+                self.state.manage.status_message =
+                    String::from("Runtime setup is available in Settings anytime.");
+                self.state.status = self.state.manage.status_message.clone();
+            }
+            Err(err) => {
+                self.state.manage.status_message =
+                    format!("Failed to save runtime setup state: {err}");
+                self.state.status = self.state.manage.status_message.clone();
+            }
+        }
+    }
+
+    fn start_runtime_setup_component_action(
+        &mut self,
+        status: &arcade_domain::DependencyComponentStatus,
+    ) {
+        match &status.component.source {
+            DependencySource::LibretroBuildbot { .. }
+            | DependencySource::Homebrew { .. }
+            | DependencySource::UpstreamDownload { .. }
+            | DependencySource::ExternalGuided { .. } => {
+                self.start_dependency_install_job(status.component.id.clone(), None);
+            }
+            DependencySource::LocalImport => {
+                self.start_dependency_import_job(&status.component);
+            }
+            DependencySource::UserProvided => {}
         }
     }
 
@@ -1331,6 +1903,138 @@ impl NativeArcadeUiApp {
         };
 
         self.start_dependency_install_job(component.id.clone(), Some(source));
+    }
+
+    fn start_safe_runtime_setup_job(&mut self, system: String) {
+        let Some(report) = self.state.manage.dependency_report.clone() else {
+            self.refresh_dependency_report();
+            return;
+        };
+        let view = DependencySetupView::from_report(&report);
+        let component_ids = if system == "ALL" {
+            view.missing_required_standard_core_ids()
+        } else {
+            view.system_setup(&system)
+                .map(|setup| {
+                    setup
+                        .automatic_actions
+                        .iter()
+                        .filter(|status| {
+                            matches!(
+                                status.component.source,
+                                DependencySource::LibretroBuildbot { .. }
+                            )
+                        })
+                        .map(|status| status.component.id.clone())
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default()
+        };
+        let scope = if system == "ALL" {
+            ManageScope::AllSystems
+        } else {
+            ManageScope::System(system.clone())
+        };
+
+        let Some(tx) = self.begin_manage_job("Preparing runtime setup...") else {
+            return;
+        };
+        let services = self.services.clone();
+        std::thread::spawn(move || {
+            let total = component_ids.len() + 2;
+            let mut processed = 0usize;
+            if let Err(err) = services.prepare_safe_runtime_setup() {
+                let _ = tx.send(ManageUiMessage::Finished(Err(err)));
+                return;
+            }
+            processed += 1;
+            let _ = tx.send(ManageUiMessage::Progress(ManageProgressEvent {
+                kind: ManageOperationKind::InstallDependency,
+                processed,
+                total: Some(total),
+                message: String::from("Created runtime folders and applied safe defaults."),
+            }));
+
+            let mut updated = 0usize;
+            for component_id in component_ids {
+                let result = services.install_dependency(
+                    DependencyInstallRequest {
+                        component_id,
+                        local_source: None,
+                    },
+                    |progress| {
+                        let _ = tx.send(ManageUiMessage::Progress(ManageProgressEvent {
+                            kind: ManageOperationKind::InstallDependency,
+                            processed,
+                            total: Some(total),
+                            message: progress.message,
+                        }));
+                    },
+                );
+                match result {
+                    Ok(_) => {
+                        updated += 1;
+                        processed += 1;
+                    }
+                    Err(err) => {
+                        let _ = tx.send(ManageUiMessage::Finished(Err(err)));
+                        return;
+                    }
+                }
+            }
+
+            let scan_result = services.smart_scan_roms(&scope, |progress| {
+                let _ = tx.send(ManageUiMessage::Progress(ManageProgressEvent {
+                    kind: ManageOperationKind::SmartScan,
+                    processed,
+                    total: Some(total),
+                    message: progress.message,
+                }));
+            });
+            match scan_result {
+                Ok(scan_summary) => {
+                    processed += 1;
+                    let _ = tx.send(ManageUiMessage::Progress(ManageProgressEvent {
+                        kind: ManageOperationKind::SmartScan,
+                        processed,
+                        total: Some(total),
+                        message: String::from("Runtime setup finished."),
+                    }));
+                    let _ = tx.send(ManageUiMessage::Finished(Ok(ManageOperationSummary {
+                        kind: Some(ManageOperationKind::InstallDependency),
+                        updated: updated + scan_summary.updated,
+                        skipped: scan_summary.skipped,
+                        failed: scan_summary.failed,
+                        message: format!(
+                            "Runtime setup finished. Installed {updated} standard core(s); scanned {} game(s).",
+                            scan_summary.updated
+                        ),
+                        ..ManageOperationSummary::default()
+                    })));
+                }
+                Err(err) => {
+                    let _ = tx.send(ManageUiMessage::Finished(Err(err)));
+                }
+            }
+        });
+    }
+
+    fn start_runtime_scan_job(&mut self, system: String) {
+        let scope = if system == "ALL" {
+            ManageScope::AllSystems
+        } else {
+            ManageScope::System(system)
+        };
+        let Some(tx) = self.begin_manage_job("Scanning games...") else {
+            return;
+        };
+        let services = self.services.clone();
+        std::thread::spawn(move || {
+            let result = services.smart_scan_roms(&scope, |progress| {
+                let _ = tx.send(ManageUiMessage::Progress(progress));
+            });
+            let _ = tx.send(ManageUiMessage::Finished(result));
+        });
     }
 
     fn start_dependency_install_job(
@@ -1514,6 +2218,176 @@ fn manage_button(
             },
         ))
         .corner_radius(egui::CornerRadius::same(255))
+}
+
+fn draw_runtime_section_heading(
+    ui: &mut egui::Ui,
+    label: &str,
+    palette: crate::theme::ThemePalette,
+) {
+    ui.label(
+        egui::RichText::new(label)
+            .small()
+            .strong()
+            .color(palette.text),
+    );
+    ui.add_space(3.0);
+}
+
+fn draw_status_chip(ui: &mut egui::Ui, label: &str, color: egui::Color32) {
+    ui.label(egui::RichText::new(label).small().color(color));
+}
+
+fn runtime_setup_lane_label() -> &'static str {
+    match arcade_domain::runtime_arch() {
+        "x86_64" => "Rosetta x86_64 Runtime",
+        "arm64" | "aarch64" => "Apple Silicon Runtime",
+        _ => "Runtime",
+    }
+}
+
+fn runtime_system_display_name(system: &str) -> &'static str {
+    match system {
+        "ALL" => "All Systems",
+        "NES" => "Nintendo Entertainment System",
+        "SNES" => "Super Nintendo",
+        "GENESIS" => "Genesis / Mega Drive",
+        "GB" => "Game Boy",
+        "GBA" => "Game Boy Advance",
+        "N64" => "Nintendo 64",
+        "ARCADE" => "Arcade",
+        "PSX" => "PlayStation",
+        "PS2" => "PlayStation 2",
+        "DREAMCAST" => "Dreamcast",
+        "GAMECUBE" => "GameCube",
+        "SATURN" => "Saturn",
+        "PCECD" => "PCE-CD",
+        "DOS" => "DOS",
+        _ => "System",
+    }
+}
+
+fn runtime_system_summary(system: &str, view: &DependencySetupView) -> String {
+    let Some(group) = view
+        .system_groups
+        .iter()
+        .find(|group| group.system.eq_ignore_ascii_case(system))
+    else {
+        return String::from("No setup manifest entries for this system.");
+    };
+    match group.readiness {
+        DependencySystemReadiness::Ready => String::from("Ready to play."),
+        DependencySystemReadiness::Blocked => {
+            format!(
+                "{} required setup item(s) need your attention.",
+                group.missing_required
+            )
+        }
+        DependencySystemReadiness::ReadyWithOptionalUpgrades => {
+            format!(
+                "Ready to play. {} optional upgrade(s) available.",
+                group.missing_optional
+            )
+        }
+    }
+}
+
+fn runtime_setup_system_status_label(system: &str, view: &DependencySetupView) -> &'static str {
+    if system == "ALL" {
+        if view.blocked_system_count > 0 {
+            "Needs files"
+        } else if !view.optional_upgrades.is_empty() {
+            "Optional"
+        } else {
+            "Ready"
+        }
+    } else if let Some(group) = view
+        .system_groups
+        .iter()
+        .find(|group| group.system.eq_ignore_ascii_case(system))
+    {
+        match group.readiness {
+            DependencySystemReadiness::Ready => "Ready",
+            DependencySystemReadiness::Blocked => {
+                if group.components.iter().any(|status| {
+                    status.component.required
+                        && !status.ready()
+                        && matches!(
+                            status.component.source,
+                            DependencySource::LibretroBuildbot { .. }
+                        )
+                }) {
+                    "Can setup"
+                } else {
+                    "Needs files"
+                }
+            }
+            DependencySystemReadiness::ReadyWithOptionalUpgrades => "Optional",
+        }
+    } else {
+        "Setup"
+    }
+}
+
+fn runtime_setup_pill_gap(row_width: f32) -> f32 {
+    if row_width >= 900.0 {
+        5.0
+    } else {
+        3.0
+    }
+}
+
+fn runtime_setup_pill_width(row_width: f32, gap_x: f32) -> f32 {
+    let count = SYSTEM_FILTERS.len() as f32;
+    ((row_width - gap_x * (count - 1.0)) / count).max(1.0)
+}
+
+fn runtime_readiness_color(
+    readiness: DependencySystemReadiness,
+    palette: crate::theme::ThemePalette,
+) -> egui::Color32 {
+    match readiness {
+        DependencySystemReadiness::Ready => palette.text_muted,
+        DependencySystemReadiness::Blocked => palette.accent,
+        DependencySystemReadiness::ReadyWithOptionalUpgrades => palette.text_muted,
+    }
+}
+
+fn paint_rect_gradient(ui: &egui::Ui, rect: egui::Rect, top: egui::Color32, bottom: egui::Color32) {
+    let mut mesh = egui::epaint::Mesh::default();
+    mesh.colored_vertex(rect.left_top(), top);
+    mesh.colored_vertex(rect.right_top(), top);
+    mesh.colored_vertex(rect.right_bottom(), bottom);
+    mesh.colored_vertex(rect.left_bottom(), bottom);
+    mesh.indices.extend_from_slice(&[0, 1, 2, 0, 2, 3]);
+    ui.painter()
+        .with_clip_rect(rect)
+        .add(egui::Shape::mesh(mesh));
+}
+
+fn blend_runtime_color(from: egui::Color32, to: egui::Color32, t: f32) -> egui::Color32 {
+    let t = t.clamp(0.0, 1.0);
+    let lerp = |a: u8, b: u8| -> u8 {
+        (a as f32 + (b as f32 - a as f32) * t)
+            .round()
+            .clamp(0.0, 255.0) as u8
+    };
+    egui::Color32::from_rgba_premultiplied(
+        lerp(from.r(), to.r()),
+        lerp(from.g(), to.g()),
+        lerp(from.b(), to.b()),
+        lerp(from.a(), to.a()),
+    )
+}
+
+fn runtime_setup_component_action_count(
+    status: &arcade_domain::DependencyComponentStatus,
+) -> usize {
+    let mut count = 1; // Open Folder.
+    if !matches!(status.component.source, DependencySource::UserProvided) {
+        count += 1;
+    }
+    count
 }
 
 fn manage_toggle_chip(
