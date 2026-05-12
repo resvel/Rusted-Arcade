@@ -1552,7 +1552,7 @@ impl NativeArcadeUiApp {
             | MenuFocusRegion::ManageScrapeActions
             | MenuFocusRegion::ManageList
             | MenuFocusRegion::SettingsSectionNav
-            | MenuFocusRegion::SettingsRuntimeSetupSystem
+            | MenuFocusRegion::SettingsSystemToolbar
             | MenuFocusRegion::SettingsRuntimeSetup
             | MenuFocusRegion::SettingsAppConfigCoreTab
             | MenuFocusRegion::SettingsAppConfigCoreVariable
@@ -1660,7 +1660,7 @@ impl NativeArcadeUiApp {
             | MenuFocusRegion::ManageScrapeActions
             | MenuFocusRegion::ManageList
             | MenuFocusRegion::SettingsSectionNav
-            | MenuFocusRegion::SettingsRuntimeSetupSystem
+            | MenuFocusRegion::SettingsSystemToolbar
             | MenuFocusRegion::SettingsRuntimeSetup
             | MenuFocusRegion::SettingsAppConfigCoreTab
             | MenuFocusRegion::SettingsAppConfigCoreVariable
@@ -1881,7 +1881,7 @@ impl NativeArcadeUiApp {
             | MenuFocusRegion::FiltersAlpha
             | MenuFocusRegion::Grid
             | MenuFocusRegion::SettingsSectionNav
-            | MenuFocusRegion::SettingsRuntimeSetupSystem
+            | MenuFocusRegion::SettingsSystemToolbar
             | MenuFocusRegion::SettingsRuntimeSetup
             | MenuFocusRegion::SettingsAppConfigCoreTab
             | MenuFocusRegion::SettingsAppConfigCoreVariable
@@ -1944,7 +1944,7 @@ impl NativeArcadeUiApp {
             | MenuFocusRegion::FiltersAlpha
             | MenuFocusRegion::Grid
             | MenuFocusRegion::SettingsSectionNav
-            | MenuFocusRegion::SettingsRuntimeSetupSystem
+            | MenuFocusRegion::SettingsSystemToolbar
             | MenuFocusRegion::SettingsRuntimeSetup
             | MenuFocusRegion::SettingsAppConfigCoreTab
             | MenuFocusRegion::SettingsAppConfigCoreVariable
@@ -1972,7 +1972,7 @@ impl NativeArcadeUiApp {
             | MenuFocusRegion::FiltersAlpha
             | MenuFocusRegion::Grid
             | MenuFocusRegion::SettingsSectionNav
-            | MenuFocusRegion::SettingsRuntimeSetupSystem
+            | MenuFocusRegion::SettingsSystemToolbar
             | MenuFocusRegion::SettingsRuntimeSetup
             | MenuFocusRegion::SettingsAppConfigCoreTab
             | MenuFocusRegion::SettingsAppConfigCoreVariable
@@ -1996,7 +1996,7 @@ impl NativeArcadeUiApp {
     }
 
     fn handle_settings_direction(&mut self, direction: MenuNavDirection) {
-        let profiles = arcade_domain::configurable_core_profiles();
+        let profiles = self.settings_core_profiles_for_selected_system();
         let num_tabs = profiles.len();
         let tab_idx = self
             .state
@@ -2048,29 +2048,27 @@ impl NativeArcadeUiApp {
                     ));
                 }
             },
-            MenuFocusRegion::SettingsRuntimeSetupSystem => match direction {
+            MenuFocusRegion::SettingsSystemToolbar => match direction {
                 MenuNavDirection::Up => {
                     self.state.menu_nav.focus_region = MenuFocusRegion::SettingsSectionNav;
                 }
                 MenuNavDirection::Down => {
-                    self.state.manage.runtime_setup_focus_index = 0;
-                    self.state.menu_nav.focus_region = MenuFocusRegion::SettingsRuntimeSetup;
+                    self.state.menu_nav.focus_region = self.settings_active_content_focus_target();
                 }
                 MenuNavDirection::Left => {
-                    let current = self.state.manage.runtime_setup_system_index;
-                    self.apply_runtime_setup_system_index(current.saturating_sub(1));
+                    let current = self.state.manage.settings_system_index;
+                    self.apply_settings_system_index(current.saturating_sub(1));
                 }
                 MenuNavDirection::Right => {
                     let last = crate::theme::SYSTEM_FILTERS.len().saturating_sub(1);
-                    let current = self.state.manage.runtime_setup_system_index;
-                    self.apply_runtime_setup_system_index((current + 1).min(last));
+                    let current = self.state.manage.settings_system_index;
+                    self.apply_settings_system_index((current + 1).min(last));
                 }
             },
             MenuFocusRegion::SettingsRuntimeSetup => match direction {
                 MenuNavDirection::Up => {
                     if self.state.manage.runtime_setup_focus_index == 0 {
-                        self.state.menu_nav.focus_region =
-                            MenuFocusRegion::SettingsRuntimeSetupSystem;
+                        self.state.menu_nav.focus_region = MenuFocusRegion::SettingsSystemToolbar;
                     } else {
                         self.state.manage.runtime_setup_focus_index = self
                             .state
@@ -2100,7 +2098,7 @@ impl NativeArcadeUiApp {
             },
             MenuFocusRegion::SettingsAppConfigCoreTab => match direction {
                 MenuNavDirection::Up => {
-                    self.state.menu_nav.focus_region = MenuFocusRegion::SettingsSectionNav;
+                    self.state.menu_nav.focus_region = MenuFocusRegion::SettingsSystemToolbar;
                 }
                 MenuNavDirection::Down => {
                     if num_vars > 0 {
@@ -2191,7 +2189,7 @@ impl NativeArcadeUiApp {
             },
             MenuFocusRegion::SettingsCoverSettings => match direction {
                 MenuNavDirection::Up => {
-                    self.state.menu_nav.focus_region = MenuFocusRegion::SettingsSectionNav;
+                    self.state.menu_nav.focus_region = MenuFocusRegion::SettingsSystemToolbar;
                 }
                 MenuNavDirection::Down => {}
                 MenuNavDirection::Left => {
@@ -2230,15 +2228,14 @@ impl NativeArcadeUiApp {
                     self.activate_runtime_setup_focus();
                 }
             }
-            MenuFocusRegion::SettingsRuntimeSetupSystem => {
-                let index = self.state.manage.runtime_setup_system_index;
-                self.apply_runtime_setup_system_index(index);
-                self.state.manage.runtime_setup_focus_index = 0;
-                self.state.menu_nav.focus_region = MenuFocusRegion::SettingsRuntimeSetup;
+            MenuFocusRegion::SettingsSystemToolbar => {
+                let index = self.state.manage.settings_system_index;
+                self.apply_settings_system_index(index);
+                self.state.menu_nav.focus_region = self.settings_active_content_focus_target();
             }
             MenuFocusRegion::SettingsAppConfigCoreTab => {
                 // Selecting a tab moves focus into the first variable.
-                let profiles = arcade_domain::configurable_core_profiles();
+                let profiles = self.settings_core_profiles_for_selected_system();
                 let tab_idx = self
                     .state
                     .menu_nav
@@ -2260,7 +2257,7 @@ impl NativeArcadeUiApp {
             }
             MenuFocusRegion::SettingsAppConfigCoreVariable => {
                 // Apply the currently highlighted option to the in-memory settings map.
-                let profiles = arcade_domain::configurable_core_profiles();
+                let profiles = self.settings_core_profiles_for_selected_system();
                 let tab_idx = self
                     .state
                     .menu_nav
@@ -2317,9 +2314,9 @@ impl NativeArcadeUiApp {
         self.state.menu_nav.focus_region = match self.state.menu_nav.focus_region {
             MenuFocusRegion::TopNav => MenuFocusRegion::TopNav,
             MenuFocusRegion::SettingsSectionNav => MenuFocusRegion::TopNav,
-            MenuFocusRegion::SettingsRuntimeSetupSystem => MenuFocusRegion::SettingsSectionNav,
-            MenuFocusRegion::SettingsRuntimeSetup => MenuFocusRegion::SettingsRuntimeSetupSystem,
-            MenuFocusRegion::SettingsAppConfigCoreTab => MenuFocusRegion::SettingsSectionNav,
+            MenuFocusRegion::SettingsSystemToolbar => MenuFocusRegion::SettingsSectionNav,
+            MenuFocusRegion::SettingsRuntimeSetup => MenuFocusRegion::SettingsSystemToolbar,
+            MenuFocusRegion::SettingsAppConfigCoreTab => MenuFocusRegion::SettingsSystemToolbar,
             MenuFocusRegion::SettingsAppConfigCoreVariable => {
                 if self.state.menu_nav.settings_core_variable_index == 0 {
                     MenuFocusRegion::SettingsAppConfigCoreTab
@@ -2334,9 +2331,15 @@ impl NativeArcadeUiApp {
                 }
             }
             MenuFocusRegion::SettingsAppConfigSave => {
-                MenuFocusRegion::SettingsAppConfigCoreVariable
+                if self.state.manage.settings_selected_system == "ALL"
+                    || self.settings_core_profiles_for_selected_system().is_empty()
+                {
+                    MenuFocusRegion::SettingsSystemToolbar
+                } else {
+                    MenuFocusRegion::SettingsAppConfigCoreVariable
+                }
             }
-            MenuFocusRegion::SettingsCoverSettings => MenuFocusRegion::SettingsSectionNav,
+            MenuFocusRegion::SettingsCoverSettings => MenuFocusRegion::SettingsSystemToolbar,
             _ => MenuFocusRegion::TopNav,
         };
     }
@@ -2347,22 +2350,37 @@ impl NativeArcadeUiApp {
             .settings_scroll_target
             .unwrap_or(SettingsScrollTarget::AppConfig)
         {
-            SettingsScrollTarget::AppConfig => MenuFocusRegion::SettingsAppConfigCoreTab,
-            SettingsScrollTarget::TheGamesDbConfig => MenuFocusRegion::SettingsCoverSettings,
-            SettingsScrollTarget::Dependencies => MenuFocusRegion::SettingsRuntimeSetupSystem,
-            SettingsScrollTarget::InputSettings => MenuFocusRegion::SettingsSectionNav,
+            SettingsScrollTarget::AppConfig
+            | SettingsScrollTarget::TheGamesDbConfig
+            | SettingsScrollTarget::Dependencies
+            | SettingsScrollTarget::InputSettings => MenuFocusRegion::SettingsSystemToolbar,
         }
     }
 
-    fn apply_runtime_setup_system_index(&mut self, index: usize) {
-        let index = index.min(crate::theme::SYSTEM_FILTERS.len().saturating_sub(1));
-        let Some(system) = crate::theme::SYSTEM_FILTERS.get(index).copied() else {
-            return;
-        };
-        self.state.manage.runtime_setup_system_index = index;
-        self.state.manage.runtime_setup_selected_system = system.to_string();
-        self.state.manage.runtime_setup_focus_index = 0;
-        self.state.manage.runtime_setup_advanced_open = false;
+    fn settings_active_content_focus_target(&mut self) -> MenuFocusRegion {
+        match self
+            .state
+            .settings_scroll_target
+            .unwrap_or(SettingsScrollTarget::AppConfig)
+        {
+            SettingsScrollTarget::Dependencies => {
+                self.state.manage.runtime_setup_focus_index = 0;
+                MenuFocusRegion::SettingsRuntimeSetup
+            }
+            SettingsScrollTarget::AppConfig => {
+                if self.state.manage.settings_selected_system == "ALL" {
+                    return MenuFocusRegion::SettingsAppConfigSave;
+                }
+                let profiles = self.settings_core_profiles_for_selected_system();
+                if profiles.is_empty() {
+                    MenuFocusRegion::SettingsAppConfigSave
+                } else {
+                    MenuFocusRegion::SettingsAppConfigCoreTab
+                }
+            }
+            SettingsScrollTarget::TheGamesDbConfig => MenuFocusRegion::SettingsCoverSettings,
+            SettingsScrollTarget::InputSettings => MenuFocusRegion::SettingsSectionNav,
+        }
     }
 }
 

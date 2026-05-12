@@ -6,7 +6,8 @@ use crate::state::{
     ControllerAssignmentSource, ControllerInputButtonDebug, ControllerInputDebugSnapshot,
     MenuFocusRegion, SettingsScrollTarget,
 };
-use crate::theme::SYSTEM_FILTERS;
+
+use super::manage::runtime_system_display_name;
 
 impl NativeArcadeUiApp {
     pub(crate) fn sync_settings_navigation_indices(&mut self) {
@@ -123,7 +124,8 @@ impl NativeArcadeUiApp {
     }
 
     fn draw_input_settings_section(&mut self, ctx: &egui::Context, ui: &mut egui::Ui) {
-        let palette = self.palette();
+        let selected_system = self.state.manage.settings_selected_system.clone();
+        let palette = Self::palette_for_system(&selected_system);
 
         egui::Frame::new()
             .fill(palette.panel)
@@ -131,12 +133,31 @@ impl NativeArcadeUiApp {
             .corner_radius(egui::CornerRadius::same(10))
             .inner_margin(egui::Margin::same(10))
             .show(ui, |ui| {
+                let title = if selected_system == "ALL" {
+                    String::from("Input Settings")
+                } else {
+                    format!(
+                        "{} Controller Mapper",
+                        runtime_system_display_name(&selected_system)
+                    )
+                };
+                let subtitle = if selected_system == "ALL" {
+                    String::from("Connected controller status and per-system mapping entry point.")
+                } else {
+                    String::from("Button mappings and shortcuts for the selected system.")
+                };
+                self.draw_settings_system_chrome(ui, palette, &title, &subtitle, |_| "");
+
                 ui.horizontal(|ui| {
                     ui.label(
-                        egui::RichText::new("Input Settings")
-                            .size(15.0)
-                            .strong()
-                            .color(palette.text),
+                        egui::RichText::new(if selected_system == "ALL" {
+                            "Controller Status"
+                        } else {
+                            "Controller Mapping"
+                        })
+                        .size(15.0)
+                        .strong()
+                        .color(palette.text),
                     );
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         let toggle_label = if self.state.controller_input_debug.open {
@@ -173,42 +194,20 @@ impl NativeArcadeUiApp {
                     return;
                 }
 
-                // System selector pills (skip "ALL")
-                ui.horizontal_wrapped(|ui| {
-                    ui.spacing_mut().item_spacing = egui::vec2(8.0, 5.0);
+                if selected_system == "ALL" {
                     ui.label(
-                        egui::RichText::new("System")
-                            .size(11.5)
+                        egui::RichText::new("Pick a system above to edit its controller mapping.")
+                            .small()
                             .color(palette.text_muted),
                     );
-                    for system in SYSTEM_FILTERS.iter().copied().filter(|s| *s != "ALL") {
-                        let selected = self.state.controller_mapping.input_system == system;
-                        let pill_palette = Self::palette_for_system(system);
-                        let button =
-                            egui::Button::new(egui::RichText::new(system).size(11.0).strong())
-                                .min_size(egui::vec2(0.0, 22.0))
-                                .fill(if selected {
-                                    pill_palette.accent_soft
-                                } else {
-                                    palette.panel_alt
-                                })
-                                .stroke(egui::Stroke::new(
-                                    if selected { 1.4 } else { 1.0 },
-                                    if selected {
-                                        pill_palette.accent
-                                    } else {
-                                        palette.border
-                                    },
-                                ))
-                                .corner_radius(egui::CornerRadius::same(255));
-                        if ui.add(button).clicked() {
-                            self.state
-                                .controller_mapping
-                                .set_input_system(system.to_string());
-                        }
-                    }
-                });
+                    return;
+                }
 
+                if self.state.controller_mapping.input_system != selected_system {
+                    self.state
+                        .controller_mapping
+                        .set_input_system(selected_system.clone());
+                }
                 ui.add_space(6.0);
                 self.draw_system_controller_panel(ctx, ui);
             });

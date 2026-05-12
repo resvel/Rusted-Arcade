@@ -277,10 +277,9 @@ impl NativeArcadeUiApp {
                 Some(crate::state::SettingsScrollTarget::Dependencies);
             app.state.menu_nav.settings_section_index =
                 crate::state::SettingsScrollTarget::Dependencies.nav_index();
-            app.state.menu_nav.focus_region =
-                crate::state::MenuFocusRegion::SettingsRuntimeSetupSystem;
-            app.state.manage.runtime_setup_selected_system = String::from("ALL");
-            app.state.manage.runtime_setup_system_index = 0;
+            app.state.menu_nav.focus_region = crate::state::MenuFocusRegion::SettingsSystemToolbar;
+            app.state.manage.settings_selected_system = String::from("ALL");
+            app.state.manage.settings_system_index = 0;
             app.state.manage.runtime_setup_focus_index = 0;
             app.state.manage.runtime_setup_advanced_open = false;
             app.state.status = if welcome_needed {

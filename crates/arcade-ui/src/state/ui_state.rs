@@ -29,7 +29,7 @@ impl SettingsScrollTarget {
         match self {
             Self::Dependencies => "Runtime Setup",
             Self::AppConfig => "App Config",
-            Self::TheGamesDbConfig => "TheGamesDB",
+            Self::TheGamesDbConfig => "Covers",
             Self::InputSettings => "Input",
         }
     }

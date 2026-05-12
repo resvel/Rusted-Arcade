@@ -80,6 +80,81 @@ impl NativeArcadeUiApp {
         self.refresh_dependency_report();
     }
 
+    pub(crate) fn settings_core_profiles_for_selected_system(
+        &self,
+    ) -> Vec<arcade_domain::CoreProfile> {
+        let selected = self.state.manage.settings_selected_system.as_str();
+        let profiles = arcade_domain::configurable_core_profiles();
+        if selected == "ALL" {
+            profiles
+        } else {
+            profiles
+                .into_iter()
+                .filter(|profile| profile.system.eq_ignore_ascii_case(selected))
+                .collect()
+        }
+    }
+
+    pub(crate) fn sync_selected_core_for_settings_system(&mut self) {
+        let profiles = self.settings_core_profiles_for_selected_system();
+        let selected_valid = profiles
+            .iter()
+            .any(|profile| profile.core_name == self.state.manage.settings_selected_core);
+        if !selected_valid {
+            self.state.manage.settings_selected_core = profiles
+                .first()
+                .map(|profile| profile.core_name.to_string())
+                .unwrap_or_default();
+        }
+    }
+
+    pub(crate) fn apply_settings_system_index(&mut self, index: usize) -> bool {
+        let index = index.min(SYSTEM_FILTERS.len().saturating_sub(1));
+        let Some(system) = SYSTEM_FILTERS.get(index).copied() else {
+            return false;
+        };
+        if self
+            .state
+            .settings_scroll_target
+            .is_some_and(|target| target == crate::state::SettingsScrollTarget::InputSettings)
+            && system != self.state.manage.settings_selected_system
+            && self.controller_mapping_is_dirty()
+        {
+            self.state.status =
+                String::from("Save or reset controller mapping changes before switching systems.");
+            return false;
+        }
+        self.state.manage.settings_system_index = index;
+        self.state.manage.settings_selected_system = system.to_string();
+        self.state.manage.runtime_setup_focus_index = 0;
+        self.state.manage.runtime_setup_advanced_open = false;
+        self.state.menu_nav.settings_core_tab_index = 0;
+        self.state.menu_nav.settings_core_variable_index = 0;
+        self.state.menu_nav.settings_core_option_index = 0;
+        self.sync_selected_core_for_settings_system();
+        if system != "ALL" {
+            self.state
+                .controller_mapping
+                .set_input_system(system.to_string());
+        }
+        true
+    }
+
+    pub(crate) fn draw_settings_system_chrome(
+        &mut self,
+        ui: &mut egui::Ui,
+        palette: crate::theme::ThemePalette,
+        title: &str,
+        subtitle: &str,
+        status_for: impl Fn(&str) -> &'static str,
+    ) {
+        let system = self.state.manage.settings_selected_system.clone();
+        self.draw_settings_system_identity_header(ui, palette, &system, title, subtitle);
+        ui.add_space(8.0);
+        self.draw_settings_system_toolbar(ui, status_for);
+        ui.add_space(10.0);
+    }
+
     pub(crate) fn refresh_manage_rows(&mut self) {
         let scope = self.current_manage_scope();
         match self.services.list_manage_roms(&scope) {
@@ -198,241 +273,294 @@ impl NativeArcadeUiApp {
     pub(crate) fn draw_manage_app_config_panel(
         &mut self,
         ui: &mut egui::Ui,
+        _palette: crate::theme::ThemePalette,
+    ) {
+        self.sync_selected_core_for_settings_system();
+        let selected_system = self.state.manage.settings_selected_system.clone();
+        let palette = Self::palette_for_system(&selected_system);
+        let panel_width = ui.available_width();
+        self.panel_frame().fill(palette.panel).show(ui, |ui| {
+            let inner_width = (panel_width - 24.0).max(0.0);
+            ui.set_width(inner_width);
+            ui.set_max_width(inner_width);
+            let title = if selected_system == "ALL" {
+                String::from("App Configuration")
+            } else {
+                format!(
+                    "{} Core Settings",
+                    runtime_system_display_name(&selected_system)
+                )
+            };
+            let subtitle = if selected_system == "ALL" {
+                String::from("Global paths and a system-by-system core settings overview.")
+            } else {
+                String::from("Core options for the selected system.")
+            };
+            self.draw_settings_system_chrome(ui, palette, &title, &subtitle, |_| "");
+
+            if selected_system == "ALL" {
+                self.draw_app_config_global_page(ui, palette);
+            } else {
+                self.draw_app_config_system_core_page(ui, palette, &selected_system);
+            }
+        });
+    }
+
+    fn draw_app_config_global_page(
+        &mut self,
+        ui: &mut egui::Ui,
         palette: crate::theme::ThemePalette,
     ) {
-        self.panel_frame().show(ui, |ui| {
-            ui.set_min_width(ui.available_width());
-            ui.heading("App Configuration");
-            ui.add_space(6.0);
+        draw_runtime_section_heading(ui, "Storage Paths", palette);
+        draw_path_row(
+            ui,
+            "ROM Root",
+            &mut self.state.manage.settings_rom_root,
+            PathPickerKind::Directory,
+        );
+        draw_path_row(
+            ui,
+            "DB Path",
+            &mut self.state.manage.settings_db_path,
+            PathPickerKind::File,
+        );
+        draw_path_row(
+            ui,
+            "Save State Root",
+            &mut self.state.manage.settings_save_state_root,
+            PathPickerKind::Directory,
+        );
+        draw_path_row(
+            ui,
+            "Core Root",
+            &mut self.state.manage.settings_core_root,
+            PathPickerKind::Directory,
+        );
+        draw_path_row(
+            ui,
+            "BIOS Root",
+            &mut self.state.manage.settings_bios_root,
+            PathPickerKind::Directory,
+        );
 
-            draw_path_row(
-                ui,
-                "ROM Root",
-                &mut self.state.manage.settings_rom_root,
-                PathPickerKind::Directory,
-            );
-            draw_path_row(
-                ui,
-                "DB Path",
-                &mut self.state.manage.settings_db_path,
-                PathPickerKind::File,
-            );
-            draw_path_row(
-                ui,
-                "Save State Root",
-                &mut self.state.manage.settings_save_state_root,
-                PathPickerKind::Directory,
-            );
-            draw_path_row(
-                ui,
-                "Core Root",
-                &mut self.state.manage.settings_core_root,
-                PathPickerKind::Directory,
-            );
-            draw_path_row(
-                ui,
-                "BIOS Root",
-                &mut self.state.manage.settings_bios_root,
-                PathPickerKind::Directory,
-            );
-
-            ui.add_space(8.0);
-            ui.label(
-                egui::RichText::new("Core Settings")
-                    .small()
-                    .strong()
-                    .color(palette.text),
-            );
-            ui.add_space(4.0);
-
-            // --- Core/system tab selector ---
-            let profiles = arcade_domain::configurable_core_profiles();
-            let tab_idx = self
-                .state
-                .menu_nav
-                .settings_core_tab_index
-                .min(profiles.len().saturating_sub(1));
-
+        ui.add_space(8.0);
+        draw_runtime_section_heading(ui, "Core Settings", palette);
+        let profiles = arcade_domain::configurable_core_profiles();
+        for system in SYSTEM_FILTERS
+            .iter()
+            .copied()
+            .filter(|system| *system != "ALL")
+        {
+            let count = profiles
+                .iter()
+                .filter(|profile| profile.system.eq_ignore_ascii_case(system))
+                .count();
             ui.horizontal_wrapped(|ui| {
-                for (index, profile) in profiles.iter().enumerate() {
-                    let tab_selected =
-                        self.state.manage.settings_selected_core == profile.core_name;
-                    let tab_focused = self.state.menu_nav.focus_region
-                        == MenuFocusRegion::SettingsAppConfigCoreTab
-                        && tab_idx == index;
-                    let label = format!("{} ({})", profile.display_name, profile.system);
+                ui.label(
+                    egui::RichText::new(runtime_system_display_name(system))
+                        .strong()
+                        .color(palette.text),
+                );
+                ui.label(
+                    egui::RichText::new(if count == 0 {
+                        "No configurable core settings"
+                    } else if count == 1 {
+                        "1 configurable profile"
+                    } else {
+                        "Multiple configurable profiles"
+                    })
+                    .small()
+                    .color(palette.text_muted),
+                );
+            });
+        }
+
+        ui.add_space(6.0);
+        ui.label(
+            egui::RichText::new(
+                "Changing database or save-state storage paths is saved immediately, but a restart is recommended.",
+            )
+            .small()
+            .color(palette.text_muted),
+        );
+        self.draw_app_config_save_button(ui, palette);
+    }
+
+    fn draw_app_config_system_core_page(
+        &mut self,
+        ui: &mut egui::Ui,
+        palette: crate::theme::ThemePalette,
+        system: &str,
+    ) {
+        let profiles = self.settings_core_profiles_for_selected_system();
+        if profiles.is_empty() {
+            draw_runtime_section_heading(ui, "Core Settings", palette);
+            ui.label(
+                egui::RichText::new("This system does not expose configurable core settings yet.")
+                    .small()
+                    .color(palette.text_muted),
+            );
+            self.draw_app_config_save_button(ui, palette);
+            return;
+        }
+
+        let tab_idx = self
+            .state
+            .menu_nav
+            .settings_core_tab_index
+            .min(profiles.len().saturating_sub(1));
+        draw_runtime_section_heading(ui, "Core Profile", palette);
+        ui.horizontal_wrapped(|ui| {
+            for (index, profile) in profiles.iter().enumerate() {
+                let selected = self.state.manage.settings_selected_core == profile.core_name;
+                let focused = self.state.menu_nav.focus_region
+                    == MenuFocusRegion::SettingsAppConfigCoreTab
+                    && tab_idx == index;
+                let response = ui.add(manage_button(
+                    profile.display_name,
+                    focused,
+                    selected,
+                    palette,
+                ));
+                if focused {
+                    Self::paint_selection_glow(ui, response.rect, 255, palette.accent, 0.78);
+                }
+                if response.clicked() {
+                    self.state.menu_nav.focus_region = MenuFocusRegion::SettingsAppConfigCoreTab;
+                    self.state.menu_nav.settings_core_tab_index = index;
+                    self.state.menu_nav.settings_core_variable_index = 0;
+                    self.state.menu_nav.settings_core_option_index = 0;
+                    self.state.manage.settings_selected_core = profile.core_name.to_string();
+                }
+            }
+        });
+        ui.add_space(6.0);
+
+        if let Some(profile) = profiles.get(tab_idx) {
+            draw_runtime_section_heading(ui, profile.display_name, palette);
+            self.draw_core_profile_settings(ui, palette, profile, system);
+        }
+        self.draw_app_config_save_button(ui, palette);
+    }
+
+    fn draw_core_profile_settings(
+        &mut self,
+        ui: &mut egui::Ui,
+        palette: crate::theme::ThemePalette,
+        profile: &arcade_domain::CoreProfile,
+        system: &str,
+    ) {
+        let core_name = profile.core_name.to_string();
+        let mut last_group: Option<&str> = None;
+
+        if system == "N64" && profile.core_name == "mupen64plus_next" {
+            let mut selected_cpu_core = self.services.n64_cpu_core_mode();
+            draw_runtime_section_heading(ui, "CPU Core Lane", palette);
+            ui.horizontal_wrapped(|ui| {
+                for (label, value) in [
+                    ("Stable Cached", N64CpuCoreMode::CachedInterpreter),
+                    ("Experimental Dynarec", N64CpuCoreMode::DynamicRecompiler),
+                ] {
+                    let selected = selected_cpu_core == value;
+                    let response = ui.add(manage_button(label, false, selected, palette));
+                    if response.clicked() && value != selected_cpu_core {
+                        match self.services.update_n64_cpu_core_mode(value) {
+                            Ok(()) => {
+                                selected_cpu_core = value;
+                                self.state.status = format!(
+                                    "N64 CPU core lane set to {}.",
+                                    if value == N64CpuCoreMode::CachedInterpreter {
+                                        "Stable Cached"
+                                    } else {
+                                        "Experimental Dynarec"
+                                    }
+                                );
+                            }
+                            Err(err) => {
+                                self.state.status =
+                                    format!("Failed to save N64 CPU core lane: {err}");
+                            }
+                        }
+                    }
+                }
+            });
+            ui.add_space(4.0);
+        }
+
+        for (var_idx, var_def) in profile.variables.iter().enumerate() {
+            if last_group != Some(var_def.group) {
+                if last_group.is_some() {
+                    ui.add_space(6.0);
+                }
+                draw_runtime_section_heading(ui, var_def.group, palette);
+                last_group = Some(var_def.group);
+            }
+            ui.label(
+                egui::RichText::new(var_def.label)
+                    .small()
+                    .color(palette.text_muted),
+            );
+            let current_value = self
+                .state
+                .manage
+                .settings_core_values
+                .get(&core_name)
+                .and_then(|m| m.get(var_def.key))
+                .cloned()
+                .unwrap_or_default();
+            ui.horizontal_wrapped(|ui| {
+                for (opt_idx, opt) in var_def.options.iter().enumerate() {
+                    let opt_selected = current_value == opt.value;
+                    let opt_focused = self.state.menu_nav.focus_region
+                        == MenuFocusRegion::SettingsAppConfigCoreVariable
+                        && self.state.menu_nav.settings_core_variable_index == var_idx
+                        && self.state.menu_nav.settings_core_option_index == opt_idx;
+                    let display = opt.display.unwrap_or(opt.value);
                     let response =
-                        ui.add(manage_button(&label, tab_focused, tab_selected, palette));
-                    if tab_focused {
+                        ui.add(manage_button(display, opt_focused, opt_selected, palette));
+                    if opt_focused {
                         Self::paint_selection_glow(ui, response.rect, 255, palette.accent, 0.78);
                     }
                     if response.clicked() {
                         self.state.menu_nav.focus_region =
-                            MenuFocusRegion::SettingsAppConfigCoreTab;
-                        self.state.menu_nav.settings_core_tab_index = index;
-                        self.state.menu_nav.settings_core_variable_index = 0;
-                        self.state.menu_nav.settings_core_option_index = 0;
-                        self.state.manage.settings_selected_core =
-                            profile.core_name.to_string();
+                            MenuFocusRegion::SettingsAppConfigCoreVariable;
+                        self.state.menu_nav.settings_core_variable_index = var_idx;
+                        self.state.menu_nav.settings_core_option_index = opt_idx;
+                        self.state
+                            .manage
+                            .settings_core_values
+                            .entry(core_name.clone())
+                            .or_default()
+                            .insert(var_def.key.to_string(), opt.value.to_string());
                     }
                 }
             });
+            ui.add_space(2.0);
+        }
+    }
 
-            ui.add_space(6.0);
-
-            // --- Dynamic variable rows for the selected core ---
-            if let Some(profile) = profiles.get(tab_idx) {
-                let core_name = profile.core_name.to_string();
-                let mut last_group: Option<&str> = None;
-
-                if profile.core_name == "mupen64plus_next" {
-                    let mut selected_cpu_core = self.services.n64_cpu_core_mode();
-                    ui.label(
-                        egui::RichText::new("CPU Core Lane")
-                            .small()
-                            .strong()
-                            .color(palette.text),
-                    );
-                    ui.horizontal_wrapped(|ui| {
-                        for (label, value) in [
-                            ("Stable Cached", N64CpuCoreMode::CachedInterpreter),
-                            (
-                                "Experimental Dynarec",
-                                N64CpuCoreMode::DynamicRecompiler,
-                            ),
-                        ] {
-                            let selected = selected_cpu_core == value;
-                            let response = ui.add(manage_button(label, false, selected, palette));
-                            if response.clicked() && value != selected_cpu_core {
-                                match self.services.update_n64_cpu_core_mode(value) {
-                                    Ok(()) => {
-                                        selected_cpu_core = value;
-                                        self.state.status = format!(
-                                            "N64 CPU core lane set to {}.",
-                                            if value == N64CpuCoreMode::CachedInterpreter {
-                                                "Stable Cached"
-                                            } else {
-                                                "Experimental Dynarec"
-                                            }
-                                        );
-                                    }
-                                    Err(err) => {
-                                        self.state.status =
-                                            format!("Failed to save N64 CPU core lane: {err}");
-                                    }
-                                }
-                            }
-                        }
-                    });
-                    ui.add_space(4.0);
-                }
-
-                for (var_idx, var_def) in profile.variables.iter().enumerate() {
-                    // Group heading
-                    if last_group != Some(var_def.group) {
-                        if last_group.is_some() {
-                            ui.add_space(6.0);
-                        }
-                        ui.label(
-                            egui::RichText::new(var_def.group)
-                                .small()
-                                .strong()
-                                .color(palette.text),
-                        );
-                        ui.add_space(2.0);
-                        last_group = Some(var_def.group);
-                    }
-
-                    // Variable label
-                    ui.label(
-                        egui::RichText::new(var_def.label)
-                            .small()
-                            .color(palette.text_muted),
-                    );
-
-                    // Current value from the in-memory map
-                    let current_value = self
-                        .state
-                        .manage
-                        .settings_core_values
-                        .get(&core_name)
-                        .and_then(|m| m.get(var_def.key))
-                        .cloned()
-                        .unwrap_or_default();
-
-                    // Option buttons
-                    ui.horizontal_wrapped(|ui| {
-                        for (opt_idx, opt) in var_def.options.iter().enumerate() {
-                            let opt_selected = current_value == opt.value;
-                            let opt_focused = self.state.menu_nav.focus_region
-                                == MenuFocusRegion::SettingsAppConfigCoreVariable
-                                && self.state.menu_nav.settings_core_variable_index == var_idx
-                                && self.state.menu_nav.settings_core_option_index == opt_idx;
-                            let display =
-                                opt.display.unwrap_or(opt.value);
-                            let response = ui.add(manage_button(
-                                display,
-                                opt_focused,
-                                opt_selected,
-                                palette,
-                            ));
-                            if opt_focused {
-                                Self::paint_selection_glow(
-                                    ui,
-                                    response.rect,
-                                    255,
-                                    palette.accent,
-                                    0.78,
-                                );
-                            }
-                            if response.clicked() {
-                                self.state.menu_nav.focus_region =
-                                    MenuFocusRegion::SettingsAppConfigCoreVariable;
-                                self.state.menu_nav.settings_core_variable_index = var_idx;
-                                self.state.menu_nav.settings_core_option_index = opt_idx;
-                                self.state
-                                    .manage
-                                    .settings_core_values
-                                    .entry(core_name.clone())
-                                    .or_default()
-                                    .insert(
-                                        var_def.key.to_string(),
-                                        opt.value.to_string(),
-                                    );
-                            }
-                        }
-                    });
-                    ui.add_space(2.0);
-                }
-            }
-
-            ui.add_space(6.0);
-            ui.label(
-                egui::RichText::new(
-                    "Changing database or save-state storage paths is saved immediately, but a restart is recommended.",
-                )
-                .small()
-                .color(palette.text_muted),
-            );
-
-            ui.add_space(6.0);
-            let save_response = ui.add_enabled(
-                !self.state.manage.job_running,
-                manage_button(
-                    "Save App Config",
-                    self.state.menu_nav.focus_region == MenuFocusRegion::SettingsAppConfigSave,
-                    false,
-                    palette,
-                ),
-            );
-            if self.state.menu_nav.focus_region == MenuFocusRegion::SettingsAppConfigSave {
-                Self::paint_selection_glow(ui, save_response.rect, 255, palette.accent, 0.78);
-            }
-            if save_response.clicked() {
-                self.state.menu_nav.focus_region = MenuFocusRegion::SettingsAppConfigSave;
-                self.save_manage_app_settings();
-            }
-        });
+    fn draw_app_config_save_button(
+        &mut self,
+        ui: &mut egui::Ui,
+        palette: crate::theme::ThemePalette,
+    ) {
+        ui.add_space(6.0);
+        let save_response = ui.add_enabled(
+            !self.state.manage.job_running,
+            manage_button(
+                "Save App Config",
+                self.state.menu_nav.focus_region == MenuFocusRegion::SettingsAppConfigSave,
+                false,
+                palette,
+            ),
+        );
+        if self.state.menu_nav.focus_region == MenuFocusRegion::SettingsAppConfigSave {
+            Self::paint_selection_glow(ui, save_response.rect, 255, palette.accent, 0.78);
+        }
+        if save_response.clicked() {
+            self.state.menu_nav.focus_region = MenuFocusRegion::SettingsAppConfigSave;
+            self.save_manage_app_settings();
+        }
     }
 
     pub(crate) fn draw_dependency_installer_panel(
@@ -440,7 +568,7 @@ impl NativeArcadeUiApp {
         ui: &mut egui::Ui,
         _palette: crate::theme::ThemePalette,
     ) {
-        let setup_system = self.state.manage.runtime_setup_selected_system.clone();
+        let setup_system = self.state.manage.settings_selected_system.clone();
         let setup_palette = Self::palette_for_system(&setup_system);
         let panel_width = ui.available_width();
         self.panel_frame().fill(setup_palette.panel).show(ui, |ui| {
@@ -465,10 +593,28 @@ impl NativeArcadeUiApp {
                 .runtime_setup_focus_index
                 .min(focus_count.saturating_sub(1));
 
-            self.draw_runtime_setup_identity_header(ui, setup_palette, &setup_system, &view);
-            ui.add_space(8.0);
-            self.draw_runtime_setup_system_toolbar(ui, &view);
-            ui.add_space(10.0);
+            let runtime_title = if setup_system == "ALL" {
+                String::from("Welcome to Rusted Arcade")
+            } else {
+                runtime_system_display_name(&setup_system).to_string()
+            };
+            let runtime_subtitle = if setup_system == "ALL" {
+                format!(
+                    "{} · {} ready · {} need files",
+                    runtime_setup_lane_label(),
+                    view.ready_system_count,
+                    view.blocked_system_count
+                )
+            } else {
+                runtime_system_summary(&setup_system, &view)
+            };
+            self.draw_settings_system_chrome(
+                ui,
+                setup_palette,
+                &runtime_title,
+                &runtime_subtitle,
+                |system| runtime_setup_system_status_label(system, &view),
+            );
 
             if setup_system == "ALL" {
                 self.draw_runtime_setup_all_page(ui, setup_palette, &view);
@@ -478,12 +624,13 @@ impl NativeArcadeUiApp {
         });
     }
 
-    fn draw_runtime_setup_identity_header(
+    fn draw_settings_system_identity_header(
         &mut self,
         ui: &mut egui::Ui,
         palette: crate::theme::ThemePalette,
         system: &str,
-        view: &DependencySetupView,
+        title: &str,
+        subtitle: &str,
     ) {
         let width = ui.available_width();
         let height = 104.0;
@@ -539,11 +686,6 @@ impl NativeArcadeUiApp {
             }
         }
 
-        let title = if system == "ALL" {
-            "Welcome to Rusted Arcade"
-        } else {
-            runtime_system_display_name(system)
-        };
         painter.text(
             cursor,
             egui::Align2::LEFT_TOP,
@@ -551,16 +693,6 @@ impl NativeArcadeUiApp {
             egui::FontId::proportional(22.0),
             palette.text,
         );
-        let subtitle = if system == "ALL" {
-            format!(
-                "{} · {} ready · {} need files",
-                runtime_setup_lane_label(),
-                view.ready_system_count,
-                view.blocked_system_count
-            )
-        } else {
-            runtime_system_summary(system, view)
-        };
         painter.text(
             cursor + egui::vec2(0.0, 30.0),
             egui::Align2::LEFT_TOP,
@@ -570,7 +702,11 @@ impl NativeArcadeUiApp {
         );
     }
 
-    fn draw_runtime_setup_system_toolbar(&mut self, ui: &mut egui::Ui, view: &DependencySetupView) {
+    fn draw_settings_system_toolbar(
+        &mut self,
+        ui: &mut egui::Ui,
+        status_for: impl Fn(&str) -> &'static str,
+    ) {
         let row_width = ui.available_width().max(1.0);
         let gap_x = runtime_setup_pill_gap(row_width);
         let pill_size = egui::vec2(runtime_setup_pill_width(row_width, gap_x), 27.0);
@@ -578,25 +714,22 @@ impl NativeArcadeUiApp {
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing = egui::vec2(gap_x, 0.0);
             for (index, system) in SYSTEM_FILTERS.iter().copied().enumerate() {
-                let selected = self.state.manage.runtime_setup_selected_system == system;
+                let selected = self.state.manage.settings_selected_system == system;
                 let focused = self.state.menu_nav.focus_region
-                    == MenuFocusRegion::SettingsRuntimeSetupSystem
-                    && self.state.manage.runtime_setup_system_index == index;
-                let status = runtime_setup_system_status_label(system, view);
-                let response = self
-                    .runtime_setup_system_pill(ui, system, status, selected, focused, pill_size);
+                    == MenuFocusRegion::SettingsSystemToolbar
+                    && self.state.manage.settings_system_index == index;
+                let status = status_for(system);
+                let response =
+                    self.settings_system_pill(ui, system, status, selected, focused, pill_size);
                 if response.clicked() {
-                    self.state.menu_nav.focus_region = MenuFocusRegion::SettingsRuntimeSetupSystem;
-                    self.state.manage.runtime_setup_selected_system = system.to_string();
-                    self.state.manage.runtime_setup_system_index = index;
-                    self.state.manage.runtime_setup_focus_index = 0;
-                    self.state.manage.runtime_setup_advanced_open = false;
+                    self.state.menu_nav.focus_region = MenuFocusRegion::SettingsSystemToolbar;
+                    self.apply_settings_system_index(index);
                 }
             }
         });
     }
 
-    fn runtime_setup_system_pill(
+    fn settings_system_pill(
         &mut self,
         ui: &mut egui::Ui,
         system: &str,
@@ -630,7 +763,7 @@ impl NativeArcadeUiApp {
 
         let content_rect = rect.shrink2(egui::vec2(8.0, 4.0));
         let content_painter = ui.painter().with_clip_rect(content_rect);
-        let show_status = size.x >= 76.0;
+        let show_status = !status.is_empty() && size.x >= 76.0;
         if show_status {
             let status_pos = egui::pos2(content_rect.right(), content_rect.center().y);
             content_painter.text(
@@ -1161,79 +1294,166 @@ impl NativeArcadeUiApp {
     pub(crate) fn draw_manage_settings_panel(
         &mut self,
         ui: &mut egui::Ui,
+        _palette: crate::theme::ThemePalette,
+    ) {
+        let selected_system = self.state.manage.settings_selected_system.clone();
+        let palette = Self::palette_for_system(&selected_system);
+        let panel_width = ui.available_width();
+        self.panel_frame().fill(palette.panel).show(ui, |ui| {
+            let inner_width = (panel_width - 24.0).max(0.0);
+            ui.set_width(inner_width);
+            ui.set_max_width(inner_width);
+            let title = if selected_system == "ALL" {
+                String::from("Cover Setup")
+            } else {
+                format!("{} Covers", runtime_system_display_name(&selected_system))
+            };
+            let subtitle = if selected_system == "ALL" {
+                String::from("TheGamesDB defaults and global cover actions.")
+            } else {
+                self.cover_stats_summary_for_system(&selected_system)
+            };
+            self.draw_settings_system_chrome(ui, palette, &title, &subtitle, |_| "");
+
+            if selected_system == "ALL" {
+                self.draw_cover_global_settings(ui, palette);
+                ui.add_space(8.0);
+            } else {
+                draw_runtime_section_heading(ui, "Selected System", palette);
+                ui.label(
+                    egui::RichText::new(self.cover_stats_summary_for_system(&selected_system))
+                        .small()
+                        .color(palette.text_muted),
+                );
+                ui.add_space(8.0);
+            }
+            self.draw_cover_run_controls(ui, palette, &selected_system);
+        });
+    }
+
+    fn draw_cover_global_settings(
+        &mut self,
+        ui: &mut egui::Ui,
         palette: crate::theme::ThemePalette,
     ) {
-        self.panel_frame().show(ui, |ui| {
-            ui.set_min_width(ui.available_width());
-            ui.heading("TheGamesDB Settings");
-            ui.add_space(6.0);
-            ui.horizontal(|ui| {
-                ui.label("API Key");
-                ui.add_sized(
-                    [420.0, 30.0],
-                    egui::TextEdit::singleline(&mut self.state.manage.settings_api_key)
-                        .password(!self.state.manage.settings_show_api_key),
-                );
-                if ui
-                    .add(manage_button(
-                        if self.state.manage.settings_show_api_key {
-                            "Hide"
-                        } else {
-                            "Show"
-                        },
-                        self.state.menu_nav.focus_region == MenuFocusRegion::SettingsCoverSettings
-                            && self.state.menu_nav.settings_cover_action_index == 0,
-                        false,
-                        palette,
-                    ))
-                    .clicked()
-                {
-                    self.state.menu_nav.focus_region = MenuFocusRegion::SettingsCoverSettings;
-                    self.state.menu_nav.settings_cover_action_index = 0;
-                    self.state.manage.settings_show_api_key =
-                        !self.state.manage.settings_show_api_key;
-                }
-            });
-            ui.horizontal_wrapped(|ui| {
-                ui.label("Default Limit");
-                ui.add_sized(
-                    [100.0, 28.0],
-                    egui::TextEdit::singleline(&mut self.state.manage.settings_limit),
-                );
-                ui.label("Default Delay (ms)");
-                ui.add_sized(
-                    [100.0, 28.0],
-                    egui::TextEdit::singleline(&mut self.state.manage.settings_delay_ms),
-                );
-            });
-            ui.label(egui::RichText::new("Platform IDs are fixed in-app.").small());
-            let save_settings_response = ui.add_enabled(
-                !self.state.manage.job_running,
-                manage_button(
-                    "Save Settings",
+        draw_runtime_section_heading(ui, "TheGamesDB", palette);
+        ui.horizontal(|ui| {
+            ui.label("API Key");
+            ui.add_sized(
+                [420.0, 30.0],
+                egui::TextEdit::singleline(&mut self.state.manage.settings_api_key)
+                    .password(!self.state.manage.settings_show_api_key),
+            );
+            if ui
+                .add(manage_button(
+                    if self.state.manage.settings_show_api_key {
+                        "Hide"
+                    } else {
+                        "Show"
+                    },
                     self.state.menu_nav.focus_region == MenuFocusRegion::SettingsCoverSettings
-                        && self.state.menu_nav.settings_cover_action_index == 1,
+                        && self.state.menu_nav.settings_cover_action_index == 0,
                     false,
                     palette,
-                ),
-            );
-            if self.state.menu_nav.focus_region == MenuFocusRegion::SettingsCoverSettings
-                && self.state.menu_nav.settings_cover_action_index == 1
+                ))
+                .clicked()
             {
-                Self::paint_selection_glow(
-                    ui,
-                    save_settings_response.rect,
-                    255,
-                    palette.accent,
-                    0.78,
-                );
+                self.state.menu_nav.focus_region = MenuFocusRegion::SettingsCoverSettings;
+                self.state.menu_nav.settings_cover_action_index = 0;
+                self.state.manage.settings_show_api_key = !self.state.manage.settings_show_api_key;
             }
-            if save_settings_response.clicked() {
+        });
+        ui.horizontal_wrapped(|ui| {
+            ui.label("Default Limit");
+            ui.add_sized(
+                [100.0, 28.0],
+                egui::TextEdit::singleline(&mut self.state.manage.settings_limit),
+            );
+            ui.label("Default Delay (ms)");
+            ui.add_sized(
+                [100.0, 28.0],
+                egui::TextEdit::singleline(&mut self.state.manage.settings_delay_ms),
+            );
+        });
+        ui.label(egui::RichText::new("Platform IDs are fixed in-app.").small());
+    }
+
+    fn draw_cover_run_controls(
+        &mut self,
+        ui: &mut egui::Ui,
+        palette: crate::theme::ThemePalette,
+        system: &str,
+    ) {
+        draw_runtime_section_heading(ui, "Actions", palette);
+        ui.horizontal_wrapped(|ui| {
+            ui.label("Limit");
+            ui.add_sized(
+                [100.0, 28.0],
+                egui::TextEdit::singleline(&mut self.state.manage.scrape_limit),
+            );
+            ui.label("Delay (ms)");
+            ui.add_sized(
+                [100.0, 28.0],
+                egui::TextEdit::singleline(&mut self.state.manage.scrape_delay_ms),
+            );
+        });
+        ui.horizontal_wrapped(|ui| {
+            let save_focused = self.state.menu_nav.focus_region
+                == MenuFocusRegion::SettingsCoverSettings
+                && self.state.menu_nav.settings_cover_action_index == 1;
+            let save_response = ui.add_enabled(
+                !self.state.manage.job_running,
+                manage_button("Save Defaults", save_focused, false, palette),
+            );
+            if save_focused {
+                Self::paint_selection_glow(ui, save_response.rect, 255, palette.accent, 0.78);
+            }
+            if save_response.clicked() {
                 self.state.menu_nav.focus_region = MenuFocusRegion::SettingsCoverSettings;
                 self.state.menu_nav.settings_cover_action_index = 1;
                 self.save_manage_settings();
             }
+
+            let scrape_response = ui.add_enabled(
+                !self.state.manage.job_running,
+                manage_button("Scrape Missing Covers", false, false, palette),
+            );
+            if scrape_response.clicked() {
+                self.apply_settings_cover_scope(system);
+                self.start_scrape_job();
+            }
+            let relink_response = ui.add_enabled(
+                !self.state.manage.job_running,
+                manage_button("Relink Local Covers", false, false, palette),
+            );
+            if relink_response.clicked() {
+                self.apply_settings_cover_scope(system);
+                self.start_relink_local_covers_job();
+            }
         });
+    }
+
+    fn apply_settings_cover_scope(&mut self, system: &str) {
+        self.set_manage_scrape_system_selected(system, true);
+    }
+
+    fn cover_stats_summary_for_system(&self, system: &str) -> String {
+        let scope = if system == "ALL" {
+            ManageScope::AllSystems
+        } else {
+            ManageScope::System(system.to_string())
+        };
+        match self.services.list_manage_roms(&scope) {
+            Ok(rows) => {
+                let missing = rows.iter().filter(|row| !row.has_cover).count();
+                format!(
+                    "{} tracked game(s), {} missing cover(s).",
+                    rows.len(),
+                    missing
+                )
+            }
+            Err(_) => String::from("Cover status is unavailable until the library is refreshed."),
+        }
     }
 
     fn draw_manage_scrape_panel(&mut self, ui: &mut egui::Ui, palette: crate::theme::ThemePalette) {
@@ -1241,24 +1461,22 @@ impl NativeArcadeUiApp {
             ui.set_min_width(ui.available_width());
             ui.heading("Game Cover Scraper");
             ui.add_space(6.0);
-            ui.horizontal_wrapped(|ui| {
+            let row_width = ui.available_width().max(1.0);
+            let gap_x = runtime_setup_pill_gap(row_width);
+            let pill_size = egui::vec2(runtime_setup_pill_width(row_width, gap_x), 27.0);
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing = egui::vec2(gap_x, 0.0);
                 for (index, system) in SYSTEM_FILTERS.iter().copied().enumerate() {
                     let mut selected = self.is_manage_scrape_system_selected(system);
-                    let label = if system == "ALL" { "All" } else { system };
                     let focused = self.state.menu_nav.focus_region
                         == MenuFocusRegion::ManageScrapeSystems
                         && self.state.menu_nav.manage_scrape_system_index == index;
-                    let response = manage_toggle_chip(
-                        ui,
-                        label,
-                        focused,
-                        &mut selected,
-                        palette,
-                        egui::vec2(88.0, 34.0),
-                    );
+                    let response =
+                        self.settings_system_pill(ui, system, "", selected, focused, pill_size);
                     if response.clicked() {
                         self.state.menu_nav.focus_region = MenuFocusRegion::ManageScrapeSystems;
                         self.state.menu_nav.manage_scrape_system_index = index;
+                        selected = true;
                         self.set_manage_scrape_system_selected(system, selected);
                     }
                 }
@@ -1698,7 +1916,7 @@ impl NativeArcadeUiApp {
     }
 
     pub(crate) fn runtime_setup_focus_count(&self, view: &DependencySetupView) -> usize {
-        let selected = self.state.manage.runtime_setup_selected_system.as_str();
+        let selected = self.state.manage.settings_selected_system.as_str();
         let mut count = 4; // Rescan, safe setup, open ROM folder, scan games.
         if selected == "ALL" && !self.services.runtime_setup_welcome_completed() {
             count += 1;
@@ -1732,7 +1950,7 @@ impl NativeArcadeUiApp {
         };
         let view = DependencySetupView::from_report(&report);
         let mut index = self.state.manage.runtime_setup_focus_index;
-        let selected = self.state.manage.runtime_setup_selected_system.clone();
+        let selected = self.state.manage.settings_selected_system.clone();
 
         if index == 0 {
             self.refresh_dependency_report();
@@ -2246,7 +2464,7 @@ fn runtime_setup_lane_label() -> &'static str {
     }
 }
 
-fn runtime_system_display_name(system: &str) -> &'static str {
+pub(crate) fn runtime_system_display_name(system: &str) -> &'static str {
     match system {
         "ALL" => "All Systems",
         "NES" => "Nintendo Entertainment System",
@@ -2388,62 +2606,6 @@ fn runtime_setup_component_action_count(
         count += 1;
     }
     count
-}
-
-fn manage_toggle_chip(
-    ui: &mut egui::Ui,
-    label: &str,
-    focused: bool,
-    selected: &mut bool,
-    palette: crate::theme::ThemePalette,
-    size: egui::Vec2,
-) -> egui::Response {
-    let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
-    if response.clicked() {
-        *selected = !*selected;
-    }
-
-    let fill = if *selected {
-        palette.accent_soft
-    } else if focused {
-        egui::Color32::from_rgba_premultiplied(
-            palette.accent.r(),
-            palette.accent.g(),
-            palette.accent.b(),
-            26,
-        )
-    } else {
-        palette.panel_alt
-    };
-    let stroke = egui::Stroke::new(
-        if focused { 1.6 } else { 1.0 },
-        if *selected || focused {
-            palette.accent
-        } else {
-            palette.border
-        },
-    );
-
-    ui.painter().rect(
-        rect,
-        egui::CornerRadius::same(255),
-        fill,
-        stroke,
-        egui::StrokeKind::Middle,
-    );
-    ui.painter().text(
-        rect.center(),
-        egui::Align2::CENTER_CENTER,
-        label,
-        egui::TextStyle::Button.resolve(ui.style()),
-        palette.text,
-    );
-
-    if focused {
-        NativeArcadeUiApp::paint_selection_glow(ui, rect, 255, palette.accent, 0.78);
-    }
-
-    response
 }
 
 fn scrape_system_values() -> Vec<&'static str> {
