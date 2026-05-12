@@ -141,6 +141,7 @@ pub(crate) struct ArcadeUiState {
     pub(crate) controller_input_debug: ControllerInputDebugState,
     pub(crate) play: PlaySessionState,
     pub(crate) settings_scroll_target: Option<SettingsScrollTarget>,
+    pub(crate) runtime_setup_welcome_presented_this_session: bool,
 }
 
 impl ArcadeUiState {
@@ -164,6 +165,7 @@ impl Default for ArcadeUiState {
             controller_input_debug: ControllerInputDebugState::default(),
             play: PlaySessionState::default(),
             settings_scroll_target: None,
+            runtime_setup_welcome_presented_this_session: false,
         }
     }
 }

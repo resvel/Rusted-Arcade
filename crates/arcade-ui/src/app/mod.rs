@@ -265,13 +265,9 @@ impl NativeArcadeUiApp {
         app.sync_manage_settings_from_services();
         app.refresh_manage_rows();
         let welcome_needed = !app.services.runtime_setup_welcome_completed();
-        let missing_required_dependencies = app
-            .state
-            .manage
-            .dependency_report
-            .as_ref()
-            .is_some_and(|report| report.has_missing_required());
-        if welcome_needed || missing_required_dependencies {
+        if welcome_needed {
+            app.state.runtime_setup_welcome_presented_this_session = true;
+            let welcome_save_error = app.services.mark_runtime_setup_welcome_completed().err();
             app.navigate_to_view(AppView::Settings);
             app.state.settings_scroll_target =
                 Some(crate::state::SettingsScrollTarget::Dependencies);
@@ -282,10 +278,12 @@ impl NativeArcadeUiApp {
             app.state.manage.settings_system_index = 0;
             app.state.manage.runtime_setup_focus_index = 0;
             app.state.manage.runtime_setup_advanced_open = false;
-            app.state.status = if welcome_needed {
-                String::from("Welcome to Rusted Arcade. Opened Runtime Setup.")
+            app.state.status = if let Some(err) = welcome_save_error {
+                format!(
+                    "Welcome to Rusted Arcade. Opened Runtime Setup. Failed to save first-run state: {err}"
+                )
             } else {
-                String::from("Runtime dependencies are missing. Opened Runtime Setup.")
+                String::from("Welcome to Rusted Arcade. Opened Runtime Setup.")
             };
         }
 

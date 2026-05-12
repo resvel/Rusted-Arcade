@@ -146,7 +146,7 @@ impl NativeArcadeUiApp {
                 } else {
                     String::from("Button mappings and shortcuts for the selected system.")
                 };
-                self.draw_settings_system_chrome(ui, palette, &title, &subtitle, |_| "");
+                self.draw_settings_system_chrome(ui, palette, &title, &subtitle);
 
                 ui.horizontal(|ui| {
                     ui.label(

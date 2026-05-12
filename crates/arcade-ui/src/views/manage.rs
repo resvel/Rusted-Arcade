@@ -146,12 +146,11 @@ impl NativeArcadeUiApp {
         palette: crate::theme::ThemePalette,
         title: &str,
         subtitle: &str,
-        status_for: impl Fn(&str) -> &'static str,
     ) {
         let system = self.state.manage.settings_selected_system.clone();
         self.draw_settings_system_identity_header(ui, palette, &system, title, subtitle);
         ui.add_space(8.0);
-        self.draw_settings_system_toolbar(ui, status_for);
+        self.draw_settings_system_toolbar(ui);
         ui.add_space(10.0);
     }
 
@@ -296,7 +295,7 @@ impl NativeArcadeUiApp {
             } else {
                 String::from("Core options for the selected system.")
             };
-            self.draw_settings_system_chrome(ui, palette, &title, &subtitle, |_| "");
+            self.draw_settings_system_chrome(ui, palette, &title, &subtitle);
 
             if selected_system == "ALL" {
                 self.draw_app_config_global_page(ui, palette);
@@ -608,13 +607,7 @@ impl NativeArcadeUiApp {
             } else {
                 runtime_system_summary(&setup_system, &view)
             };
-            self.draw_settings_system_chrome(
-                ui,
-                setup_palette,
-                &runtime_title,
-                &runtime_subtitle,
-                |system| runtime_setup_system_status_label(system, &view),
-            );
+            self.draw_settings_system_chrome(ui, setup_palette, &runtime_title, &runtime_subtitle);
 
             if setup_system == "ALL" {
                 self.draw_runtime_setup_all_page(ui, setup_palette, &view);
@@ -702,11 +695,7 @@ impl NativeArcadeUiApp {
         );
     }
 
-    fn draw_settings_system_toolbar(
-        &mut self,
-        ui: &mut egui::Ui,
-        status_for: impl Fn(&str) -> &'static str,
-    ) {
+    fn draw_settings_system_toolbar(&mut self, ui: &mut egui::Ui) {
         let row_width = ui.available_width().max(1.0);
         let gap_x = runtime_setup_pill_gap(row_width);
         let pill_size = egui::vec2(runtime_setup_pill_width(row_width, gap_x), 27.0);
@@ -718,9 +707,7 @@ impl NativeArcadeUiApp {
                 let focused = self.state.menu_nav.focus_region
                     == MenuFocusRegion::SettingsSystemToolbar
                     && self.state.manage.settings_system_index == index;
-                let status = status_for(system);
-                let response =
-                    self.settings_system_pill(ui, system, status, selected, focused, pill_size);
+                let response = self.settings_system_pill(ui, system, selected, focused, pill_size);
                 if response.clicked() {
                     self.state.menu_nav.focus_region = MenuFocusRegion::SettingsSystemToolbar;
                     self.apply_settings_system_index(index);
@@ -733,7 +720,6 @@ impl NativeArcadeUiApp {
         &mut self,
         ui: &mut egui::Ui,
         system: &str,
-        status: &str,
         selected: bool,
         focused: bool,
         size: egui::Vec2,
@@ -763,31 +749,14 @@ impl NativeArcadeUiApp {
 
         let content_rect = rect.shrink2(egui::vec2(8.0, 4.0));
         let content_painter = ui.painter().with_clip_rect(content_rect);
-        let show_status = !status.is_empty() && size.x >= 76.0;
-        if show_status {
-            let status_pos = egui::pos2(content_rect.right(), content_rect.center().y);
-            content_painter.text(
-                status_pos,
-                egui::Align2::RIGHT_CENTER,
-                status,
-                egui::FontId::proportional(9.0),
-                pill_palette.text_muted,
-            );
-        }
-        let logo_space = (content_rect.width() - if show_status { 38.0 } else { 0.0 }).max(16.0);
+        let logo_space = content_rect.width().max(16.0);
         let logo_max = egui::vec2(
             Self::system_logo_size(system).x.min(logo_space),
             Self::system_logo_size(system).y.min(16.0),
         );
         if let Some(texture) = self.system_logo_texture(ui.ctx(), system) {
             let draw_size = crate::render::fit_size(texture.size_vec2(), logo_max);
-            let logo_rect = egui::Rect::from_min_size(
-                egui::pos2(
-                    content_rect.left(),
-                    content_rect.center().y - draw_size.y * 0.5,
-                ),
-                draw_size,
-            );
+            let logo_rect = egui::Rect::from_center_size(content_rect.center(), draw_size);
             content_painter.image(
                 texture.id(),
                 logo_rect,
@@ -796,8 +765,8 @@ impl NativeArcadeUiApp {
             );
         } else {
             content_painter.text(
-                egui::pos2(content_rect.left(), content_rect.center().y),
-                egui::Align2::LEFT_CENTER,
+                content_rect.center(),
+                egui::Align2::CENTER_CENTER,
                 system,
                 egui::FontId::proportional(11.0),
                 pill_palette.text,
@@ -820,7 +789,7 @@ impl NativeArcadeUiApp {
         self.draw_runtime_setup_primary_actions(ui, palette, view, "ALL", &mut focus_cursor);
         ui.add_space(10.0);
 
-        if !self.services.runtime_setup_welcome_completed() {
+        if self.runtime_setup_welcome_visible() {
             draw_runtime_section_heading(ui, "First Run", palette);
             ui.label(
                 egui::RichText::new(
@@ -974,12 +943,12 @@ impl NativeArcadeUiApp {
             self.draw_runtime_action_button(ui, palette, focus_cursor, "Scan Games", |app| {
                 app.start_runtime_scan_job(system.to_string());
             });
-            if system == "ALL" && !self.services.runtime_setup_welcome_completed() {
+            if system == "ALL" && self.runtime_setup_welcome_visible() {
                 self.draw_runtime_action_button(
                     ui,
                     palette,
                     focus_cursor,
-                    "Continue To Library",
+                    "Continue To Favorites",
                     |app| {
                         app.complete_runtime_setup_welcome();
                     },
@@ -1313,7 +1282,7 @@ impl NativeArcadeUiApp {
             } else {
                 self.cover_stats_summary_for_system(&selected_system)
             };
-            self.draw_settings_system_chrome(ui, palette, &title, &subtitle, |_| "");
+            self.draw_settings_system_chrome(ui, palette, &title, &subtitle);
 
             if selected_system == "ALL" {
                 self.draw_cover_global_settings(ui, palette);
@@ -1472,7 +1441,7 @@ impl NativeArcadeUiApp {
                         == MenuFocusRegion::ManageScrapeSystems
                         && self.state.menu_nav.manage_scrape_system_index == index;
                     let response =
-                        self.settings_system_pill(ui, system, "", selected, focused, pill_size);
+                        self.settings_system_pill(ui, system, selected, focused, pill_size);
                     if response.clicked() {
                         self.state.menu_nav.focus_region = MenuFocusRegion::ManageScrapeSystems;
                         self.state.menu_nav.manage_scrape_system_index = index;
@@ -1918,7 +1887,7 @@ impl NativeArcadeUiApp {
     pub(crate) fn runtime_setup_focus_count(&self, view: &DependencySetupView) -> usize {
         let selected = self.state.manage.settings_selected_system.as_str();
         let mut count = 4; // Rescan, safe setup, open ROM folder, scan games.
-        if selected == "ALL" && !self.services.runtime_setup_welcome_completed() {
+        if selected == "ALL" && self.runtime_setup_welcome_visible() {
             count += 1;
         }
         if selected != "ALL" {
@@ -1976,7 +1945,7 @@ impl NativeArcadeUiApp {
         }
         index -= 1;
 
-        if selected == "ALL" && !self.services.runtime_setup_welcome_completed() {
+        if selected == "ALL" && self.runtime_setup_welcome_visible() {
             if index == 0 {
                 self.complete_runtime_setup_welcome();
                 return;
@@ -2038,6 +2007,11 @@ impl NativeArcadeUiApp {
             && self.state.manage.runtime_setup_focus_index == index
     }
 
+    fn runtime_setup_welcome_visible(&self) -> bool {
+        self.state.runtime_setup_welcome_presented_this_session
+            || !self.services.runtime_setup_welcome_completed()
+    }
+
     fn open_dependency_target(&mut self, component_id: &str) {
         match self.services.open_dependency_target(component_id) {
             Ok(()) => {
@@ -2069,7 +2043,11 @@ impl NativeArcadeUiApp {
     fn complete_runtime_setup_welcome(&mut self) {
         match self.services.mark_runtime_setup_welcome_completed() {
             Ok(()) => {
-                self.navigate_to_view(crate::app::AppView::Library);
+                self.state.runtime_setup_welcome_presented_this_session = false;
+                let system_changed = self.apply_system_filter_by_index(0);
+                let alpha_changed = self.apply_alpha_filter_by_index(0);
+                self.navigate_to_view(crate::app::AppView::Home);
+                self.apply_current_view_filter_change(system_changed, alpha_changed, true);
                 self.state.manage.status_message =
                     String::from("Runtime setup is available in Settings anytime.");
                 self.state.status = self.state.manage.status_message.clone();
@@ -2507,43 +2485,6 @@ fn runtime_system_summary(system: &str, view: &DependencySetupView) -> String {
                 group.missing_optional
             )
         }
-    }
-}
-
-fn runtime_setup_system_status_label(system: &str, view: &DependencySetupView) -> &'static str {
-    if system == "ALL" {
-        if view.blocked_system_count > 0 {
-            "Needs files"
-        } else if !view.optional_upgrades.is_empty() {
-            "Optional"
-        } else {
-            "Ready"
-        }
-    } else if let Some(group) = view
-        .system_groups
-        .iter()
-        .find(|group| group.system.eq_ignore_ascii_case(system))
-    {
-        match group.readiness {
-            DependencySystemReadiness::Ready => "Ready",
-            DependencySystemReadiness::Blocked => {
-                if group.components.iter().any(|status| {
-                    status.component.required
-                        && !status.ready()
-                        && matches!(
-                            status.component.source,
-                            DependencySource::LibretroBuildbot { .. }
-                        )
-                }) {
-                    "Can setup"
-                } else {
-                    "Needs files"
-                }
-            }
-            DependencySystemReadiness::ReadyWithOptionalUpgrades => "Optional",
-        }
-    } else {
-        "Setup"
     }
 }
 
