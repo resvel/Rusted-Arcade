@@ -766,22 +766,26 @@ pub(super) unsafe extern "C" fn retro_environment(cmd: u32, data: *mut c_void) -
                 return true;
             };
             let context = runtime.environment_context.lock();
-            let aliased_key = match key {
-                "mupen64plus-cpucore" => Some("mupen64plus-cpu-core"),
-                "mupen64plus-cpu-core" => Some("mupen64plus-cpucore"),
-                _ => None,
-            };
+            let aliased_key = core_variable_alias(key);
             let value = context
                 .variables
                 .get(key)
-                .or_else(|| aliased_key.and_then(|alias| context.variables.get(alias)))
+                .or_else(|| {
+                    aliased_key
+                        .as_deref()
+                        .and_then(|alias| context.variables.get(alias))
+                })
                 .map(|value| value.as_ptr())
                 .unwrap_or(std::ptr::null());
-            if vulkan_debug_enabled() && key.starts_with("mupen64plus-") {
+            if vulkan_debug_enabled() && should_trace_core_variable(key) {
                 let printable = context
                     .variables
                     .get(key)
-                    .or_else(|| aliased_key.and_then(|alias| context.variables.get(alias)))
+                    .or_else(|| {
+                        aliased_key
+                            .as_deref()
+                            .and_then(|alias| context.variables.get(alias))
+                    })
                     .and_then(|value| value.to_str().ok())
                     .unwrap_or("<unset>");
                 info!(
@@ -792,12 +796,16 @@ pub(super) unsafe extern "C" fn retro_environment(cmd: u32, data: *mut c_void) -
                 );
             }
             if std::env::var_os("LIBRETRO_TRACE_VARIABLES").is_some()
-                && key.starts_with("mupen64plus-")
+                && should_trace_core_variable(key)
             {
                 let printable = context
                     .variables
                     .get(key)
-                    .or_else(|| aliased_key.and_then(|alias| context.variables.get(alias)))
+                    .or_else(|| {
+                        aliased_key
+                            .as_deref()
+                            .and_then(|alias| context.variables.get(alias))
+                    })
                     .and_then(|value| value.to_str().ok())
                     .unwrap_or("<unset>");
                 eprintln!("env GET_VARIABLE key={key} value={printable}");
@@ -1349,6 +1357,24 @@ pub(super) fn parse_default_variable_value(spec: &str) -> Option<&str> {
     }
 }
 
+fn core_variable_alias(key: &str) -> Option<String> {
+    match key {
+        "mupen64plus-cpucore" => Some(String::from("mupen64plus-cpu-core")),
+        "mupen64plus-cpu-core" => Some(String::from("mupen64plus-cpucore")),
+        _ => key
+            .strip_prefix("reicast_")
+            .map(|suffix| format!("flycast_{suffix}"))
+            .or_else(|| {
+                key.strip_prefix("flycast_")
+                    .map(|suffix| format!("reicast_{suffix}"))
+            }),
+    }
+}
+
+fn should_trace_core_variable(key: &str) -> bool {
+    key.starts_with("mupen64plus-") || key.starts_with("reicast_") || key.starts_with("flycast_")
+}
+
 pub(super) fn parse_controller_info(mut info: *const RetroControllerInfo) -> Vec<Vec<u32>> {
     let mut ports = Vec::new();
     while !info.is_null() {
@@ -1616,4 +1642,33 @@ pub(super) unsafe extern "C" fn retro_input_state(
     }
 
     0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn core_variable_aliases_flycast_and_reicast_prefixes() {
+        assert_eq!(
+            core_variable_alias("reicast_threaded_rendering").as_deref(),
+            Some("flycast_threaded_rendering")
+        );
+        assert_eq!(
+            core_variable_alias("flycast_threaded_rendering").as_deref(),
+            Some("reicast_threaded_rendering")
+        );
+    }
+
+    #[test]
+    fn core_variable_aliases_existing_mupen64plus_cpu_spellings() {
+        assert_eq!(
+            core_variable_alias("mupen64plus-cpucore").as_deref(),
+            Some("mupen64plus-cpu-core")
+        );
+        assert_eq!(
+            core_variable_alias("mupen64plus-cpu-core").as_deref(),
+            Some("mupen64plus-cpucore")
+        );
+    }
 }
