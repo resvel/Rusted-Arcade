@@ -998,7 +998,7 @@ const PS2_SYSTEM_HOTSPOTS_CENTER: [SystemActionHotspot; 2] = [
     system_rect("Start", "Start", 0.570, 0.475, 0.080, 0.040),
 ];
 
-const DREAMCAST_SYSTEM_HOTSPOTS: [SystemActionHotspot; 13] = [
+const DREAMCAST_SYSTEM_HOTSPOTS: [SystemActionHotspot; 15] = [
     system_circle("Up", "Up", 0.285, 0.395, 0.032),
     system_circle("Down", "Down", 0.285, 0.560, 0.032),
     system_circle("Left", "Left", 0.205, 0.478, 0.032),
@@ -1011,6 +1011,8 @@ const DREAMCAST_SYSTEM_HOTSPOTS: [SystemActionHotspot; 13] = [
     system_circle("X", "X", 0.690, 0.440, 0.034),
     system_circle("B", "B", 0.830, 0.440, 0.034),
     system_circle("A", "A", 0.760, 0.525, 0.034),
+    system_rect("L", "L", 0.165, 0.185, 0.125, 0.050),
+    system_rect("R", "R", 0.835, 0.185, 0.125, 0.050),
     system_rect("Start", "Start", 0.525, 0.630, 0.110, 0.046),
 ];
 
@@ -2197,6 +2199,9 @@ mod tests {
         assert!(system_action_is_native("GBA", "L"));
         assert!(system_action_is_native("PS2", "Right Stick Left"));
         assert!(system_action_is_native("N64", "C-Up"));
+        assert!(system_action_is_native("DREAMCAST", "Stick Up"));
+        assert!(system_action_is_native("DREAMCAST", "L"));
+        assert!(system_action_is_native("DREAMCAST", "R"));
         assert!(system_action_is_native("GAMECUBE", "C Stick Right"));
         assert!(!system_action_is_native("NES", "Quick Save"));
         assert!(!system_action_is_native("DOS", "A"));

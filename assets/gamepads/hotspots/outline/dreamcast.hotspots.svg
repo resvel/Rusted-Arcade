@@ -11,5 +11,7 @@
   <circle id="dreamcast-x" data-action="X" data-label="X" cx="46.78" cy="25.99" r="2.50" />
   <circle id="dreamcast-b" data-action="B" data-label="B" cx="57.75" cy="25.99" r="2.50" />
   <circle id="dreamcast-a" data-action="A" data-label="A" cx="52.27" cy="31.32" r="2.50" />
+  <rect id="dreamcast-l" data-action="L" data-label="L" x="6.40" y="8.80" width="8.40" height="3.20" />
+  <rect id="dreamcast-r" data-action="R" data-label="R" x="49.20" y="8.80" width="8.40" height="3.20" />
   <circle id="dreamcast-start" data-action="Start" data-label="Start" cx="32.00" cy="46.52" r="2.80" />
 </svg>

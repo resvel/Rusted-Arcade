@@ -9,7 +9,7 @@ use crate::input::ControllerMappingTarget;
 use crate::render::{fit_size, fit_size_to_aspect};
 use crate::state::MenuFocusRegion;
 use crate::theme::{ThemePalette, SYSTEM_FILTERS};
-use arcade_domain::{DetectedPadIdentity, N64PrimaryStick};
+use arcade_domain::{DetectedPadIdentity, DreamcastInputMode, N64PrimaryStick};
 use eframe::egui;
 
 const ALPHA_FILTERS: [&str; 28] = [
@@ -356,6 +356,39 @@ impl NativeArcadeUiApp {
                         }
                     }
                 });
+                if active_system.trim().eq_ignore_ascii_case("DREAMCAST") {
+                    let mut input_mode = self.services.dreamcast_input_mode();
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label(
+                            egui::RichText::new("Dreamcast Input")
+                                .size(11.5)
+                                .color(palette.text_muted),
+                        );
+                        for (label, value) in [
+                            ("Analog", DreamcastInputMode::AnalogOnly),
+                            ("Analog + D-Pad", DreamcastInputMode::AnalogPlusDpad),
+                        ] {
+                            if scope_chip(ui, label, true, input_mode == value, &palette).clicked()
+                            {
+                                if value != input_mode {
+                                    match self.services.update_dreamcast_input_mode(value) {
+                                        Ok(()) => {
+                                            input_mode = value;
+                                            self.state.status = format!(
+                                                "Dreamcast input mode set to {label}."
+                                            );
+                                        }
+                                        Err(err) => {
+                                            self.state.status = format!(
+                                                "Failed to save Dreamcast input mode: {err}"
+                                            );
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    });
+                }
             }
             let mapper_help = if system_controller_layout_for_system(&active_system).is_some() {
                 "Select a system control first, then choose which physical controller input should drive it."

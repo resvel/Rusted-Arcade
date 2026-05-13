@@ -418,15 +418,21 @@ const PS2_GAMEPAD_ACTIONS: [&str; 29] = [
     RESET_ACTION,
 ];
 
-const DREAMCAST_GAMEPAD_ACTIONS: [&str; 14] = [
+const DREAMCAST_GAMEPAD_ACTIONS: [&str; 20] = [
     "Up",
     "Down",
     "Left",
     "Right",
+    "Stick Up",
+    "Stick Down",
+    "Stick Left",
+    "Stick Right",
     "A",
     "B",
     "X",
     "Y",
+    "L",
+    "R",
     "Start",
     EXIT_ACTION,
     QUICK_SAVE_ACTION,
@@ -671,10 +677,16 @@ pub fn default_gamepad_mapping_for_system(system: &str) -> StoredGamepadMapping 
             insert_button(&mut actions, "Select", CanonicalButton::Select);
         }
         "DREAMCAST" => {
+            insert_unassigned(&mut actions, "Stick Up");
+            insert_unassigned(&mut actions, "Stick Down");
+            insert_unassigned(&mut actions, "Stick Left");
+            insert_unassigned(&mut actions, "Stick Right");
             insert_button(&mut actions, "A", CanonicalButton::South);
             insert_button(&mut actions, "B", CanonicalButton::East);
             insert_button(&mut actions, "X", CanonicalButton::West);
             insert_button(&mut actions, "Y", CanonicalButton::North);
+            insert_axis(&mut actions, "L", CanonicalAxis::LeftTrigger, 1);
+            insert_axis(&mut actions, "R", CanonicalAxis::RightTrigger, 1);
             insert_button(&mut actions, "Start", CanonicalButton::Start);
         }
         "GAMECUBE" => {
@@ -941,6 +953,55 @@ mod tests {
         ] {
             assert!(actions.contains(&action));
         }
+    }
+
+    #[test]
+    fn dreamcast_actions_include_triggers_and_stick_directions() {
+        let actions = supported_gamepad_actions("DREAMCAST");
+        for action in [
+            "Up",
+            "Down",
+            "Left",
+            "Right",
+            "Stick Up",
+            "Stick Down",
+            "Stick Left",
+            "Stick Right",
+            "A",
+            "B",
+            "X",
+            "Y",
+            "L",
+            "R",
+            "Start",
+            EXIT_ACTION,
+        ] {
+            assert!(actions.contains(&action));
+        }
+    }
+
+    #[test]
+    fn dreamcast_default_mapping_assigns_triggers_and_leaves_stick_explicit() {
+        let mapping = default_gamepad_mapping_for_system("DREAMCAST");
+
+        assert_eq!(mapping.actions.get("Stick Up"), Some(&None));
+        assert_eq!(mapping.actions.get("Stick Down"), Some(&None));
+        assert_eq!(mapping.actions.get("Stick Left"), Some(&None));
+        assert_eq!(mapping.actions.get("Stick Right"), Some(&None));
+        assert_eq!(
+            mapping.actions.get("L"),
+            Some(&Some(MappingEntry::Axis {
+                axis: CanonicalAxis::LeftTrigger,
+                direction: 1,
+            }))
+        );
+        assert_eq!(
+            mapping.actions.get("R"),
+            Some(&Some(MappingEntry::Axis {
+                axis: CanonicalAxis::RightTrigger,
+                direction: 1,
+            }))
+        );
     }
 
     #[test]

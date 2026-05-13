@@ -13,11 +13,12 @@ use arcade_domain::{
     get_arcade_compatibility, get_dolphin_sys_directory, resolve_core,
     resolve_effective_core_override, resolve_path_from_root, scan_dependency_report, AppConfig,
     CoverScrapePlatformIds, CoverScrapeRunOptions, CoverScrapeSettingsInput, CoverScrapingConfig,
-    DependencyReport, DependencySource, DetectedPadIdentity, LocalCoverRelinkRunOptions,
-    ManageOperationKind, ManageOperationSummary, ManageProgressEvent, ManageRomStatus, ManageScope,
-    ManagementConfig, N64CpuCoreMode, N64PrimaryStick, PathsConfig, RomCard, RomQuery, SaveLimits,
-    SaveSlotData, SaveSlotSummary, SavedGamepadMappingSummary, StoredGamepadMapping,
-    PCECD_ACCEPTED_BIOS_FILES, SATURN_ACCEPTED_BIOS_FILES, SYSTEM_DEFAULT_MAPPING_KEY,
+    DependencyReport, DependencySource, DetectedPadIdentity, DreamcastInputMode,
+    LocalCoverRelinkRunOptions, ManageOperationKind, ManageOperationSummary, ManageProgressEvent,
+    ManageRomStatus, ManageScope, ManagementConfig, N64CpuCoreMode, N64PrimaryStick, PathsConfig,
+    RomCard, RomQuery, SaveLimits, SaveSlotData, SaveSlotSummary, SavedGamepadMappingSummary,
+    StoredGamepadMapping, PCECD_ACCEPTED_BIOS_FILES, SATURN_ACCEPTED_BIOS_FILES,
+    SYSTEM_DEFAULT_MAPPING_KEY,
 };
 use sha1::{Digest, Sha1};
 use tracing::warn;
@@ -88,6 +89,13 @@ impl NativeServices {
         match self.config.lock() {
             Ok(config) => config.emulation.n64.primary_stick,
             Err(poison) => poison.into_inner().emulation.n64.primary_stick,
+        }
+    }
+
+    pub fn dreamcast_input_mode(&self) -> DreamcastInputMode {
+        match self.config.lock() {
+            Ok(config) => config.emulation.dreamcast.input_mode,
+            Err(poison) => poison.into_inner().emulation.dreamcast.input_mode,
         }
     }
 
@@ -369,6 +377,17 @@ impl NativeServices {
             .map_err(|_| anyhow!("config lock poisoned"))?;
 
         config.emulation.n64.primary_stick = primary_stick;
+        config.save_to_path(self.config_path.as_ref())?;
+        Ok(())
+    }
+
+    pub fn update_dreamcast_input_mode(&self, input_mode: DreamcastInputMode) -> Result<()> {
+        let mut config = self
+            .config
+            .lock()
+            .map_err(|_| anyhow!("config lock poisoned"))?;
+
+        config.emulation.dreamcast.input_mode = input_mode;
         config.save_to_path(self.config_path.as_ref())?;
         Ok(())
     }
@@ -1994,9 +2013,9 @@ mod tests {
     use super::*;
     use arcade_data::Database;
     use arcade_domain::{
-        CanonicalButton, LocalCoverRelinkRunOptions, MappingEntry, N64CpuCoreMode,
-        N64PreferredCore, N64PrimaryStick, PathsConfig, RomQuery, NEXT_SAVE_SLOT_ACTION,
-        QUICK_LOAD_ACTION, QUICK_SAVE_ACTION, SYSTEM_DEFAULT_MAPPING_KEY,
+        CanonicalButton, DreamcastInputMode, LocalCoverRelinkRunOptions, MappingEntry,
+        N64CpuCoreMode, N64PreferredCore, N64PrimaryStick, PathsConfig, RomQuery,
+        NEXT_SAVE_SLOT_ACTION, QUICK_LOAD_ACTION, QUICK_SAVE_ACTION, SYSTEM_DEFAULT_MAPPING_KEY,
     };
     use chrono::Utc;
     use rusqlite::params;
@@ -2604,6 +2623,32 @@ mod tests {
 
         let (saved, _) = AppConfig::load_or_create(Some(&config_path)).expect("reload config");
         assert_eq!(saved.emulation.n64.primary_stick, N64PrimaryStick::Right);
+    }
+
+    #[test]
+    fn update_dreamcast_input_mode_persists_to_config() {
+        let tmp = TempDir::new().expect("tempdir");
+        let config = make_config(&tmp);
+        let config_path = config_path_for(&config);
+        let db = Database::open(&config).expect("open db");
+        let services =
+            NativeServices::bootstrap(config.clone(), config_path.clone(), db).expect("bootstrap");
+
+        services
+            .update_dreamcast_input_mode(DreamcastInputMode::AnalogPlusDpad)
+            .expect("save dreamcast input mode");
+
+        let active = services.config();
+        assert_eq!(
+            active.emulation.dreamcast.input_mode,
+            DreamcastInputMode::AnalogPlusDpad
+        );
+
+        let (saved, _) = AppConfig::load_or_create(Some(&config_path)).expect("reload config");
+        assert_eq!(
+            saved.emulation.dreamcast.input_mode,
+            DreamcastInputMode::AnalogPlusDpad
+        );
     }
 
     #[test]

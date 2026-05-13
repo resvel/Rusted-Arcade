@@ -10,9 +10,9 @@ use tracing::debug;
 use arcade_domain::MAX_GAMEPAD_PLAYERS;
 use arcade_domain::{
     default_gamepad_mapping_for_system, supported_gamepad_actions, CanonicalAxis, CanonicalButton,
-    DetectedPadIdentity, MappingEntry, N64PrimaryStick, StoredDeviceMeta, StoredGamepadMapping,
-    EXIT_ACTION, NEXT_SAVE_SLOT_ACTION, QUICK_LOAD_ACTION, QUICK_SAVE_ACTION, RESET_ACTION,
-    SYSTEM_DEFAULT_MAPPING_KEY,
+    DetectedPadIdentity, DreamcastInputMode, MappingEntry, N64PrimaryStick, StoredDeviceMeta,
+    StoredGamepadMapping, EXIT_ACTION, NEXT_SAVE_SLOT_ACTION, QUICK_LOAD_ACTION, QUICK_SAVE_ACTION,
+    RESET_ACTION, SYSTEM_DEFAULT_MAPPING_KEY,
 };
 
 #[cfg(feature = "gamepad")]
@@ -257,6 +257,11 @@ impl NativeArcadeUiApp {
         } else {
             None
         };
+        let dreamcast_input_mode = if normalize_system_name(&system) == "DREAMCAST" {
+            Some(self.services.dreamcast_input_mode())
+        } else {
+            None
+        };
         let mut shortcuts = FrontendShortcutState::default();
         if !dos_keyboard_passthrough {
             let keyboard_state = self.capture_keyboard_state(ctx);
@@ -267,6 +272,7 @@ impl NativeArcadeUiApp {
                 &input_policy,
                 None,
                 primary_stick_preference,
+                dreamcast_input_mode,
             );
         }
         self.sync_retro_keyboard_state(ctx, dos_keyboard_passthrough);
@@ -282,6 +288,7 @@ impl NativeArcadeUiApp {
                 &input_policy,
                 Some(&capture.identity),
                 primary_stick_preference,
+                dreamcast_input_mode,
             );
             shortcuts.merge(capture_shortcuts);
         }
@@ -1341,10 +1348,12 @@ impl NativeArcadeUiApp {
         input_policy: &RuntimeInputPolicy,
         device: Option<&DetectedPadIdentity>,
         primary_stick_preference: Option<N64PrimaryStick>,
+        dreamcast_input_mode: Option<DreamcastInputMode>,
     ) -> FrontendShortcutState {
         let mapping = self.resolved_mapping_for(system, device);
-        let use_explicit_n64_stick_mapping =
-            normalize_system_name(system) == "N64" && n64_control_stick_mapping_enabled(&mapping);
+        let normalized_system = normalize_system_name(system);
+        let use_explicit_primary_stick_mapping =
+            explicit_primary_stick_mapping_enabled(&normalized_system, &mapping);
 
         for action in supported_gamepad_actions(system) {
             let Some(Some(entry)) = mapping.actions.get(*action) else {
@@ -1364,12 +1373,19 @@ impl NativeArcadeUiApp {
                         index,
                         axis_id,
                         value,
-                    } => set_analog(self, port, index, axis_id, value),
+                    } => {
+                        set_analog(self, port, index, axis_id, value);
+                        if dreamcast_input_mode == Some(DreamcastInputMode::AnalogPlusDpad) {
+                            if let Some(joypad_id) = dreamcast_stick_action_to_dpad(action, value) {
+                                set_button(self, port, joypad_id, true);
+                            }
+                        }
+                    }
                 }
             }
         }
 
-        if input_policy.supports_native_analog && !use_explicit_n64_stick_mapping {
+        if input_policy.supports_native_analog && !use_explicit_primary_stick_mapping {
             let preference = primary_stick_preference.unwrap_or(N64PrimaryStick::Left);
             let (primary_x, primary_y) = primary_stick_axes_for_system(system, state, preference);
             if primary_x.abs() > f32::EPSILON {
@@ -1389,6 +1405,9 @@ impl NativeArcadeUiApp {
                     RETRO_DEVICE_ID_ANALOG_Y,
                     primary_y,
                 );
+            }
+            if dreamcast_input_mode == Some(DreamcastInputMode::AnalogPlusDpad) {
+                set_dpad_from_primary_analog(self, port, primary_x, primary_y, mapping.threshold);
             }
         }
 
@@ -2496,7 +2515,14 @@ fn active_visual_controls_for_state(
         .collect()
 }
 
-fn n64_control_stick_mapping_enabled(mapping: &StoredGamepadMapping) -> bool {
+fn explicit_primary_stick_mapping_enabled(
+    normalized_system: &str,
+    mapping: &StoredGamepadMapping,
+) -> bool {
+    if !matches!(normalized_system, "N64" | "DREAMCAST") {
+        return false;
+    }
+
     ["Stick Up", "Stick Down", "Stick Left", "Stick Right"]
         .into_iter()
         .any(|action| {
@@ -2631,6 +2657,16 @@ fn native_analog_y_for_system(system: &str, value: f32) -> f32 {
         -value
     } else {
         value
+    }
+}
+
+fn dreamcast_stick_action_to_dpad(action: &str, value: f32) -> Option<u32> {
+    match (action, value.is_sign_positive()) {
+        ("Stick Up", false) => Some(RETRO_DEVICE_ID_JOYPAD_UP),
+        ("Stick Down", true) => Some(RETRO_DEVICE_ID_JOYPAD_DOWN),
+        ("Stick Left", false) => Some(RETRO_DEVICE_ID_JOYPAD_LEFT),
+        ("Stick Right", true) => Some(RETRO_DEVICE_ID_JOYPAD_RIGHT),
+        _ => None,
     }
 }
 
@@ -2904,6 +2940,43 @@ fn action_to_retro_binding(
                 axis_id: RETRO_DEVICE_ID_ANALOG_X,
                 value: 1.0,
             }),
+            _ => None,
+        };
+    }
+
+    if normalized_system == "DREAMCAST" {
+        return match action {
+            "Up" => Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_UP)),
+            "Down" => Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_DOWN)),
+            "Left" => Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_LEFT)),
+            "Right" => Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_RIGHT)),
+            "Stick Up" => Some(RetroActionBinding::Analog {
+                index: RETRO_DEVICE_INDEX_ANALOG_LEFT,
+                axis_id: RETRO_DEVICE_ID_ANALOG_Y,
+                value: -1.0,
+            }),
+            "Stick Down" => Some(RetroActionBinding::Analog {
+                index: RETRO_DEVICE_INDEX_ANALOG_LEFT,
+                axis_id: RETRO_DEVICE_ID_ANALOG_Y,
+                value: 1.0,
+            }),
+            "Stick Left" => Some(RetroActionBinding::Analog {
+                index: RETRO_DEVICE_INDEX_ANALOG_LEFT,
+                axis_id: RETRO_DEVICE_ID_ANALOG_X,
+                value: -1.0,
+            }),
+            "Stick Right" => Some(RetroActionBinding::Analog {
+                index: RETRO_DEVICE_INDEX_ANALOG_LEFT,
+                axis_id: RETRO_DEVICE_ID_ANALOG_X,
+                value: 1.0,
+            }),
+            "A" => Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_A)),
+            "B" => Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_B)),
+            "X" => Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_X)),
+            "Y" => Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_Y)),
+            "L" => Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_L)),
+            "R" => Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_R)),
+            "Start" => Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_START)),
             _ => None,
         };
     }
@@ -3595,6 +3668,35 @@ fn set_button(app: &NativeArcadeUiApp, port: u32, joypad_id: u32, pressed: bool)
             0
         },
     );
+}
+
+fn set_dpad_from_primary_analog(
+    app: &NativeArcadeUiApp,
+    port: u32,
+    x: f32,
+    y: f32,
+    threshold: f32,
+) {
+    for joypad_id in primary_analog_dpad_ids(x, y, threshold) {
+        set_button(app, port, joypad_id, true);
+    }
+}
+
+fn primary_analog_dpad_ids(x: f32, y: f32, threshold: f32) -> Vec<u32> {
+    let mut ids = Vec::with_capacity(2);
+    if y <= -threshold {
+        ids.push(RETRO_DEVICE_ID_JOYPAD_UP);
+    }
+    if y >= threshold {
+        ids.push(RETRO_DEVICE_ID_JOYPAD_DOWN);
+    }
+    if x <= -threshold {
+        ids.push(RETRO_DEVICE_ID_JOYPAD_LEFT);
+    }
+    if x >= threshold {
+        ids.push(RETRO_DEVICE_ID_JOYPAD_RIGHT);
+    }
+    ids
 }
 
 fn set_analog_button(app: &NativeArcadeUiApp, port: u32, joypad_id: u32, value: f32) {
@@ -5177,6 +5279,76 @@ mod tests {
     }
 
     #[test]
+    fn dreamcast_action_bindings_map_faces_triggers_and_stick_to_retropad() {
+        assert_eq!(
+            action_to_retro_binding("DREAMCAST", "A", None),
+            Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_A))
+        );
+        assert_eq!(
+            action_to_retro_binding("DREAMCAST", "B", None),
+            Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_B))
+        );
+        assert_eq!(
+            action_to_retro_binding("DREAMCAST", "X", None),
+            Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_X))
+        );
+        assert_eq!(
+            action_to_retro_binding("DREAMCAST", "Y", None),
+            Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_Y))
+        );
+        assert_eq!(
+            action_to_retro_binding("DREAMCAST", "L", None),
+            Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_L))
+        );
+        assert_eq!(
+            action_to_retro_binding("DREAMCAST", "R", None),
+            Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_R))
+        );
+        assert_eq!(
+            action_to_retro_binding("DREAMCAST", "Stick Up", None),
+            Some(RetroActionBinding::Analog {
+                index: RETRO_DEVICE_INDEX_ANALOG_LEFT,
+                axis_id: RETRO_DEVICE_ID_ANALOG_Y,
+                value: -1.0,
+            })
+        );
+        assert_eq!(
+            action_to_retro_binding("DREAMCAST", "Stick Right", None),
+            Some(RetroActionBinding::Analog {
+                index: RETRO_DEVICE_INDEX_ANALOG_LEFT,
+                axis_id: RETRO_DEVICE_ID_ANALOG_X,
+                value: 1.0,
+            })
+        );
+    }
+
+    #[test]
+    fn dreamcast_analog_to_dpad_uses_cardinal_thresholds() {
+        assert_eq!(
+            primary_analog_dpad_ids(0.2, -0.7, 0.6),
+            vec![RETRO_DEVICE_ID_JOYPAD_UP]
+        );
+        assert_eq!(
+            primary_analog_dpad_ids(0.8, 0.7, 0.6),
+            vec![RETRO_DEVICE_ID_JOYPAD_DOWN, RETRO_DEVICE_ID_JOYPAD_RIGHT]
+        );
+        assert!(primary_analog_dpad_ids(0.4, -0.5, 0.6).is_empty());
+    }
+
+    #[test]
+    fn dreamcast_explicit_stick_actions_can_mirror_to_dpad() {
+        assert_eq!(
+            dreamcast_stick_action_to_dpad("Stick Up", -1.0),
+            Some(RETRO_DEVICE_ID_JOYPAD_UP)
+        );
+        assert_eq!(
+            dreamcast_stick_action_to_dpad("Stick Right", 1.0),
+            Some(RETRO_DEVICE_ID_JOYPAD_RIGHT)
+        );
+        assert_eq!(dreamcast_stick_action_to_dpad("A", 1.0), None);
+    }
+
+    #[test]
     fn pcecd_action_bindings_map_to_expected_retropad_ids() {
         assert_eq!(
             action_to_retro_binding("PCECD", "I", None),
@@ -5293,9 +5465,9 @@ mod tests {
     }
 
     #[test]
-    fn n64_control_stick_mapping_enabled_only_when_assigned() {
+    fn explicit_primary_stick_mapping_enabled_only_when_assigned() {
         let mapping = default_gamepad_mapping_for_system("N64");
-        assert!(!n64_control_stick_mapping_enabled(&mapping));
+        assert!(!explicit_primary_stick_mapping_enabled("N64", &mapping));
 
         let mut mapped = mapping.clone();
         mapped.actions.insert(
@@ -5305,7 +5477,24 @@ mod tests {
                 direction: -1,
             }),
         );
-        assert!(n64_control_stick_mapping_enabled(&mapped));
+        assert!(explicit_primary_stick_mapping_enabled("N64", &mapped));
+
+        let mut dreamcast = default_gamepad_mapping_for_system("DREAMCAST");
+        assert!(!explicit_primary_stick_mapping_enabled(
+            "DREAMCAST",
+            &dreamcast
+        ));
+        dreamcast.actions.insert(
+            String::from("Stick Right"),
+            Some(MappingEntry::Axis {
+                axis: CanonicalAxis::LeftStickX,
+                direction: 1,
+            }),
+        );
+        assert!(explicit_primary_stick_mapping_enabled(
+            "DREAMCAST",
+            &dreamcast
+        ));
     }
 
     #[test]

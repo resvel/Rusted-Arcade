@@ -15,6 +15,9 @@ pub struct EmulationConfig {
     #[serde(default)]
     pub n64: N64EmulationConfig,
 
+    #[serde(default)]
+    pub dreamcast: DreamcastEmulationConfig,
+
     /// Per-core settings: keys are core names (e.g. `"mupen64plus_next"`),
     /// values are maps of variable_key → chosen value.
     #[serde(default)]
@@ -211,6 +214,20 @@ pub enum N64PrimaryStick {
     #[default]
     Left,
     Right,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct DreamcastEmulationConfig {
+    #[serde(default)]
+    pub input_mode: DreamcastInputMode,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum DreamcastInputMode {
+    #[default]
+    AnalogOnly,
+    AnalogPlusDpad,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -809,7 +826,7 @@ fn strip_known_root_prefix<'a>(path: &'a Path, root: &Path) -> Option<&'a Path> 
 mod tests {
     use super::{
         default_app_root_with, default_config_path_with, resolve_path_from_root, AppConfig,
-        N64CpuCoreMode, N64PrimaryStick,
+        DreamcastInputMode, N64CpuCoreMode, N64PrimaryStick,
     };
     use std::fs;
     use std::path::PathBuf;
@@ -1047,6 +1064,29 @@ primary_stick = "right"
         .expect("config");
 
         assert_eq!(config.emulation.n64.primary_stick, N64PrimaryStick::Right);
+    }
+
+    #[test]
+    fn app_config_deserializes_dreamcast_input_mode_override() {
+        let config: AppConfig = toml::from_str(
+            r#"
+[paths]
+rom_root = "/tmp/roms"
+db_path = "/tmp/arcade.db"
+save_state_root = "/tmp/save-states"
+core_root = "/tmp/cores"
+bios_root = "/tmp/bios"
+
+[emulation.dreamcast]
+input_mode = "analog_plus_dpad"
+"#,
+        )
+        .expect("config");
+
+        assert_eq!(
+            config.emulation.dreamcast.input_mode,
+            DreamcastInputMode::AnalogPlusDpad
+        );
     }
 
     #[test]
