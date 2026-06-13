@@ -5,7 +5,10 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
+#[cfg(not(target_os = "macos"))]
 const USER_DOCUMENTS_APP_DIR: &str = "Arcade";
+#[cfg(target_os = "macos")]
+const MACOS_APPLICATION_SUPPORT_APP_ROOT: &str = "/Library/Application Support/RustedArcade";
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct EmulationConfig {
@@ -764,6 +767,7 @@ impl AppConfig {
     }
 }
 
+#[cfg(not(target_os = "macos"))]
 fn user_documents_arcade_dir() -> PathBuf {
     let home = std::env::var("HOME").unwrap_or_else(|_| String::from("."));
     PathBuf::from(home)
@@ -772,20 +776,32 @@ fn user_documents_arcade_dir() -> PathBuf {
 }
 
 fn default_app_root() -> PathBuf {
-    user_documents_arcade_dir()
+    #[cfg(target_os = "macos")]
+    {
+        macos_application_support_arcade_dir()
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        user_documents_arcade_dir()
+    }
 }
 
 #[cfg(test)]
-fn default_app_root_with(documents_arcade_dir: PathBuf) -> PathBuf {
-    documents_arcade_dir
+fn default_app_root_with(runtime_root: PathBuf) -> PathBuf {
+    runtime_root
 }
 
 fn default_config_path() -> PathBuf {
-    default_config_path_with(user_documents_arcade_dir())
+    default_config_path_with(default_app_root())
 }
 
-fn default_config_path_with(documents_arcade_dir: PathBuf) -> PathBuf {
-    documents_arcade_dir.join("config.toml")
+fn default_config_path_with(runtime_root: PathBuf) -> PathBuf {
+    runtime_root.join("config.toml")
+}
+
+#[cfg(target_os = "macos")]
+fn macos_application_support_arcade_dir() -> PathBuf {
+    PathBuf::from(MACOS_APPLICATION_SUPPORT_APP_ROOT)
 }
 
 pub fn resolve_path_from_root(path: impl AsRef<Path>, root: &Path) -> PathBuf {
@@ -1152,16 +1168,16 @@ welcome_completed = true
     }
 
     #[test]
-    fn default_config_path_uses_documents_arcade_root() {
-        let documents_root = PathBuf::from("/Users/test/Documents/Arcade");
-        let resolved = default_config_path_with(documents_root.clone());
-        assert_eq!(resolved, documents_root.join("config.toml"));
+    fn default_config_path_uses_runtime_root() {
+        let runtime_root = PathBuf::from("/Library/Application Support/RustedArcade");
+        let resolved = default_config_path_with(runtime_root.clone());
+        assert_eq!(resolved, runtime_root.join("config.toml"));
     }
 
     #[test]
-    fn default_app_root_uses_documents_arcade_root() {
-        let documents_root = PathBuf::from("/Users/test/Documents/Arcade");
-        let resolved = default_app_root_with(documents_root.clone());
-        assert_eq!(resolved, documents_root);
+    fn default_app_root_uses_runtime_root() {
+        let runtime_root = PathBuf::from("/Library/Application Support/RustedArcade");
+        let resolved = default_app_root_with(runtime_root.clone());
+        assert_eq!(resolved, runtime_root);
     }
 }

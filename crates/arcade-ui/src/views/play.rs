@@ -398,6 +398,21 @@ impl NativeArcadeUiApp {
             }
             if self.state.play.launch_phase == PlayLaunchPhase::Failed {
                 ui.add_space(18.0);
+                let retry_rom_id = self.state.play.launch_rom_id.clone();
+                let retry_options = self.state.play.launch_retry_core_options.clone();
+                if let Some(rom_id) = retry_rom_id {
+                    ui.horizontal_wrapped(|ui| {
+                        for core in retry_options {
+                            if ui
+                                .button(format!("Try {}", display_core_name(&core)))
+                                .clicked()
+                            {
+                                self.launch_rom_with_core_override(&rom_id, &core);
+                            }
+                        }
+                    });
+                    ui.add_space(8.0);
+                }
                 if ui.button("Back").clicked() {
                     self.state.play.dismiss_launch_shell();
                 }
@@ -421,16 +436,46 @@ impl NativeArcadeUiApp {
                     .corner_radius(egui::CornerRadius::same(255))
                     .inner_margin(egui::Margin::symmetric(10, 8))
                     .show(ui, |ui| {
-                        let button = egui::Button::new(
-                            egui::RichText::new("Reset").color(palette.text).strong(),
-                        )
-                        .fill(palette.accent_soft)
-                        .stroke(egui::Stroke::new(1.0, palette.accent))
-                        .corner_radius(egui::CornerRadius::same(255));
-                        if ui.add(button).clicked() {
-                            self.reset_play_session();
-                            self.keep_play_bar_visible();
-                        }
+                        ui.horizontal(|ui| {
+                            if let Some((rom_id, core)) =
+                                self.state.play.pending_core_promotion.clone()
+                            {
+                                let label = format!("Always use {}", display_core_name(&core));
+                                if ui.button(label).clicked() {
+                                    match self.services.set_rom_core_override(&rom_id, &core) {
+                                        Ok(()) => {
+                                            self.state.play.clear_core_promotion();
+                                            self.state.play.set_feedback(
+                                                std::time::Instant::now(),
+                                                std::time::Duration::from_secs(3),
+                                                format!(
+                                                    "Saved {} for this game",
+                                                    display_core_name(&core)
+                                                ),
+                                            );
+                                        }
+                                        Err(err) => {
+                                            self.state.play.set_feedback(
+                                                std::time::Instant::now(),
+                                                std::time::Duration::from_secs(4),
+                                                format!("Couldn’t save core preference: {err}"),
+                                            );
+                                        }
+                                    }
+                                    self.keep_play_bar_visible();
+                                }
+                            }
+                            let button = egui::Button::new(
+                                egui::RichText::new("Reset").color(palette.text).strong(),
+                            )
+                            .fill(palette.accent_soft)
+                            .stroke(egui::Stroke::new(1.0, palette.accent))
+                            .corner_radius(egui::CornerRadius::same(255));
+                            if ui.add(button).clicked() {
+                                self.reset_play_session();
+                                self.keep_play_bar_visible();
+                            }
+                        });
                     });
             })
             .response;
@@ -476,6 +521,15 @@ impl NativeArcadeUiApp {
             (None, Some(input_debug)) => Some(input_debug),
             (None, None) => None,
         }
+    }
+}
+
+fn display_core_name(core: &str) -> &'static str {
+    match core {
+        "fbneo" => "FBNeo",
+        "mame2003" => "MAME2003",
+        "mame2003_plus" => "MAME2003 Plus",
+        _ => "Selected Core",
     }
 }
 

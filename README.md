@@ -45,20 +45,20 @@ that you select. It never downloads BIOS files or ROMs.
 By default, Rusted Arcade uses:
 
 ```text
-~/Documents/Arcade
+/Library/Application Support/RustedArcade
 ```
 
 The app creates and uses paths like:
 
 ```text
-~/Documents/Arcade/config.toml
-~/Documents/Arcade/roms/
-~/Documents/Arcade/cores/
-~/Documents/Arcade/cores/x86_64/
-~/Documents/Arcade/bios/
-~/Documents/Arcade/data/arcade.db
-~/Documents/Arcade/data/save-states/
-~/Documents/Arcade/covers/
+/Library/Application Support/RustedArcade/config.toml
+/Library/Application Support/RustedArcade/roms/
+/Library/Application Support/RustedArcade/cores/
+/Library/Application Support/RustedArcade/cores/x86_64/
+/Library/Application Support/RustedArcade/bios/
+/Library/Application Support/RustedArcade/data/arcade.db
+/Library/Application Support/RustedArcade/data/save-states/
+/Library/Application Support/RustedArcade/covers/
 ```
 
 Native Apple Silicon cores live in `cores/`. Rosetta/x86_64 cores live in
@@ -134,7 +134,7 @@ With logs:
 ARCADE_LOG_FILE=run-rosetta.log target/x86_64-apple-darwin/debug/arcade-app
 ```
 
-The app should log `Rosetta: true` and use `~/Documents/Arcade/cores/x86_64`
+The app should log `Rosetta: true` and use `/Library/Application Support/RustedArcade/cores/x86_64`
 when that folder exists.
 
 ## Building macOS App Bundles
@@ -165,11 +165,11 @@ dist/RustedArcade_Universal_.app
 
 The packaging script copies bundled UI assets, writes `Info.plist`, removes
 macOS metadata, and ad-hoc signs the bundle. Runtime data remains in
-`~/Documents/Arcade`.
+`/Library/Application Support/RustedArcade`.
 
 ## Adding Games
 
-Place your games under `~/Documents/Arcade/roms/` using the system folders that
+Place your games under `/Library/Application Support/RustedArcade/roms/` using the system folders that
 the Smart Scan understands:
 
 | System | Folder | Common extensions |
@@ -226,7 +226,7 @@ BIOS files are user-owned files. Rusted Arcade does not download them.
 
 Important locations:
 
-- PS2 BIOS: `~/Documents/Arcade/bios/pcsx2/bios/`
+- PS2 BIOS: `/Library/Application Support/RustedArcade/bios/pcsx2/bios/`
 - PCE-CD BIOS: shown in the Dependencies view
 - Saturn BIOS: shown in the Dependencies view
 - Shared arcade BIOS archives: place with your arcade BIOS/ROM set as guided

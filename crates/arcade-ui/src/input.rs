@@ -2506,13 +2506,15 @@ fn active_visual_controls_for_state(
     art: ControllerMapperArt,
     threshold: f32,
 ) -> Vec<VisualControlId> {
-    physical_input_controls(art)
+    let mut controls = physical_input_controls(art)
         .into_iter()
         .filter_map(|hotspot| {
             let entry = visual_control_to_mapping_entry(hotspot.control);
             mapping_entry_is_active(state, &entry, threshold).then_some(hotspot.control)
         })
-        .collect()
+        .collect::<Vec<_>>();
+    controls.sort();
+    controls
 }
 
 fn explicit_primary_stick_mapping_enabled(

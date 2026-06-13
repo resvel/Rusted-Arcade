@@ -382,6 +382,20 @@ impl Database {
         Ok(())
     }
 
+    pub fn update_rom_core(&self, rom_id: &str, emulator_core: &str) -> Result<()> {
+        let conn = self.conn.lock().map_err(|_| anyhow!("db lock poisoned"))?;
+        let updated = conn
+            .execute(
+                "UPDATE \"Rom\" SET emulatorCore = ?1, updatedAt = ?2 WHERE id = ?3",
+                params![emulator_core, now_sqlite(), rom_id],
+            )
+            .context("failed to update rom core override")?;
+        if updated == 0 {
+            return Err(anyhow!("ROM not found."));
+        }
+        Ok(())
+    }
+
     pub fn delete_roms(&self, rom_ids: &[String]) -> Result<usize> {
         let conn = self.conn.lock().map_err(|_| anyhow!("db lock poisoned"))?;
         let tx = conn.unchecked_transaction()?;

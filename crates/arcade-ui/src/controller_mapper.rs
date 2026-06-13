@@ -36,7 +36,7 @@ pub(crate) enum ControllerMapperView {
     Top,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum VisualControlId {
     Button(CanonicalButton),
     Axis { axis: CanonicalAxis, direction: i8 },

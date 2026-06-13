@@ -47,6 +47,7 @@ pub(crate) struct PlaySessionState {
     pub(crate) launch_phase: PlayLaunchPhase,
     pub(crate) launch_phase_started_at: Instant,
     pub(crate) launch_title: Option<String>,
+    pub(crate) launch_rom_id: Option<String>,
     pub(crate) launch_system: Option<String>,
     pub(crate) launch_core: Option<String>,
     pub(crate) launch_cover_path: Option<String>,
@@ -55,6 +56,9 @@ pub(crate) struct PlaySessionState {
     pub(crate) launch_detail_message: Option<String>,
     pub(crate) launch_note_message: Option<String>,
     pub(crate) pending_launch: Option<PendingLaunch>,
+    pub(crate) launch_failed_core: Option<String>,
+    pub(crate) launch_retry_core_options: Vec<String>,
+    pub(crate) pending_core_promotion: Option<(String, String)>,
     pub(crate) overlay_message: String,
     pub(crate) overlay_visible_until: Option<Instant>,
     pub(crate) bar_visible_until: Option<Instant>,
@@ -102,6 +106,7 @@ impl Default for PlaySessionState {
             launch_phase: PlayLaunchPhase::Idle,
             launch_phase_started_at: Instant::now(),
             launch_title: None,
+            launch_rom_id: None,
             launch_system: None,
             launch_core: None,
             launch_cover_path: None,
@@ -110,6 +115,9 @@ impl Default for PlaySessionState {
             launch_detail_message: None,
             launch_note_message: None,
             pending_launch: None,
+            launch_failed_core: None,
+            launch_retry_core_options: Vec::new(),
+            pending_core_promotion: None,
             overlay_message: String::new(),
             overlay_visible_until: None,
             bar_visible_until: None,
@@ -169,6 +177,7 @@ impl PlaySessionState {
     pub(crate) fn queue_launch(&mut self, plan: LaunchPlan, launch_view: AppView) {
         self.status = String::from("Starting...");
         self.launch_title = Some(plan.display_title.clone());
+        self.launch_rom_id = Some(plan.rom_id.clone());
         self.launch_system = Some(plan.system.clone());
         self.launch_core = Some(plan.resolved_core_name.clone());
         self.launch_cover_path = plan.cover_path.clone();
@@ -176,6 +185,9 @@ impl PlaySessionState {
         self.launch_friendly_message = Some(String::from("Starting..."));
         self.launch_detail_message = None;
         self.launch_note_message = plan.active_core_note.map(String::from);
+        self.launch_failed_core = None;
+        self.launch_retry_core_options.clear();
+        self.pending_core_promotion = None;
         self.pending_launch = Some(PendingLaunch {
             plan,
             launch_view,
@@ -218,7 +230,7 @@ impl PlaySessionState {
     ) {
         self.launch_title = title;
         self.launch_system = system;
-        self.launch_core = core;
+        self.launch_core = core.clone();
         self.launch_cover_path = cover_path;
         self.launch_preview_poster_path = preview_poster_path;
         let friendly = friendly.into();
@@ -226,7 +238,14 @@ impl PlaySessionState {
         self.status = friendly.clone();
         self.launch_friendly_message = Some(friendly);
         self.launch_detail_message = Some(detail);
-        self.launch_note_message = None;
+        self.launch_note_message =
+            arcade_launch_failure_note(self.launch_system.as_deref(), core.as_deref());
+        self.launch_failed_core = core;
+        self.launch_retry_core_options = retry_core_options_for_failed_launch(
+            self.launch_system.as_deref(),
+            self.launch_failed_core.as_deref(),
+        );
+        self.pending_core_promotion = None;
         self.pending_launch = None;
         self.set_launch_phase(PlayLaunchPhase::Failed);
     }
@@ -241,7 +260,11 @@ impl PlaySessionState {
 
     pub(crate) fn dismiss_launch_shell(&mut self) {
         self.pending_launch = None;
+        self.launch_failed_core = None;
+        self.launch_retry_core_options.clear();
+        self.pending_core_promotion = None;
         self.launch_title = None;
+        self.launch_rom_id = None;
         self.launch_system = None;
         self.launch_core = None;
         self.launch_cover_path = None;
@@ -266,6 +289,8 @@ impl PlaySessionState {
         self.launch_core = Some(core.clone());
         self.launch_friendly_message = Some(String::from("Starting..."));
         self.launch_detail_message = None;
+        self.launch_failed_core = None;
+        self.launch_retry_core_options.clear();
         self.pending_launch = None;
         self.set_launch_phase(PlayLaunchPhase::WaitingForPresentation);
         self.active_rom_id = Some(rom_id);
@@ -504,6 +529,28 @@ impl PlaySessionState {
         )
     }
 
+    pub(crate) fn offer_core_promotion(&mut self, rom_id: String, core: String) {
+        if self
+            .active_system
+            .as_deref()
+            .is_some_and(|system| system.eq_ignore_ascii_case("ARCADE"))
+        {
+            self.pending_core_promotion = Some((rom_id, core));
+            self.launch_note_message = Some(String::from(
+                "This launch worked with a different arcade core. You can save that core for this game.",
+            ));
+        }
+    }
+
+    pub(crate) fn clear_core_promotion(&mut self) {
+        self.pending_core_promotion = None;
+    }
+
+    #[cfg(test)]
+    pub(crate) fn take_pending_launch_for_test(&mut self) -> Option<PendingLaunch> {
+        self.pending_launch.take()
+    }
+
     fn reset_perf_counters(&mut self) {
         self.perf_tick_count = 0;
         self.perf_gap_ns = 0;
@@ -517,6 +564,32 @@ impl PlaySessionState {
 
 fn duration_to_ns(duration: Duration) -> u64 {
     duration.as_nanos().min(u64::MAX as u128) as u64
+}
+
+fn arcade_launch_failure_note(system: Option<&str>, failed_core: Option<&str>) -> Option<String> {
+    if !system.is_some_and(|system| system.eq_ignore_ascii_case("ARCADE")) {
+        return None;
+    }
+
+    let core = failed_core.unwrap_or("this core");
+    Some(format!(
+        "{core} rejected this arcade ROM set. Arcade zips must match the selected core’s set; try another arcade core."
+    ))
+}
+
+fn retry_core_options_for_failed_launch(
+    system: Option<&str>,
+    failed_core: Option<&str>,
+) -> Vec<String> {
+    if !system.is_some_and(|system| system.eq_ignore_ascii_case("ARCADE")) {
+        return Vec::new();
+    }
+
+    ["fbneo", "mame2003", "mame2003_plus"]
+        .into_iter()
+        .filter(|core| failed_core.is_none_or(|failed| !core.eq_ignore_ascii_case(failed)))
+        .map(String::from)
+        .collect()
 }
 
 fn consume_rising_edge(was_held: &mut bool, is_held: bool) -> bool {
@@ -574,6 +647,7 @@ mod tests {
             active_core_note: None,
             cover_path: Some(String::from("/covers/nes/test.png")),
             preview_poster_path: None,
+            promote_core_on_success: None,
         }
     }
 
@@ -629,6 +703,54 @@ mod tests {
         assert_eq!(
             state.launch_detail_message.as_deref(),
             Some("failed to load dylib")
+        );
+    }
+
+    #[test]
+    fn arcade_load_failure_keeps_retry_core_options() {
+        let mut state = PlaySessionState::default();
+
+        state.fail_launch(
+            Some(String::from("Moonwalker")),
+            Some(String::from("ARCADE")),
+            Some(String::from("mame2003")),
+            None,
+            None,
+            "Couldn’t start this game.",
+            "failed to load game into core",
+        );
+
+        assert_eq!(
+            state.launch_retry_core_options,
+            vec![String::from("fbneo"), String::from("mame2003_plus")]
+        );
+        assert_eq!(state.launch_failed_core.as_deref(), Some("mame2003"));
+    }
+
+    #[test]
+    fn successful_retry_tracks_promotable_core_choice() {
+        let mut state = PlaySessionState::default();
+        let mut plan = launch_plan();
+        plan.system = String::from("ARCADE");
+        plan.effective_core = Some(String::from("fbneo"));
+        plan.resolved_core_name = String::from("fbneo");
+
+        state.queue_launch(plan, AppView::Library);
+        let pending = state
+            .take_pending_launch_for_test()
+            .expect("pending launch");
+        state.begin_session(
+            String::from("Playing Moonwalker (core: fbneo)"),
+            pending.plan.rom_id,
+            pending.plan.system,
+            pending.plan.resolved_core_name,
+            AppView::Library,
+        );
+        state.offer_core_promotion(String::from("rom-1"), String::from("fbneo"));
+
+        assert_eq!(
+            state.pending_core_promotion,
+            Some((String::from("rom-1"), String::from("fbneo")))
         );
     }
 

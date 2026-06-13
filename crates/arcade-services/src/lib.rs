@@ -10,7 +10,7 @@ use anyhow::{anyhow, Context, Result};
 use arcade_data::{DataError, Database, ScanUpsertOutcome, ScannedRomInput};
 use arcade_domain::{
     default_gamepad_mapping_for_system, dependency_buildbot_base_url, dependency_manifest,
-    get_arcade_compatibility, get_dolphin_sys_directory, resolve_core,
+    get_arcade_compatibility, get_dolphin_sys_directory, normalize_core, resolve_core,
     resolve_effective_core_override, resolve_path_from_root, scan_dependency_report, AppConfig,
     CoverScrapePlatformIds, CoverScrapeRunOptions, CoverScrapeSettingsInput, CoverScrapingConfig,
     DependencyReport, DependencySource, DetectedPadIdentity, DreamcastInputMode,
@@ -54,6 +54,7 @@ pub struct LaunchPlan {
     pub active_core_note: Option<&'static str>,
     pub cover_path: Option<String>,
     pub preview_poster_path: Option<String>,
+    pub promote_core_on_success: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -123,6 +124,41 @@ impl NativeServices {
     }
 
     pub fn prepare_launch(&self, rom_id: &str) -> Result<LaunchPlan> {
+        self.prepare_launch_inner(rom_id, None)
+    }
+
+    pub fn prepare_launch_with_core_override(
+        &self,
+        rom_id: &str,
+        core_override: &str,
+    ) -> Result<LaunchPlan> {
+        let normalized = normalize_core(core_override)
+            .ok_or_else(|| anyhow!("Unsupported core override: {core_override}"))?;
+        self.prepare_launch_inner(rom_id, Some(normalized.as_str()))
+    }
+
+    pub fn set_rom_core_override(&self, rom_id: &str, core_override: &str) -> Result<()> {
+        let normalized = normalize_core(core_override)
+            .ok_or_else(|| anyhow!("Unsupported core override: {core_override}"))?;
+        self.db.update_rom_core(rom_id, &normalized)
+    }
+
+    pub fn persist_successful_retry_core(&self, plan: &LaunchPlan) -> Result<bool> {
+        let Some(core) = plan.promote_core_on_success.as_deref() else {
+            return Ok(false);
+        };
+        if !plan.system.eq_ignore_ascii_case("ARCADE") {
+            return Ok(false);
+        }
+        self.set_rom_core_override(&plan.rom_id, core)?;
+        Ok(true)
+    }
+
+    fn prepare_launch_inner(
+        &self,
+        rom_id: &str,
+        one_shot_core_override: Option<&str>,
+    ) -> Result<LaunchPlan> {
         let config = self.current_config()?;
         let Some(rom_card) = self
             .db
@@ -136,11 +172,16 @@ impl NativeServices {
             return Err(anyhow!("ROM file not found: {}", rom_path.display()));
         }
         ensure_system_launch_dependencies(&rom.system, &rom_path, &config.paths)?;
-        let configured_core = config
-            .preferred_core_for_system(&rom.system)
-            .or(rom.emulator_core.as_deref());
-        let effective_override =
-            resolve_effective_core_override(&rom.system, configured_core, Some(&rom.title));
+        let configured_core = one_shot_core_override.or_else(|| {
+            config
+                .preferred_core_for_system(&rom.system)
+                .or(rom.emulator_core.as_deref())
+        });
+        let effective_override = if one_shot_core_override.is_some() {
+            configured_core.and_then(normalize_core)
+        } else {
+            resolve_effective_core_override(&rom.system, configured_core, Some(&rom.title))
+        };
         let resolved_core_name = resolve_core(&rom.system, effective_override.as_deref());
         let active_core_note = native_arcade_core_note(&rom.system, Some(&resolved_core_name));
 
@@ -175,11 +216,12 @@ impl NativeServices {
             system: rom.system,
             rom_path,
             effective_core: effective_override,
-            resolved_core_name,
+            resolved_core_name: resolved_core_name.clone(),
             status_message,
             active_core_note,
             cover_path: rom.cover_path,
             preview_poster_path: rom.preview_poster_path,
+            promote_core_on_success: one_shot_core_override.map(|_| resolved_core_name),
         })
     }
 
@@ -2377,6 +2419,100 @@ mod tests {
         assert_eq!(plan.system, "ARCADE");
         assert_eq!(plan.effective_core, Some(String::from("fbneo")));
         assert_eq!(plan.resolved_core_name, "fbneo");
+    }
+
+    #[test]
+    fn prepare_launch_with_retry_core_overrides_scan_core_for_this_attempt() {
+        let tmp = TempDir::new().expect("tempdir");
+        let config = make_config(&tmp);
+        let db = Database::open(&config).expect("open db");
+        seed_arcade_mslug_rom(&config);
+
+        let rom_dir = config.paths.rom_root.join("arcade-mame2003");
+        std::fs::create_dir_all(&rom_dir).expect("create arcade rom dir");
+        std::fs::write(
+            rom_dir.join("mslug.zip"),
+            b"201-p1.bin 201-s1.bin sp-s3.sp1 sm1.sm1 sfix.sfix 000-lo.lo",
+        )
+        .expect("write mslug rom");
+        std::fs::create_dir_all(&config.paths.bios_root).expect("create bios dir");
+        for bios_name in ["neogeo.zip", "pgm.zip", "qsound.zip"] {
+            std::fs::write(config.paths.bios_root.join(bios_name), b"bios").expect("write bios");
+        }
+
+        let services = NativeServices::bootstrap(config.clone(), config_path_for(&config), db)
+            .expect("bootstrap");
+
+        let plan = services
+            .prepare_launch_with_core_override("rom-arcade-1", "mame2003_plus")
+            .expect("prepare launch with retry core");
+
+        assert_eq!(plan.system, "ARCADE");
+        assert_eq!(plan.effective_core, Some(String::from("mame2003_plus")));
+        assert_eq!(plan.resolved_core_name, "mame2003_plus");
+    }
+
+    #[test]
+    fn set_rom_core_override_persists_successful_retry_choice() {
+        let tmp = TempDir::new().expect("tempdir");
+        let config = make_config(&tmp);
+        let db = Database::open(&config).expect("open db");
+        seed_arcade_mslug_rom(&config);
+
+        let services = NativeServices::bootstrap(config.clone(), config_path_for(&config), db)
+            .expect("bootstrap");
+        services
+            .set_rom_core_override("rom-arcade-1", "fbneo")
+            .expect("save override");
+
+        let conn = rusqlite::Connection::open(&config.paths.db_path).expect("open sqlite");
+        let saved: String = conn
+            .query_row(
+                "SELECT emulatorCore FROM \"Rom\" WHERE id = 'rom-arcade-1'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("read saved core");
+
+        assert_eq!(saved, "fbneo");
+    }
+
+    #[test]
+    fn persist_successful_retry_core_makes_next_launch_use_that_core() {
+        let tmp = TempDir::new().expect("tempdir");
+        let config = make_config(&tmp);
+        let db = Database::open(&config).expect("open db");
+        seed_arcade_mslug_rom(&config);
+
+        let rom_dir = config.paths.rom_root.join("arcade-mame2003");
+        std::fs::create_dir_all(&rom_dir).expect("create arcade rom dir");
+        std::fs::write(
+            rom_dir.join("mslug.zip"),
+            b"201-p1.bin 201-s1.bin sp-s3.sp1 sm1.sm1 sfix.sfix 000-lo.lo",
+        )
+        .expect("write mslug rom");
+        std::fs::create_dir_all(&config.paths.bios_root).expect("create bios dir");
+        for bios_name in ["neogeo.zip", "pgm.zip", "qsound.zip"] {
+            std::fs::write(config.paths.bios_root.join(bios_name), b"bios").expect("write bios");
+        }
+
+        let services = NativeServices::bootstrap(config.clone(), config_path_for(&config), db)
+            .expect("bootstrap");
+        let retry_plan = services
+            .prepare_launch_with_core_override("rom-arcade-1", "fbneo")
+            .expect("prepare retry launch");
+
+        assert!(
+            services
+                .persist_successful_retry_core(&retry_plan)
+                .expect("persist retry core"),
+            "retry launches should save their successful core"
+        );
+
+        let next_plan = services
+            .prepare_launch("rom-arcade-1")
+            .expect("prepare next launch");
+        assert_eq!(next_plan.resolved_core_name, "fbneo");
     }
 
     #[test]

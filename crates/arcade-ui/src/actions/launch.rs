@@ -13,9 +13,24 @@ impl NativeArcadeUiApp {
             self.state.play.set_status("Select a ROM first.");
             return;
         };
+        self.launch_rom_id(&rom_id, None);
+    }
+
+    pub(crate) fn launch_rom_with_core_override(&mut self, rom_id: &str, core: &str) {
+        self.launch_rom_id(rom_id, Some(core));
+    }
+
+    fn launch_rom_id(&mut self, rom_id: &str, core_override: Option<&str>) {
         let selected_rom = self.current_selected_rom().cloned();
 
-        match self.services.prepare_launch(&rom_id) {
+        let launch_result = if let Some(core) = core_override {
+            self.services
+                .prepare_launch_with_core_override(rom_id, core)
+        } else {
+            self.services.prepare_launch(rom_id)
+        };
+
+        match launch_result {
             Ok(plan) => {
                 self.state.play.queue_launch(plan, self.state.current_view);
                 self.assets.last_frame_texture = None;
@@ -118,11 +133,33 @@ impl NativeArcadeUiApp {
                     .or_else(|| plan.active_core_note.map(String::from));
                 self.state.play.begin_session(
                     status_message,
-                    plan.rom_id,
-                    plan.system,
+                    plan.rom_id.clone(),
+                    plan.system.clone(),
                     core_name.clone(),
                     launch_view,
                 );
+                if let Some(promote_core) = plan.promote_core_on_success.clone() {
+                    match self.services.persist_successful_retry_core(&plan) {
+                        Ok(true) => {
+                            self.state.play.set_feedback(
+                                std::time::Instant::now(),
+                                std::time::Duration::from_secs(3),
+                                format!("Saved {} for this game", display_core_name(&promote_core)),
+                            );
+                        }
+                        Ok(false) => {}
+                        Err(err) => {
+                            self.state.play.set_feedback(
+                                std::time::Instant::now(),
+                                std::time::Duration::from_secs(4),
+                                format!("Couldn’t save core preference: {err}"),
+                            );
+                        }
+                    }
+                    self.state
+                        .play
+                        .offer_core_promotion(plan.rom_id, promote_core);
+                }
                 self.start_play_runner_for_loaded_session(ctx, &core_name);
                 self.show_play_bar();
             }
@@ -145,14 +182,15 @@ impl NativeArcadeUiApp {
                     err.to_string()
                 };
                 self.state.play.fail_launch(
-                    Some(plan.display_title),
-                    Some(plan.system),
-                    Some(plan.resolved_core_name),
-                    plan.cover_path,
-                    plan.preview_poster_path,
+                    Some(plan.display_title.clone()),
+                    Some(plan.system.clone()),
+                    Some(plan.resolved_core_name.clone()),
+                    plan.cover_path.clone(),
+                    plan.preview_poster_path.clone(),
                     friendly_launch_error(&detail),
                     detail,
                 );
+                self.state.play.launch_rom_id = Some(plan.rom_id);
             }
         }
         ctx.request_repaint();
@@ -169,6 +207,7 @@ impl NativeArcadeUiApp {
             friendly,
             detail,
         );
+        self.state.play.launch_rom_id = rom.map(|rom| rom.rom.id.clone());
     }
 }
 
@@ -178,6 +217,15 @@ fn should_retry_n64_with_cached_fallback(plan: &LaunchPlan, cpu_core_mode: N64Cp
         && plan
             .resolved_core_name
             .eq_ignore_ascii_case("mupen64plus_next")
+}
+
+fn display_core_name(core: &str) -> &'static str {
+    match core {
+        "fbneo" => "FBNeo",
+        "mame2003" => "MAME2003",
+        "mame2003_plus" => "MAME2003 Plus",
+        _ => "Selected Core",
+    }
 }
 
 fn friendly_launch_error(detail: &str) -> String {

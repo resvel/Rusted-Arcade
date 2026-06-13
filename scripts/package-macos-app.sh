@@ -130,4 +130,4 @@ if [[ "${CODESIGN}" != "0" ]] && command -v codesign >/dev/null 2>&1; then
 fi
 
 echo "Created ${APP_BUNDLE}"
-echo "Runtime folders stay in ~/Documents/Arcade."
+echo "Runtime folders stay in /Library/Application Support/RustedArcade."
