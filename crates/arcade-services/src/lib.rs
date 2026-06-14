@@ -26,6 +26,37 @@ use tracing::warn;
 const DEFAULT_SLOT_MAX_BYTES: i64 = 5 * 1024 * 1024;
 const DEFAULT_PROFILE_MAX_BYTES: i64 = 25 * 1024 * 1024;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ArcadeResolvedMetadata {
+    set_name: String,
+    parent_set_name: Option<String>,
+    display_title: String,
+    release_year: Option<i64>,
+    manufacturer: Option<String>,
+    source: &'static str,
+}
+
+impl ArcadeResolvedMetadata {
+    fn confidence(&self) -> f64 {
+        match self.source {
+            "mame-listxml" | "fbneo-dat" => 0.98,
+            _ => 0.75,
+        }
+    }
+}
+
+#[derive(Default)]
+struct ArcadeMetadataIndex {
+    entries: HashMap<String, ArcadeResolvedMetadata>,
+}
+
+impl ArcadeMetadataIndex {
+    fn resolve(&self, set_name: &str) -> Option<ArcadeResolvedMetadata> {
+        let normalized = normalize_arcade_set_name(set_name);
+        self.entries.get(&normalized).cloned()
+    }
+}
+
 #[derive(Clone)]
 pub struct NativeServices {
     config: Arc<Mutex<AppConfig>>,
@@ -510,6 +541,7 @@ impl NativeServices {
             ..ManageOperationSummary::default()
         };
         let arcade_cover_index = build_arcade_cover_index(&cover_root)?;
+        let arcade_metadata_index = build_arcade_metadata_index(&config.paths)?;
 
         for (index, path) in files.iter().enumerate() {
             let Some(target) = target_for_path(path, &scan_targets) else {
@@ -538,7 +570,17 @@ impl NativeServices {
             let stored_file_path = to_stored_file_path(path, &config.paths.rom_root);
             let absolute_file_path = path.to_string_lossy().to_string();
             let existing_slug = path_to_slug.get(&stored_file_path).cloned();
-            let title = title_from_path(path);
+            let file_title = title_from_path(path);
+            let set_name = normalize_arcade_set_name(&file_title);
+            let arcade_metadata = if normalize_system(target.system) == "ARCADE" {
+                arcade_metadata_index.resolve(&set_name)
+            } else {
+                None
+            };
+            let title = arcade_metadata
+                .as_ref()
+                .map(|metadata| metadata.set_name.clone())
+                .unwrap_or(file_title);
             let slug = unique_slug_for_scan(existing_slug, &title, &mut slug_set);
             path_to_slug.insert(stored_file_path.clone(), slug.clone());
             let checksum = match hash_file(path) {
@@ -576,6 +618,25 @@ impl NativeServices {
                 ScanUpsertOutcome::Created => summary.created += 1,
                 ScanUpsertOutcome::Updated => summary.updated += 1,
                 ScanUpsertOutcome::Unchanged => summary.unchanged += 1,
+            }
+
+            if let Some(metadata) = &arcade_metadata {
+                if let Err(err) = self.db.upsert_arcade_metadata_for_file_path(
+                    &stored_file_path,
+                    &metadata.display_title,
+                    metadata.release_year,
+                    metadata.manufacturer.as_deref(),
+                    Some(&metadata.set_name),
+                    Some(&metadata.display_title),
+                    metadata.source,
+                    metadata.confidence(),
+                ) {
+                    warn!(
+                        "failed to save arcade metadata for {}: {err}",
+                        stored_file_path
+                    );
+                    summary.failed += 1;
+                }
             }
 
             progress(ManageProgressEvent {
@@ -711,17 +772,7 @@ impl NativeServices {
         let mut candidates = all_roms
             .into_iter()
             .filter(|rom| allowed_systems.contains(&normalize_system(&rom.rom.system)))
-            .filter(|rom| {
-                if run.missing_only {
-                    rom.rom
-                        .cover_path
-                        .as_deref()
-                        .map(|value| value.trim().is_empty())
-                        .unwrap_or(true)
-                } else {
-                    true
-                }
-            })
+            .filter(|rom| should_include_rom_for_cover_scrape(rom, run.missing_only, &cover_root))
             .collect::<Vec<_>>();
         candidates.sort_by(|left, right| left.display_title.cmp(&right.display_title));
         if candidates.len() > run.limit {
@@ -1539,6 +1590,169 @@ fn hash_file(path: &Path) -> Result<String> {
     Ok(format!("{:x}", hasher.finalize()))
 }
 
+fn normalize_arcade_set_name(value: &str) -> String {
+    value
+        .trim()
+        .trim_end_matches(".zip")
+        .chars()
+        .filter_map(|ch| {
+            let normalized = ch.to_ascii_lowercase();
+            normalized.is_ascii_alphanumeric().then_some(normalized)
+        })
+        .collect()
+}
+
+fn build_arcade_metadata_index(paths: &PathsConfig) -> Result<ArcadeMetadataIndex> {
+    let mut index = ArcadeMetadataIndex::default();
+    for path in arcade_metadata_candidate_paths(paths) {
+        if !path.exists() {
+            continue;
+        }
+        let content = fs::read_to_string(&path)
+            .with_context(|| format!("failed to read arcade metadata {}", path.display()))?;
+        let source = if path
+            .file_name()
+            .and_then(|value| value.to_str())
+            .map(|name| name.to_ascii_lowercase().contains("fbneo"))
+            .unwrap_or(false)
+        {
+            "fbneo-dat"
+        } else {
+            "mame-listxml"
+        };
+        for metadata in parse_arcade_metadata_document(&content, source) {
+            index
+                .entries
+                .entry(metadata.set_name.clone())
+                .or_insert(metadata);
+        }
+    }
+    Ok(index)
+}
+
+fn arcade_metadata_candidate_paths(paths: &PathsConfig) -> Vec<PathBuf> {
+    let runtime_root = paths
+        .rom_root
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| paths.rom_root.clone());
+    vec![
+        runtime_root.join("metadata").join("mame-listxml.xml"),
+        runtime_root.join("metadata").join("mame.xml"),
+        runtime_root.join("metadata").join("fbneo.dat"),
+        paths.rom_root.join("metadata").join("mame-listxml.xml"),
+        paths.rom_root.join("metadata").join("fbneo.dat"),
+    ]
+}
+
+fn parse_arcade_metadata_document(
+    content: &str,
+    source: &'static str,
+) -> Vec<ArcadeResolvedMetadata> {
+    if content.contains("<machine") || content.contains("<game") {
+        parse_mame_listxml_metadata(content, source)
+    } else {
+        parse_fbneo_dat_metadata(content, source)
+    }
+}
+
+fn parse_mame_listxml_metadata(content: &str, source: &'static str) -> Vec<ArcadeResolvedMetadata> {
+    let mut out = Vec::new();
+    for tag in ["machine", "game"] {
+        let mut rest = content;
+        let start_token = format!("<{tag} ");
+        let end_token = format!("</{tag}>");
+        while let Some(start) = rest.find(&start_token) {
+            rest = &rest[start..];
+            let Some(tag_end) = rest.find('>') else { break };
+            let header = &rest[..=tag_end];
+            let Some(end) = rest.find(&end_token) else {
+                break;
+            };
+            let body = &rest[..end + end_token.len()];
+            if let (Some(set_name), Some(description)) = (
+                extract_xml_attr(header, "name"),
+                extract_xml_child_text(body, "description"),
+            ) {
+                let year =
+                    extract_xml_child_text(body, "year").and_then(|value| value.parse().ok());
+                let manufacturer = extract_xml_child_text(body, "manufacturer");
+                let parent = extract_xml_attr(header, "cloneof")
+                    .or_else(|| extract_xml_attr(header, "romof"));
+                out.push(ArcadeResolvedMetadata {
+                    set_name: normalize_arcade_set_name(&set_name),
+                    parent_set_name: parent.map(|value| normalize_arcade_set_name(&value)),
+                    display_title: description,
+                    release_year: year,
+                    manufacturer,
+                    source,
+                });
+            }
+            rest = &rest[end + end_token.len()..];
+        }
+    }
+    out
+}
+
+fn parse_fbneo_dat_metadata(content: &str, source: &'static str) -> Vec<ArcadeResolvedMetadata> {
+    let mut out = Vec::new();
+    for block in content.split("game (").skip(1) {
+        let Some(end) = block.find("\n)") else {
+            continue;
+        };
+        let body = &block[..end];
+        let Some(set_name) = extract_dat_field(body, "name") else {
+            continue;
+        };
+        let Some(description) = extract_dat_field(body, "description") else {
+            continue;
+        };
+        out.push(ArcadeResolvedMetadata {
+            set_name: normalize_arcade_set_name(&set_name),
+            parent_set_name: extract_dat_field(body, "cloneof")
+                .map(|value| normalize_arcade_set_name(&value)),
+            display_title: description,
+            release_year: None,
+            manufacturer: extract_dat_field(body, "manufacturer"),
+            source,
+        });
+    }
+    out
+}
+
+fn extract_xml_attr(tag: &str, attr: &str) -> Option<String> {
+    let needle = format!("{attr}=\"");
+    let start = tag.find(&needle)? + needle.len();
+    let end = tag[start..].find('"')?;
+    Some(html_unescape(&tag[start..start + end]))
+}
+
+fn extract_xml_child_text(body: &str, tag: &str) -> Option<String> {
+    let start_token = format!("<{tag}>");
+    let end_token = format!("</{tag}>");
+    let start = body.find(&start_token)? + start_token.len();
+    let end = body[start..].find(&end_token)?;
+    Some(html_unescape(body[start..start + end].trim()))
+}
+
+fn extract_dat_field(body: &str, field: &str) -> Option<String> {
+    let prefix = format!("{field} ");
+    body.lines()
+        .map(str::trim)
+        .find_map(|line| line.strip_prefix(&prefix))
+        .map(|value| value.trim().trim_matches('"').to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn html_unescape(value: &str) -> String {
+    value
+        .replace("&amp;", "&")
+        .replace("&quot;", "\"")
+        .replace("&apos;", "'")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+}
+
 fn resolve_cover_root(paths: &PathsConfig) -> Result<PathBuf> {
     let cwd = std::env::current_dir()?;
     let runtime_root = paths
@@ -1743,6 +1957,23 @@ fn strip_trailing_numeric_suffix(slug: &str) -> Option<&str> {
     Some(base)
 }
 
+fn should_include_rom_for_cover_scrape(
+    rom: &RomCard,
+    missing_only: bool,
+    cover_root: &Path,
+) -> bool {
+    if !missing_only {
+        return true;
+    }
+
+    match rom.rom.cover_path.as_deref() {
+        Some(value) if !value.trim().is_empty() => {
+            resolve_local_cover_asset_path(cover_root, value).is_none()
+        }
+        _ => true,
+    }
+}
+
 fn resolve_local_cover_asset_path(cover_root: &Path, raw_path: &str) -> Option<PathBuf> {
     let trimmed = raw_path.trim();
     if trimmed.is_empty() {
@@ -1890,7 +2121,7 @@ fn scrape_cover_for_rom(
     cover_root: &Path,
     db: &Database,
 ) -> Result<bool> {
-    let clean_title = sanitize_cover_title(&rom.rom.title);
+    let clean_title = scrape_query_title_for_rom(rom);
     let payload = tgdb_request(
         "Games/ByGameName",
         &[
@@ -1902,7 +2133,7 @@ fn scrape_cover_for_rom(
 
     let games = collect_games(&payload);
     let platform_ids = platform_ids_for_system(scrape_config, &normalize_system(&rom.rom.system));
-    let best_game = pick_best_game(&clean_title, &games, platform_ids);
+    let best_game = pick_confident_game(&clean_title, &games, platform_ids);
     let Some(game) = best_game else {
         return Ok(false);
     };
@@ -1992,6 +2223,14 @@ fn collect_games(payload: &serde_json::Value) -> Vec<serde_json::Value> {
         .unwrap_or_default()
 }
 
+fn scrape_query_title_for_rom(rom: &RomCard) -> String {
+    let display_title = rom.display_title.trim();
+    if !display_title.is_empty() && display_title != rom.rom.title.trim() {
+        return sanitize_cover_title(display_title);
+    }
+    sanitize_cover_title(&rom.rom.title)
+}
+
 fn score_game(rom_title: &str, game: &serde_json::Value, platform_ids: &[u32]) -> i64 {
     let rom_norm = normalize_match_text(rom_title);
     let game_name = game
@@ -2000,33 +2239,33 @@ fn score_game(rom_title: &str, game: &serde_json::Value, platform_ids: &[u32]) -
         .or_else(|| game.get("name").and_then(|value| value.as_str()))
         .unwrap_or("");
     let game_norm = normalize_match_text(game_name);
-    if game_norm.is_empty() {
+    if game_norm.is_empty() || rom_norm.is_empty() {
         return 0;
     }
 
-    let mut score = 10_i64;
+    let mut score = 0_i64;
     if rom_norm == game_norm {
         score = 100;
-    } else if game_norm.starts_with(&rom_norm) {
+    } else if game_norm.starts_with(&rom_norm) || rom_norm.starts_with(&game_norm) {
         score = 80;
-    } else if rom_norm.starts_with(&game_norm) {
-        score = 70;
-    } else if game_norm.contains(&rom_norm) {
-        score = 60;
+    } else if game_norm.contains(&rom_norm) || rom_norm.contains(&game_norm) {
+        score = 65;
     }
 
     let platform = game
         .get("platform")
         .and_then(|value| value.as_u64())
         .unwrap_or_default() as u32;
-    if !platform_ids.is_empty() && platform_ids.contains(&platform) {
+    if platform_ids.is_empty() || platform_ids.contains(&platform) {
         score += 20;
+    } else {
+        score -= 30;
     }
 
     score
 }
 
-fn pick_best_game<'a>(
+fn pick_confident_game<'a>(
     rom_title: &str,
     games: &'a [serde_json::Value],
     platform_ids: &[u32],
@@ -2040,7 +2279,8 @@ fn pick_best_game<'a>(
             best_score = score;
         }
     }
-    best
+
+    (best_score >= 95).then_some(best).flatten()
 }
 
 fn pick_front_boxart(items: &[serde_json::Value]) -> Option<&serde_json::Value> {
@@ -2948,6 +3188,174 @@ mod tests {
             existing.cover_path.as_deref(),
             Some("/covers/nes/existing.jpg")
         );
+    }
+
+    #[test]
+    fn mame_listxml_metadata_resolves_arcade_shortnames_programmatically() {
+        let tmp = TempDir::new().expect("tempdir");
+        let config = make_config(&tmp);
+        let metadata_dir = tmp.path().join("metadata");
+        std::fs::create_dir_all(&metadata_dir).expect("create metadata dir");
+        std::fs::write(
+            metadata_dir.join("mame-listxml.xml"),
+            r#"<mame>
+<machine name="mwalk" sourcefile="segas16b.cpp">
+  <description>Michael Jackson's Moonwalker</description>
+  <year>1990</year>
+  <manufacturer>Sega</manufacturer>
+</machine>
+<machine name="mslug3" sourcefile="neogeo.cpp">
+  <description>Metal Slug 3</description>
+  <year>2000</year>
+  <manufacturer>SNK</manufacturer>
+</machine>
+</mame>"#,
+        )
+        .expect("write mame listxml");
+
+        let index = build_arcade_metadata_index(&config.paths).expect("build metadata index");
+        let mwalk = index.resolve("mwalk").expect("mwalk metadata");
+        let mslug3 = index.resolve("mslug3").expect("mslug3 metadata");
+
+        assert_eq!(mwalk.display_title, "Michael Jackson's Moonwalker");
+        assert_eq!(mwalk.source, "mame-listxml");
+        assert_eq!(mwalk.manufacturer.as_deref(), Some("Sega"));
+        assert_eq!(mslug3.display_title, "Metal Slug 3");
+        assert_eq!(mslug3.release_year, Some(2000));
+        assert!(index.resolve("unknownset").is_none());
+    }
+
+    #[test]
+    fn smart_scan_uses_arcade_metadata_for_display_title() {
+        let tmp = TempDir::new().expect("tempdir");
+        let config = make_config(&tmp);
+        let metadata_dir = tmp.path().join("metadata");
+        std::fs::create_dir_all(&metadata_dir).expect("create metadata dir");
+        std::fs::write(
+            metadata_dir.join("mame-listxml.xml"),
+            r#"<mame>
+<machine name="mwalk" sourcefile="segas16b.cpp">
+  <description>Michael Jackson's Moonwalker</description>
+  <year>1990</year>
+  <manufacturer>Sega</manufacturer>
+</machine>
+</mame>"#,
+        )
+        .expect("write mame listxml");
+        let db = Database::open(&config).expect("open db");
+        let rom_path = config
+            .paths
+            .rom_root
+            .join("arcade-mame2003")
+            .join("mwalk.zip");
+        std::fs::create_dir_all(rom_path.parent().expect("rom parent")).expect("create rom dir");
+        std::fs::write(&rom_path, b"arcade-rom").expect("write rom");
+        let services = NativeServices::bootstrap(config.clone(), config_path_for(&config), db)
+            .expect("bootstrap");
+
+        let summary = services
+            .smart_scan_roms(&ManageScope::System(String::from("ARCADE")), |_| {})
+            .expect("smart scan");
+        assert_eq!(summary.created, 1);
+
+        let cards = services
+            .list_roms(&RomQuery {
+                system: Some(String::from("ARCADE")),
+                ..RomQuery::default()
+            })
+            .expect("list arcade roms");
+        let scanned = cards
+            .iter()
+            .find(|card| card.rom.slug == "mwalk")
+            .expect("scanned mwalk");
+        assert_eq!(scanned.rom.title, "mwalk");
+        assert_eq!(scanned.display_title, "Michael Jackson's Moonwalker");
+        assert_eq!(scanned.manufacturer.as_deref(), Some("Sega"));
+        assert_eq!(scanned.release_year, Some(1990));
+    }
+
+    #[test]
+    fn missing_only_cover_scrape_includes_stale_cover_path_when_file_is_missing() {
+        let tmp = TempDir::new().expect("tempdir");
+        let cover_root = tmp.path().join("covers");
+        let rom = RomCard {
+            rom: arcade_domain::Rom {
+                id: String::from("rom-mslug3"),
+                system: String::from("ARCADE"),
+                slug: String::from("mslug3"),
+                title: String::from("mslug3"),
+                file_path: String::from("arcade-mame2003/mslug3.zip"),
+                emulator_core: None,
+                cover_path: Some(String::from("/covers/arcade/mslug3.jpg")),
+                preview_video_path: None,
+                preview_poster_path: None,
+                preview_duration_sec: None,
+                preview_updated_at: None,
+                added_at: None,
+                updated_at: None,
+            },
+            display_title: String::from("Metal Slug 3"),
+            release_year: Some(2000),
+            manufacturer: Some(String::from("SNK")),
+            genre: None,
+            is_favorite: false,
+        };
+
+        assert!(should_include_rom_for_cover_scrape(&rom, true, &cover_root));
+        assert!(should_include_rom_for_cover_scrape(
+            &rom,
+            false,
+            &cover_root
+        ));
+
+        let stored_cover = cover_root.join("arcade/mslug3.jpg");
+        std::fs::create_dir_all(stored_cover.parent().expect("cover parent"))
+            .expect("create cover dir");
+        std::fs::write(stored_cover, b"cover").expect("write cover");
+        assert!(!should_include_rom_for_cover_scrape(
+            &rom,
+            true,
+            &cover_root
+        ));
+    }
+
+    #[test]
+    fn scraper_uses_display_title_and_rejects_low_confidence_arcade_shortname_matches() {
+        let rom = RomCard {
+            rom: arcade_domain::Rom {
+                id: String::from("rom-mwalk"),
+                system: String::from("ARCADE"),
+                slug: String::from("mwalk"),
+                title: String::from("mwalk"),
+                file_path: String::from("arcade-mame2003/mwalk.zip"),
+                emulator_core: None,
+                cover_path: None,
+                preview_video_path: None,
+                preview_poster_path: None,
+                preview_duration_sec: None,
+                preview_updated_at: None,
+                added_at: None,
+                updated_at: None,
+            },
+            display_title: String::from("Michael Jackson's Moonwalker"),
+            release_year: Some(1990),
+            manufacturer: Some(String::from("Sega")),
+            genre: None,
+            is_favorite: false,
+        };
+
+        assert_eq!(
+            scrape_query_title_for_rom(&rom),
+            "Michael Jackson's Moonwalker"
+        );
+
+        let unrelated = serde_json::json!({
+            "id": 101,
+            "game_title": "Moonwalker",
+            "platform": 23
+        });
+        let games = vec![unrelated];
+        assert!(pick_confident_game("mwalk", &games, &[23]).is_none());
     }
 
     #[test]

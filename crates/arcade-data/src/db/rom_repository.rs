@@ -382,6 +382,59 @@ impl Database {
         Ok(())
     }
 
+    pub fn upsert_arcade_metadata_for_file_path(
+        &self,
+        file_path: &str,
+        display_title: &str,
+        release_year: Option<i64>,
+        manufacturer: Option<&str>,
+        mame_shortname: Option<&str>,
+        mame_description: Option<&str>,
+        match_method: &str,
+        confidence: f64,
+    ) -> Result<()> {
+        let conn = self.conn.lock().map_err(|_| anyhow!("db lock poisoned"))?;
+        let rom_id = conn
+            .query_row(
+                "SELECT id FROM \"Rom\" WHERE filePath = ?1 LIMIT 1",
+                params![file_path],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .context("failed to query rom for arcade metadata")?
+            .ok_or_else(|| anyhow!("ROM not found for arcade metadata."))?;
+        let now = now_sqlite();
+        conn.execute(
+            "INSERT INTO \"ArcadeMetadata\" (
+                id, romId, displayTitle, releaseYear, manufacturer, mameShortname,
+                mameDescription, matchMethod, confidence, updatedAt
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+             ON CONFLICT(romId) DO UPDATE SET
+                displayTitle = excluded.displayTitle,
+                releaseYear = excluded.releaseYear,
+                manufacturer = excluded.manufacturer,
+                mameShortname = excluded.mameShortname,
+                mameDescription = excluded.mameDescription,
+                matchMethod = excluded.matchMethod,
+                confidence = excluded.confidence,
+                updatedAt = excluded.updatedAt",
+            params![
+                uuid::Uuid::new_v4().to_string(),
+                rom_id,
+                display_title,
+                release_year,
+                manufacturer,
+                mame_shortname,
+                mame_description,
+                match_method,
+                confidence,
+                now,
+            ],
+        )
+        .context("failed to upsert arcade metadata")?;
+        Ok(())
+    }
+
     pub fn update_rom_core(&self, rom_id: &str, emulator_core: &str) -> Result<()> {
         let conn = self.conn.lock().map_err(|_| anyhow!("db lock poisoned"))?;
         let updated = conn
