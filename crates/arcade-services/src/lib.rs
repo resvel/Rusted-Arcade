@@ -1682,7 +1682,7 @@ fn parse_mame_listxml_metadata(content: &str, source: &'static str) -> Vec<Arcad
                 out.push(ArcadeResolvedMetadata {
                     set_name: normalize_arcade_set_name(&set_name),
                     parent_set_name: parent.map(|value| normalize_arcade_set_name(&value)),
-                    display_title: description,
+                    display_title: clean_arcade_metadata_display_title(&description),
                     release_year: year,
                     manufacturer,
                     source,
@@ -1711,7 +1711,7 @@ fn parse_fbneo_dat_metadata(content: &str, source: &'static str) -> Vec<ArcadeRe
             set_name: normalize_arcade_set_name(&set_name),
             parent_set_name: extract_dat_field(body, "cloneof")
                 .map(|value| normalize_arcade_set_name(&value)),
-            display_title: description,
+            display_title: clean_arcade_metadata_display_title(&description),
             release_year: None,
             manufacturer: extract_dat_field(body, "manufacturer"),
             source,
@@ -1742,6 +1742,77 @@ fn extract_dat_field(body: &str, field: &str) -> Option<String> {
         .find_map(|line| line.strip_prefix(&prefix))
         .map(|value| value.trim().trim_matches('"').to_string())
         .filter(|value| !value.is_empty())
+}
+
+fn clean_arcade_metadata_display_title(title: &str) -> String {
+    let mut cleaned = title.trim().to_string();
+    loop {
+        let Some(close) = cleaned.rfind(')') else {
+            break;
+        };
+        if !cleaned[close + 1..].trim().is_empty() {
+            break;
+        }
+        let Some(open) = cleaned[..close].rfind('(') else {
+            break;
+        };
+        let marker = cleaned[open + 1..close].trim();
+        if !is_arcade_metadata_parenthetical(marker) {
+            break;
+        }
+        cleaned.truncate(open);
+        cleaned = cleaned.trim_end().to_string();
+    }
+    cleaned
+}
+
+fn is_arcade_metadata_parenthetical(marker: &str) -> bool {
+    let marker = marker.trim();
+    if marker.is_empty() {
+        return false;
+    }
+
+    let lower = marker.to_ascii_lowercase();
+    const REGION_OR_REVISION_WORDS: &[&str] = &[
+        "world",
+        "usa",
+        "japan",
+        "europe",
+        "asia",
+        "korea",
+        "taiwan",
+        "hong kong",
+        "brazil",
+        "set ",
+        "version",
+        "ver.",
+        "rev ",
+        "revision",
+        "prototype",
+        "bootleg",
+        "hack",
+        "encrypted",
+        "decrypted",
+    ];
+    if REGION_OR_REVISION_WORDS
+        .iter()
+        .any(|needle| lower.contains(needle))
+    {
+        return true;
+    }
+
+    let upper = marker.to_ascii_uppercase();
+    const HARDWARE_CODE_PREFIXES: &[&str] = &["NGM-", "NGH-", "FD", "317-", "8751"];
+    if HARDWARE_CODE_PREFIXES
+        .iter()
+        .any(|needle| upper.contains(needle))
+    {
+        return true;
+    }
+
+    marker
+        .chars()
+        .all(|ch| ch.is_ascii_digit() || matches!(ch, '-' | '_' | '/' | '~' | ' ' | '.'))
 }
 
 fn html_unescape(value: &str) -> String {
@@ -3200,12 +3271,12 @@ mod tests {
             metadata_dir.join("mame-listxml.xml"),
             r#"<mame>
 <machine name="mwalk" sourcefile="segas16b.cpp">
-  <description>Michael Jackson's Moonwalker</description>
+  <description>Michael Jackson's Moonwalker (World) (FD1094/8751 317-0159)</description>
   <year>1990</year>
   <manufacturer>Sega</manufacturer>
 </machine>
 <machine name="mslug3" sourcefile="neogeo.cpp">
-  <description>Metal Slug 3</description>
+  <description>Metal Slug 3 (NGM-2560)</description>
   <year>2000</year>
   <manufacturer>SNK</manufacturer>
 </machine>
@@ -3223,6 +3294,36 @@ mod tests {
         assert_eq!(mslug3.display_title, "Metal Slug 3");
         assert_eq!(mslug3.release_year, Some(2000));
         assert!(index.resolve("unknownset").is_none());
+    }
+
+    #[test]
+    fn fbneo_dat_metadata_cleans_region_and_hardware_suffixes() {
+        let entries = parse_arcade_metadata_document(
+            r#"game (
+    name mwalk
+    description "Michael Jackson's Moonwalker (World) (FD1094/8751 317-0159)"
+    manufacturer "Sega"
+)
+game (
+    name mslug3
+    description "Metal Slug 3 (NGM-2560)"
+    manufacturer "SNK"
+)"#,
+            "fbneo-dat",
+        );
+
+        let mwalk = entries
+            .iter()
+            .find(|entry| entry.set_name == "mwalk")
+            .expect("mwalk metadata");
+        let mslug3 = entries
+            .iter()
+            .find(|entry| entry.set_name == "mslug3")
+            .expect("mslug3 metadata");
+
+        assert_eq!(mwalk.display_title, "Michael Jackson's Moonwalker");
+        assert_eq!(mslug3.display_title, "Metal Slug 3");
+        assert_eq!(mwalk.manufacturer.as_deref(), Some("Sega"));
     }
 
     #[test]
