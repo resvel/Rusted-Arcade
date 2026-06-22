@@ -258,6 +258,10 @@ pub(super) fn apply_core_runtime_env_settings(core_name: &str, emulation: &Emula
         "PCARMSX2_ENABLE_XGKICK_HACK",
         core_setting_enabled(emulation, "pcarmsx2", "pcarmsx2_enable_xgkick_hack", false),
     );
+    set_env_flag(
+        "PCARMSX2_PERFORMANCE_OVERLAY",
+        core_setting_enabled(emulation, "pcarmsx2", "pcarmsx2_performance_overlay", false),
+    );
 
     set_env_flag(
         "PCARMSX2_DISABLE_MTVU",
@@ -798,6 +802,7 @@ mod tests {
             "PCARMSX2_ENABLE_IOP_REC",
             "PCARMSX2_USE_JITA64",
             "PCARMSX2_ENABLE_XGKICK_HACK",
+            "PCARMSX2_PERFORMANCE_OVERLAY",
             "PCARMSX2_DISABLE_MTVU",
             "PCARMSX2_DISABLE_INSTANT_VU1",
             "PCARMSX2_AUDIO_BACKEND",
@@ -813,6 +818,7 @@ mod tests {
         settings.insert("pcarmsx2_enable_iop_rec".into(), "enabled".into());
         settings.insert("pcarmsx2_use_jita64".into(), "enabled".into());
         settings.insert("pcarmsx2_enable_xgkick_hack".into(), "enabled".into());
+        settings.insert("pcarmsx2_performance_overlay".into(), "enabled".into());
         settings.insert("pcsx2_mtvu".into(), "disabled".into());
         settings.insert("pcsx2_instant_vu1".into(), "enabled".into());
         settings.insert("pcarmsx2_audio_backend".into(), "Null".into());
@@ -825,6 +831,7 @@ mod tests {
         assert_eq!(std::env::var("PCARMSX2_ENABLE_IOP_REC").unwrap(), "1");
         assert_eq!(std::env::var("PCARMSX2_USE_JITA64").unwrap(), "1");
         assert_eq!(std::env::var("PCARMSX2_ENABLE_XGKICK_HACK").unwrap(), "1");
+        assert_eq!(std::env::var("PCARMSX2_PERFORMANCE_OVERLAY").unwrap(), "1");
         assert_eq!(std::env::var("PCARMSX2_DISABLE_MTVU").unwrap(), "1");
         assert_eq!(std::env::var("PCARMSX2_DISABLE_INSTANT_VU1").unwrap(), "0");
         assert_eq!(std::env::var("PCARMSX2_AUDIO_BACKEND").unwrap(), "Null");

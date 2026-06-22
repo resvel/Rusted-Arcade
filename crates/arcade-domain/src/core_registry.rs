@@ -1919,6 +1919,12 @@ fn pcarmsx2_profile() -> CoreProfile {
             vec![opt("Cubeb"), opt("Null"), opt("SDL")],
         ),
         var(
+            "pcarmsx2_performance_overlay",
+            "Performance Overlay",
+            "ARM64 PoC",
+            enabled_options(false),
+        ),
+        var(
             "pcarmsx2_enable_ee_rec",
             "EE Recompiler",
             "Recompilers",
