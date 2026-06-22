@@ -17,11 +17,13 @@ impl NativeArcadeUiApp {
     }
 
     pub(crate) fn launch_rom_with_core_override(&mut self, rom_id: &str, core: &str) {
+        info!(rom_id = %rom_id, requested_core = %core, "Retrying launch with alternate core");
         self.launch_rom_id(rom_id, Some(core));
     }
 
     fn launch_rom_id(&mut self, rom_id: &str, core_override: Option<&str>) {
         let selected_rom = self.current_selected_rom().cloned();
+        let attempted_core = core_override.map(str::to_owned);
 
         let launch_result = if let Some(core) = core_override {
             self.services
@@ -41,14 +43,14 @@ impl NativeArcadeUiApp {
                 }
             }
             Err(err) => {
-                warn!(rom_id = %rom_id, error = %err, "Could not prepare play session");
+                warn!(rom_id = %rom_id, requested_core = attempted_core.as_deref().unwrap_or("auto"), error = %err, "Could not prepare play session");
                 self.assets.last_frame_texture = None;
                 self.assets.last_gl_texture_frame = None;
                 #[cfg(target_os = "macos")]
                 {
                     self.assets.last_macos_iosurface_frame = None;
                 }
-                self.fail_prepared_launch(selected_rom.as_ref(), err.to_string());
+                self.fail_prepared_launch(selected_rom.as_ref(), attempted_core, err.to_string());
             }
         }
     }
@@ -196,12 +198,19 @@ impl NativeArcadeUiApp {
         ctx.request_repaint();
     }
 
-    fn fail_prepared_launch(&mut self, rom: Option<&RomCard>, detail: String) {
+    fn fail_prepared_launch(
+        &mut self,
+        rom: Option<&RomCard>,
+        attempted_core: Option<String>,
+        detail: String,
+    ) {
         let friendly = friendly_launch_error(&detail);
+        let failed_core =
+            attempted_core.or_else(|| rom.and_then(|rom| rom.rom.emulator_core.clone()));
         self.state.play.fail_launch(
             rom.map(|rom| rom.display_title.clone()),
             rom.map(|rom| rom.rom.system.clone()),
-            rom.and_then(|rom| rom.rom.emulator_core.clone()),
+            failed_core,
             rom.and_then(|rom| rom.rom.cover_path.clone()),
             rom.and_then(|rom| rom.rom.preview_poster_path.clone()),
             friendly,

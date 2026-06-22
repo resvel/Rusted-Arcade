@@ -33,11 +33,6 @@ const NEOGEO_BIOS_REQUIRED_ENTRIES: &[&str] = &["sp-s3.sp1", "sm1.sm1", "sfix.sf
 
 fn merge_required_entries_by_title(title: &str) -> Option<Vec<&'static str>> {
     match title {
-        "fatfury1" => Some(vec!["033-p1.p1", "033-c1.c1"]),
-        "fatfury2" => Some(vec!["047-p1.p1", "047-c1.c1"]),
-        "fatfury3" => Some(vec!["069-p1.p1", "069-c1.c1"]),
-        "fatfursp" => Some(vec!["058-p1.p1", "058-c1.c1"]),
-        "garou" => Some(vec!["253-ep1.p1", "253-c1.c1"]),
         "sf2ce" => Some(vec![
             "s92_21a.6f",
             "s92_22b.7f",
@@ -45,6 +40,20 @@ fn merge_required_entries_by_title(title: &str) -> Option<Vec<&'static str>> {
             "sf2_26.bin",
         ]),
         "sf2hf" => Some(vec!["s2te_21.6f", "s2te_22.7f", "s2te_23.8f", "sf2_26.bin"]),
+        _ => neogeo_merge_required_entries_by_title(title).map(|mut entries| {
+            entries.extend(NEOGEO_BIOS_REQUIRED_ENTRIES.iter().copied());
+            entries
+        }),
+    }
+}
+
+fn neogeo_merge_required_entries_by_title(title: &str) -> Option<Vec<&'static str>> {
+    match title {
+        "fatfury1" => Some(vec!["033-p1.p1", "033-c1.c1"]),
+        "fatfury2" => Some(vec!["047-p1.p1", "047-c1.c1"]),
+        "fatfury3" => Some(vec!["069-p1.p1", "069-c1.c1"]),
+        "fatfursp" => Some(vec!["058-p1.p1", "058-c1.c1"]),
+        "garou" => Some(vec!["253-ep1.p1", "253-c1.c1"]),
         "kof94" => Some(vec!["055-p1.p1", "055-c1.c1"]),
         "kof95" => Some(vec!["084-p1.p1", "084-c1.c1"]),
         "kof96" => Some(vec!["214-p1.p1", "214-c1.c1"]),
@@ -74,10 +83,6 @@ fn merge_required_entries_by_title(title: &str) -> Option<Vec<&'static str>> {
         ]),
         _ => None,
     }
-    .map(|mut entries| {
-        entries.extend(NEOGEO_BIOS_REQUIRED_ENTRIES.iter().copied());
-        entries
-    })
 }
 
 fn set_validation_required_entries(title: &str, core: Option<&str>) -> Option<Vec<&'static str>> {
@@ -542,6 +547,69 @@ mod tests {
             .missing_set_entries
             .iter()
             .any(|entry| entry == "04m_g01.bin"));
+    }
+
+    #[test]
+    fn sf2ce_does_not_require_neogeo_bios_entries_in_rom_zip() {
+        let dir = tempdir().unwrap();
+        let bios_dir = dir.path().join("roms").join("arcade-mame2003");
+        fs::create_dir_all(&bios_dir).unwrap();
+        fs::write(bios_dir.join("neogeo.zip"), b"bios").unwrap();
+        fs::write(bios_dir.join("qsound.zip"), b"bios").unwrap();
+        fs::write(bios_dir.join("pgm.zip"), b"bios").unwrap();
+
+        let archive_path = bios_dir.join("sf2ce.zip");
+        fs::write(
+            &archive_path,
+            b"s92_21a.6f s92_22b.7f s92e_23b.8f sf2_26.bin",
+        )
+        .unwrap();
+
+        let compatibility = get_arcade_compatibility(
+            Some("ARCADE"),
+            Some("sf2ce"),
+            Some("fbneo"),
+            Some("roms/arcade-mame2003/sf2ce.zip"),
+            dir.path(),
+            dir.path(),
+        );
+
+        assert_eq!(
+            compatibility.compatibility_status,
+            ArcadeCompatibilityStatus::Ready
+        );
+        assert!(compatibility.missing_merged_entries.is_empty());
+    }
+
+    #[test]
+    fn neogeo_titles_still_require_neogeo_bios_entries_in_merged_rom_zip() {
+        let dir = tempdir().unwrap();
+        let bios_dir = dir.path().join("roms").join("arcade-mame2003");
+        fs::create_dir_all(&bios_dir).unwrap();
+        fs::write(bios_dir.join("neogeo.zip"), b"bios").unwrap();
+        fs::write(bios_dir.join("qsound.zip"), b"bios").unwrap();
+        fs::write(bios_dir.join("pgm.zip"), b"bios").unwrap();
+
+        let archive_path = bios_dir.join("mslug.zip");
+        fs::write(&archive_path, b"201-p1.bin 201-s1.bin").unwrap();
+
+        let compatibility = get_arcade_compatibility(
+            Some("ARCADE"),
+            Some("mslug"),
+            Some("fbneo"),
+            Some("roms/arcade-mame2003/mslug.zip"),
+            dir.path(),
+            dir.path(),
+        );
+
+        assert_eq!(
+            compatibility.compatibility_status,
+            ArcadeCompatibilityStatus::BlockedMissingDependency
+        );
+        assert!(compatibility
+            .missing_merged_entries
+            .iter()
+            .any(|entry| entry == "sp-s3.sp1"));
     }
 
     #[test]

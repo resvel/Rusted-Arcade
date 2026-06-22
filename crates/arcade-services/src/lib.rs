@@ -2761,6 +2761,18 @@ mod tests {
         assert_eq!(plan.system, "ARCADE");
         assert_eq!(plan.effective_core, Some(String::from("mame2003_plus")));
         assert_eq!(plan.resolved_core_name, "mame2003_plus");
+
+        let fbneo_plan = services
+            .prepare_launch_with_core_override("rom-arcade-1", "fbneo")
+            .expect("prepare fbneo retry launch");
+
+        assert_eq!(fbneo_plan.system, "ARCADE");
+        assert_eq!(fbneo_plan.effective_core, Some(String::from("fbneo")));
+        assert_eq!(fbneo_plan.resolved_core_name, "fbneo");
+        assert_eq!(
+            fbneo_plan.promote_core_on_success,
+            Some(String::from("fbneo"))
+        );
     }
 
     #[test]

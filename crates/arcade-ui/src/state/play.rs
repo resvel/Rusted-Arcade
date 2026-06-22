@@ -571,10 +571,19 @@ fn arcade_launch_failure_note(system: Option<&str>, failed_core: Option<&str>) -
         return None;
     }
 
-    let core = failed_core.unwrap_or("this core");
+    let core = failed_core.map(display_core_name).unwrap_or("This core");
     Some(format!(
         "{core} rejected this arcade ROM set. Arcade zips must match the selected core’s set; try another arcade core."
     ))
+}
+
+fn display_core_name(core: &str) -> &'static str {
+    match core {
+        "fbneo" => "FBNeo",
+        "mame2003" => "MAME2003",
+        "mame2003_plus" => "MAME2003 Plus",
+        _ => "The selected core",
+    }
 }
 
 fn retry_core_options_for_failed_launch(
@@ -725,6 +734,35 @@ mod tests {
             vec![String::from("fbneo"), String::from("mame2003_plus")]
         );
         assert_eq!(state.launch_failed_core.as_deref(), Some("mame2003"));
+        assert_eq!(
+            state.launch_note_message.as_deref(),
+            Some("MAME2003 rejected this arcade ROM set. Arcade zips must match the selected core’s set; try another arcade core.")
+        );
+    }
+
+    #[test]
+    fn arcade_retry_prepare_failure_reports_attempted_core() {
+        let mut state = PlaySessionState::default();
+
+        state.fail_launch(
+            Some(String::from("Street Fighter II': Champion Edition")),
+            Some(String::from("ARCADE")),
+            Some(String::from("fbneo")),
+            None,
+            None,
+            "Missing required BIOS files.",
+            "Missing shared arcade BIOS files",
+        );
+
+        assert_eq!(state.launch_failed_core.as_deref(), Some("fbneo"));
+        assert_eq!(
+            state.launch_retry_core_options,
+            vec![String::from("mame2003"), String::from("mame2003_plus")]
+        );
+        assert_eq!(
+            state.launch_note_message.as_deref(),
+            Some("FBNeo rejected this arcade ROM set. Arcade zips must match the selected core’s set; try another arcade core.")
+        );
     }
 
     #[test]
