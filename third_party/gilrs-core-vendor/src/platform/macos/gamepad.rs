@@ -723,110 +723,27 @@ unsafe extern "C" fn sony_bt_input_report_cb(
         USAGE_AXIS_RSTICKY,
     );
 
-    send_button_if_changed(
-        &context.tx,
-        context.id,
-        previous.buttons,
-        next.buttons,
+    for button in [
         DUALSENSE_BUTTON_SOUTH,
-        USAGE_BTN_SOUTH,
-    );
-    send_button_if_changed(
-        &context.tx,
-        context.id,
-        previous.buttons,
-        next.buttons,
         DUALSENSE_BUTTON_EAST,
-        USAGE_BTN_EAST,
-    );
-    send_button_if_changed(
-        &context.tx,
-        context.id,
-        previous.buttons,
-        next.buttons,
         DUALSENSE_BUTTON_NORTH,
-        USAGE_BTN_NORTH,
-    );
-    send_button_if_changed(
-        &context.tx,
-        context.id,
-        previous.buttons,
-        next.buttons,
         DUALSENSE_BUTTON_WEST,
-        USAGE_BTN_WEST,
-    );
-    send_button_if_changed(
-        &context.tx,
-        context.id,
-        previous.buttons,
-        next.buttons,
         DUALSENSE_BUTTON_LT,
-        USAGE_BTN_LT,
-    );
-    send_button_if_changed(
-        &context.tx,
-        context.id,
-        previous.buttons,
-        next.buttons,
         DUALSENSE_BUTTON_RT,
-        USAGE_BTN_RT,
-    );
-    send_button_if_changed(
-        &context.tx,
-        context.id,
-        previous.buttons,
-        next.buttons,
-        DUALSENSE_BUTTON_LT2,
-        USAGE_BTN_LT2,
-    );
-    send_button_if_changed(
-        &context.tx,
-        context.id,
-        previous.buttons,
-        next.buttons,
-        DUALSENSE_BUTTON_RT2,
-        USAGE_BTN_RT2,
-    );
-    send_button_if_changed(
-        &context.tx,
-        context.id,
-        previous.buttons,
-        next.buttons,
         DUALSENSE_BUTTON_SELECT,
-        USAGE_BTN_SELECT,
-    );
-    send_button_if_changed(
-        &context.tx,
-        context.id,
-        previous.buttons,
-        next.buttons,
         DUALSENSE_BUTTON_START,
-        USAGE_BTN_START,
-    );
-    send_button_if_changed(
-        &context.tx,
-        context.id,
-        previous.buttons,
-        next.buttons,
         DUALSENSE_BUTTON_LTHUMB,
-        USAGE_BTN_LTHUMB,
-    );
-    send_button_if_changed(
-        &context.tx,
-        context.id,
-        previous.buttons,
-        next.buttons,
         DUALSENSE_BUTTON_RTHUMB,
-        USAGE_BTN_RTHUMB,
-    );
-    send_button_if_changed(
-        &context.tx,
-        context.id,
-        previous.buttons,
-        next.buttons,
         DUALSENSE_BUTTON_MODE,
-        USAGE_BTN_MODE,
-    );
+    ] {
+        send_dualsense_button_if_changed(
+            &context.tx,
+            context.id,
+            previous.buttons,
+            next.buttons,
+            button,
+        );
+    }
     let (previous_dpad_x, previous_dpad_y) = dualsense_dpad_axis_values(previous.buttons);
     let (next_dpad_x, next_dpad_y) = dualsense_dpad_axis_values(next.buttons);
     send_axis_if_changed(
@@ -899,6 +816,18 @@ fn send_button_if_changed(
     let _ = tx.send((Event::new(id, event), None));
 }
 
+fn send_dualsense_button_if_changed(
+    tx: &Sender<(Event, Option<IOHIDDevice>)>,
+    id: usize,
+    previous: u32,
+    next: u32,
+    mask: u32,
+) {
+    if let Some(usage) = dualsense_button_usage(mask) {
+        send_button_if_changed(tx, id, previous, next, mask, usage);
+    }
+}
+
 const DUALSENSE_BUTTON_SOUTH: u32 = 1 << 0;
 const DUALSENSE_BUTTON_EAST: u32 = 1 << 1;
 const DUALSENSE_BUTTON_NORTH: u32 = 1 << 2;
@@ -916,6 +845,23 @@ const DUALSENSE_BUTTON_DPAD_UP: u32 = 1 << 13;
 const DUALSENSE_BUTTON_DPAD_DOWN: u32 = 1 << 14;
 const DUALSENSE_BUTTON_DPAD_LEFT: u32 = 1 << 15;
 const DUALSENSE_BUTTON_DPAD_RIGHT: u32 = 1 << 16;
+
+fn dualsense_button_usage(button: u32) -> Option<u32> {
+    match button {
+        DUALSENSE_BUTTON_WEST => Some(USAGE_BTN_SOUTH),
+        DUALSENSE_BUTTON_SOUTH => Some(USAGE_BTN_SOUTH + 1),
+        DUALSENSE_BUTTON_EAST => Some(USAGE_BTN_SOUTH + 2),
+        DUALSENSE_BUTTON_NORTH => Some(USAGE_BTN_SOUTH + 3),
+        DUALSENSE_BUTTON_LT => Some(USAGE_BTN_SOUTH + 4),
+        DUALSENSE_BUTTON_RT => Some(USAGE_BTN_SOUTH + 5),
+        DUALSENSE_BUTTON_SELECT => Some(USAGE_BTN_SOUTH + 8),
+        DUALSENSE_BUTTON_START => Some(USAGE_BTN_SOUTH + 9),
+        DUALSENSE_BUTTON_LTHUMB => Some(USAGE_BTN_SOUTH + 10),
+        DUALSENSE_BUTTON_RTHUMB => Some(USAGE_BTN_SOUTH + 11),
+        DUALSENSE_BUTTON_MODE => Some(USAGE_BTN_SOUTH + 12),
+        _ => None,
+    }
+}
 
 fn dualsense_dpad_axis_values(buttons: u32) -> (i32, i32) {
     let left = buttons & DUALSENSE_BUTTON_DPAD_LEFT != 0;
@@ -1382,6 +1328,54 @@ mod sony_bt_tests {
         assert_eq!(
             dualsense_dpad_axis_values(DUALSENSE_BUTTON_DPAD_DOWN | DUALSENSE_BUTTON_DPAD_LEFT),
             (-1, 1)
+        );
+    }
+
+    #[test]
+    fn dualsense_bt_buttons_emit_ps5_sdl_physical_slots() {
+        assert_eq!(
+            dualsense_button_usage(DUALSENSE_BUTTON_WEST),
+            Some(USAGE_BTN_SOUTH)
+        );
+        assert_eq!(
+            dualsense_button_usage(DUALSENSE_BUTTON_SOUTH),
+            Some(USAGE_BTN_SOUTH + 1)
+        );
+        assert_eq!(
+            dualsense_button_usage(DUALSENSE_BUTTON_EAST),
+            Some(USAGE_BTN_SOUTH + 2)
+        );
+        assert_eq!(
+            dualsense_button_usage(DUALSENSE_BUTTON_NORTH),
+            Some(USAGE_BTN_SOUTH + 3)
+        );
+        assert_eq!(
+            dualsense_button_usage(DUALSENSE_BUTTON_LT),
+            Some(USAGE_BTN_SOUTH + 4)
+        );
+        assert_eq!(
+            dualsense_button_usage(DUALSENSE_BUTTON_RT),
+            Some(USAGE_BTN_SOUTH + 5)
+        );
+        assert_eq!(
+            dualsense_button_usage(DUALSENSE_BUTTON_SELECT),
+            Some(USAGE_BTN_SOUTH + 8)
+        );
+        assert_eq!(
+            dualsense_button_usage(DUALSENSE_BUTTON_START),
+            Some(USAGE_BTN_SOUTH + 9)
+        );
+        assert_eq!(
+            dualsense_button_usage(DUALSENSE_BUTTON_LTHUMB),
+            Some(USAGE_BTN_SOUTH + 10)
+        );
+        assert_eq!(
+            dualsense_button_usage(DUALSENSE_BUTTON_RTHUMB),
+            Some(USAGE_BTN_SOUTH + 11)
+        );
+        assert_eq!(
+            dualsense_button_usage(DUALSENSE_BUTTON_MODE),
+            Some(USAGE_BTN_SOUTH + 12)
         );
     }
 }
