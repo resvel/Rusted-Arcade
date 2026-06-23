@@ -23,7 +23,8 @@ use core_foundation::set::CFSetApplyFunction;
 use core_foundation::string::{kCFStringEncodingUTF8, CFString, CFStringCreateWithCString};
 
 use io_kit_sys::hid::base::{
-    IOHIDDeviceCallback, IOHIDDeviceRef, IOHIDElementRef, IOHIDValueCallback, IOHIDValueRef,
+    IOHIDDeviceCallback, IOHIDDeviceRef, IOHIDElementRef, IOHIDReportCallback, IOHIDValueCallback,
+    IOHIDValueRef,
 };
 use io_kit_sys::hid::device::*;
 use io_kit_sys::hid::element::*;
@@ -280,6 +281,18 @@ impl IOHIDDevice {
 
     pub fn get_service(&self) -> Option<IOService> {
         unsafe { IOService::new(IOHIDDeviceGetService(self.0)) }
+    }
+
+    pub fn register_input_report_callback(
+        &self,
+        report: *mut u8,
+        report_length: CFIndex,
+        callback: IOHIDReportCallback,
+        context: *mut c_void,
+    ) {
+        unsafe {
+            IOHIDDeviceRegisterInputReportCallback(self.0, report, report_length, callback, context)
+        }
     }
 
     pub fn get_elements(&self) -> Vec<IOHIDElement> {

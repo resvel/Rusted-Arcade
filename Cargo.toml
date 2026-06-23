@@ -61,3 +61,4 @@ opt-level = 2
 
 [patch.crates-io]
 glutin = { path = "third_party/glutin-0.32.3" }
+gilrs-core = { path = "third_party/gilrs-core-vendor" }

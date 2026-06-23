@@ -436,6 +436,30 @@ struct DeviceInfo {
     location_id: u32,
     is_connected: bool,
 }
+
+const SONY_VENDOR_ID: u16 = 0x054c;
+const DUALSENSE_PRODUCT_ID: u16 = 0x0ce6;
+const DUALSENSE_BT_REPORT_ID: u32 = 0x31;
+const DUALSENSE_BT_REPORT_LEN: usize = 78;
+const DUALSENSE_BT_REPORT_BUFFER_LEN: usize = 256;
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct DualSenseBtState {
+    lx: u8,
+    ly: u8,
+    rx: u8,
+    ry: u8,
+    l2: u8,
+    r2: u8,
+    buttons: u32,
+}
+
+struct SonyBtReportContext {
+    tx: Sender<(Event, Option<IOHIDDevice>)>,
+    id: usize,
+    previous: Option<DualSenseBtState>,
+    report: [u8; DUALSENSE_BT_REPORT_BUFFER_LEN],
+}
 #[cfg(feature = "serde-serialize")]
 use serde::{Deserialize, Serialize};
 
@@ -607,6 +631,393 @@ pub mod native_ev_codes {
     };
 }
 
+fn register_sony_bt_report_callback(
+    device: &IOHIDDevice,
+    id: usize,
+    tx: &Sender<(Event, Option<IOHIDDevice>)>,
+) {
+    let vendor = device.get_vendor_id();
+    let product = device.get_product_id();
+    let transport = device.get_transport_key();
+    if vendor != Some(SONY_VENDOR_ID)
+        || product != Some(DUALSENSE_PRODUCT_ID)
+        || transport.as_deref() != Some("Bluetooth")
+    {
+        return;
+    }
+
+    let mut context = Box::new(SonyBtReportContext {
+        tx: tx.clone(),
+        id,
+        previous: None,
+        report: [0; DUALSENSE_BT_REPORT_BUFFER_LEN],
+    });
+    let report = context.report.as_mut_ptr();
+    let report_length = context.report.len() as _;
+    let context = Box::into_raw(context) as *mut c_void;
+    device.register_input_report_callback(report, report_length, sony_bt_input_report_cb, context);
+}
+
+unsafe extern "C" fn sony_bt_input_report_cb(
+    context: *mut c_void,
+    result: IOReturn,
+    _sender: *mut c_void,
+    _type: u32,
+    report_id: u32,
+    report: *mut u8,
+    report_len: isize,
+) {
+    if result != 0 || context.is_null() || report.is_null() || report_len <= 0 {
+        return;
+    }
+    let context = &mut *(context as *mut SonyBtReportContext);
+    let report = std::slice::from_raw_parts(report as *const u8, report_len as usize);
+    let Some(next) = parse_dualsense_bt_report(report_id, report) else {
+        return;
+    };
+
+    let Some(previous) = context.previous.replace(next) else {
+        return;
+    };
+
+    send_axis_if_changed(
+        &context.tx,
+        context.id,
+        previous.lx,
+        next.lx,
+        USAGE_AXIS_LSTICKX,
+    );
+    send_axis_if_changed(
+        &context.tx,
+        context.id,
+        previous.ly,
+        next.ly,
+        USAGE_AXIS_LSTICKY,
+    );
+    send_axis_if_changed(
+        &context.tx,
+        context.id,
+        previous.rx,
+        next.rx,
+        USAGE_AXIS_RT2,
+    );
+    send_axis_if_changed(
+        &context.tx,
+        context.id,
+        previous.ry,
+        next.ry,
+        USAGE_AXIS_LT2,
+    );
+    send_axis_if_changed(
+        &context.tx,
+        context.id,
+        previous.l2,
+        next.l2,
+        USAGE_AXIS_RSTICKX,
+    );
+    send_axis_if_changed(
+        &context.tx,
+        context.id,
+        previous.r2,
+        next.r2,
+        USAGE_AXIS_RSTICKY,
+    );
+
+    send_button_if_changed(
+        &context.tx,
+        context.id,
+        previous.buttons,
+        next.buttons,
+        DUALSENSE_BUTTON_SOUTH,
+        USAGE_BTN_SOUTH,
+    );
+    send_button_if_changed(
+        &context.tx,
+        context.id,
+        previous.buttons,
+        next.buttons,
+        DUALSENSE_BUTTON_EAST,
+        USAGE_BTN_EAST,
+    );
+    send_button_if_changed(
+        &context.tx,
+        context.id,
+        previous.buttons,
+        next.buttons,
+        DUALSENSE_BUTTON_NORTH,
+        USAGE_BTN_NORTH,
+    );
+    send_button_if_changed(
+        &context.tx,
+        context.id,
+        previous.buttons,
+        next.buttons,
+        DUALSENSE_BUTTON_WEST,
+        USAGE_BTN_WEST,
+    );
+    send_button_if_changed(
+        &context.tx,
+        context.id,
+        previous.buttons,
+        next.buttons,
+        DUALSENSE_BUTTON_LT,
+        USAGE_BTN_LT,
+    );
+    send_button_if_changed(
+        &context.tx,
+        context.id,
+        previous.buttons,
+        next.buttons,
+        DUALSENSE_BUTTON_RT,
+        USAGE_BTN_RT,
+    );
+    send_button_if_changed(
+        &context.tx,
+        context.id,
+        previous.buttons,
+        next.buttons,
+        DUALSENSE_BUTTON_LT2,
+        USAGE_BTN_LT2,
+    );
+    send_button_if_changed(
+        &context.tx,
+        context.id,
+        previous.buttons,
+        next.buttons,
+        DUALSENSE_BUTTON_RT2,
+        USAGE_BTN_RT2,
+    );
+    send_button_if_changed(
+        &context.tx,
+        context.id,
+        previous.buttons,
+        next.buttons,
+        DUALSENSE_BUTTON_SELECT,
+        USAGE_BTN_SELECT,
+    );
+    send_button_if_changed(
+        &context.tx,
+        context.id,
+        previous.buttons,
+        next.buttons,
+        DUALSENSE_BUTTON_START,
+        USAGE_BTN_START,
+    );
+    send_button_if_changed(
+        &context.tx,
+        context.id,
+        previous.buttons,
+        next.buttons,
+        DUALSENSE_BUTTON_LTHUMB,
+        USAGE_BTN_LTHUMB,
+    );
+    send_button_if_changed(
+        &context.tx,
+        context.id,
+        previous.buttons,
+        next.buttons,
+        DUALSENSE_BUTTON_RTHUMB,
+        USAGE_BTN_RTHUMB,
+    );
+    send_button_if_changed(
+        &context.tx,
+        context.id,
+        previous.buttons,
+        next.buttons,
+        DUALSENSE_BUTTON_MODE,
+        USAGE_BTN_MODE,
+    );
+    let (previous_dpad_x, previous_dpad_y) = dualsense_dpad_axis_values(previous.buttons);
+    let (next_dpad_x, next_dpad_y) = dualsense_dpad_axis_values(next.buttons);
+    send_axis_if_changed(
+        &context.tx,
+        context.id,
+        previous_dpad_x,
+        next_dpad_x,
+        USAGE_AXIS_DPADX,
+    );
+    send_axis_if_changed(
+        &context.tx,
+        context.id,
+        previous_dpad_y,
+        next_dpad_y,
+        USAGE_AXIS_DPADY,
+    );
+}
+
+fn send_axis_if_changed<T>(
+    tx: &Sender<(Event, Option<IOHIDDevice>)>,
+    id: usize,
+    previous: T,
+    next: T,
+    usage: u32,
+) where
+    T: Copy + Eq + Into<i32>,
+{
+    if previous == next {
+        return;
+    }
+    let _ = tx.send((
+        Event::new(
+            id,
+            EventType::AxisValueChanged(
+                next.into(),
+                crate::EvCode(EvCode {
+                    page: PAGE_GENERIC_DESKTOP,
+                    usage,
+                }),
+            ),
+        ),
+        None,
+    ));
+}
+
+fn send_button_if_changed(
+    tx: &Sender<(Event, Option<IOHIDDevice>)>,
+    id: usize,
+    previous: u32,
+    next: u32,
+    mask: u32,
+    usage: u32,
+) {
+    let previous_pressed = previous & mask != 0;
+    let next_pressed = next & mask != 0;
+    if previous_pressed == next_pressed {
+        return;
+    }
+    let event = if next_pressed {
+        EventType::ButtonPressed(crate::EvCode(EvCode {
+            page: PAGE_BUTTON,
+            usage,
+        }))
+    } else {
+        EventType::ButtonReleased(crate::EvCode(EvCode {
+            page: PAGE_BUTTON,
+            usage,
+        }))
+    };
+    let _ = tx.send((Event::new(id, event), None));
+}
+
+const DUALSENSE_BUTTON_SOUTH: u32 = 1 << 0;
+const DUALSENSE_BUTTON_EAST: u32 = 1 << 1;
+const DUALSENSE_BUTTON_NORTH: u32 = 1 << 2;
+const DUALSENSE_BUTTON_WEST: u32 = 1 << 3;
+const DUALSENSE_BUTTON_LT: u32 = 1 << 4;
+const DUALSENSE_BUTTON_RT: u32 = 1 << 5;
+const DUALSENSE_BUTTON_LT2: u32 = 1 << 6;
+const DUALSENSE_BUTTON_RT2: u32 = 1 << 7;
+const DUALSENSE_BUTTON_SELECT: u32 = 1 << 8;
+const DUALSENSE_BUTTON_START: u32 = 1 << 9;
+const DUALSENSE_BUTTON_LTHUMB: u32 = 1 << 10;
+const DUALSENSE_BUTTON_RTHUMB: u32 = 1 << 11;
+const DUALSENSE_BUTTON_MODE: u32 = 1 << 12;
+const DUALSENSE_BUTTON_DPAD_UP: u32 = 1 << 13;
+const DUALSENSE_BUTTON_DPAD_DOWN: u32 = 1 << 14;
+const DUALSENSE_BUTTON_DPAD_LEFT: u32 = 1 << 15;
+const DUALSENSE_BUTTON_DPAD_RIGHT: u32 = 1 << 16;
+
+fn dualsense_dpad_axis_values(buttons: u32) -> (i32, i32) {
+    let left = buttons & DUALSENSE_BUTTON_DPAD_LEFT != 0;
+    let right = buttons & DUALSENSE_BUTTON_DPAD_RIGHT != 0;
+    let up = buttons & DUALSENSE_BUTTON_DPAD_UP != 0;
+    let down = buttons & DUALSENSE_BUTTON_DPAD_DOWN != 0;
+
+    let x = match (left, right) {
+        (true, false) => -1,
+        (false, true) => 1,
+        _ => 0,
+    };
+    let y = match (up, down) {
+        (true, false) => -1,
+        (false, true) => 1,
+        _ => 0,
+    };
+
+    (x, y)
+}
+
+fn parse_dualsense_bt_report(report_id: u32, report: &[u8]) -> Option<DualSenseBtState> {
+    if report_id != DUALSENSE_BT_REPORT_ID || report.len() < DUALSENSE_BT_REPORT_LEN {
+        return None;
+    }
+    let offset = if report.first().copied() == Some(DUALSENSE_BT_REPORT_ID as u8) {
+        1
+    } else {
+        0
+    };
+    if report.len() < offset + 11 {
+        return None;
+    }
+
+    let face_and_dpad = report[offset + 8];
+    let shoulders = report[offset + 9];
+    let system = report[offset + 10];
+    let dpad = face_and_dpad & 0x0f;
+    let mut buttons = 0;
+    if face_and_dpad & 0x20 != 0 {
+        buttons |= DUALSENSE_BUTTON_SOUTH;
+    }
+    if face_and_dpad & 0x40 != 0 {
+        buttons |= DUALSENSE_BUTTON_EAST;
+    }
+    if face_and_dpad & 0x80 != 0 {
+        buttons |= DUALSENSE_BUTTON_NORTH;
+    }
+    if face_and_dpad & 0x10 != 0 {
+        buttons |= DUALSENSE_BUTTON_WEST;
+    }
+    if shoulders & 0x01 != 0 {
+        buttons |= DUALSENSE_BUTTON_LT;
+    }
+    if shoulders & 0x02 != 0 {
+        buttons |= DUALSENSE_BUTTON_RT;
+    }
+    if shoulders & 0x04 != 0 {
+        buttons |= DUALSENSE_BUTTON_LT2;
+    }
+    if shoulders & 0x08 != 0 {
+        buttons |= DUALSENSE_BUTTON_RT2;
+    }
+    if shoulders & 0x10 != 0 {
+        buttons |= DUALSENSE_BUTTON_SELECT;
+    }
+    if shoulders & 0x20 != 0 {
+        buttons |= DUALSENSE_BUTTON_START;
+    }
+    if shoulders & 0x40 != 0 {
+        buttons |= DUALSENSE_BUTTON_LTHUMB;
+    }
+    if shoulders & 0x80 != 0 {
+        buttons |= DUALSENSE_BUTTON_RTHUMB;
+    }
+    if system & 0x01 != 0 {
+        buttons |= DUALSENSE_BUTTON_MODE;
+    }
+
+    match dpad {
+        0 => buttons |= DUALSENSE_BUTTON_DPAD_UP,
+        1 => buttons |= DUALSENSE_BUTTON_DPAD_UP | DUALSENSE_BUTTON_DPAD_RIGHT,
+        2 => buttons |= DUALSENSE_BUTTON_DPAD_RIGHT,
+        3 => buttons |= DUALSENSE_BUTTON_DPAD_DOWN | DUALSENSE_BUTTON_DPAD_RIGHT,
+        4 => buttons |= DUALSENSE_BUTTON_DPAD_DOWN,
+        5 => buttons |= DUALSENSE_BUTTON_DPAD_DOWN | DUALSENSE_BUTTON_DPAD_LEFT,
+        6 => buttons |= DUALSENSE_BUTTON_DPAD_LEFT,
+        7 => buttons |= DUALSENSE_BUTTON_DPAD_UP | DUALSENSE_BUTTON_DPAD_LEFT,
+        _ => {}
+    }
+
+    Some(DualSenseBtState {
+        lx: report[offset + 1],
+        ly: report[offset + 2],
+        rx: report[offset + 3],
+        ry: report[offset + 4],
+        l2: report[offset + 5],
+        r2: report[offset + 6],
+        buttons,
+    })
+}
+
 extern "C" fn device_matching_cb(
     context: *mut c_void,
     _result: IOReturn,
@@ -668,6 +1079,7 @@ extern "C" fn device_matching_cb(
             device_infos.len() - 1
         }
     };
+    register_sony_bt_report_callback(&device, id, tx);
     let _ = tx.send((Event::new(id, EventType::Connected), Some(device)));
 }
 
@@ -877,5 +1289,99 @@ extern "C" fn input_value_cb(
 
         let _ = tx.send((x_axis_event, None));
         let _ = tx.send((y_axis_event, None));
+    }
+}
+
+#[cfg(test)]
+mod sony_bt_tests {
+    use super::*;
+
+    fn base_report() -> [u8; DUALSENSE_BT_REPORT_LEN] {
+        let mut report = [0u8; DUALSENSE_BT_REPORT_LEN];
+        report[0] = DUALSENSE_BT_REPORT_ID as u8;
+        report[2] = 0x80;
+        report[3] = 0x81;
+        report[4] = 0x82;
+        report[5] = 0x83;
+        report[6] = 0x12;
+        report[7] = 0x34;
+        report[9] = 0x08;
+        report
+    }
+
+    #[test]
+    fn dualsense_bt_report_decodes_axes() {
+        let report = base_report();
+        let state = parse_dualsense_bt_report(DUALSENSE_BT_REPORT_ID, &report).unwrap();
+        assert_eq!(state.lx, 0x80);
+        assert_eq!(state.ly, 0x81);
+        assert_eq!(state.rx, 0x82);
+        assert_eq!(state.ry, 0x83);
+        assert_eq!(state.l2, 0x12);
+        assert_eq!(state.r2, 0x34);
+        assert_eq!(state.buttons, 0);
+    }
+
+    #[test]
+    fn dualsense_bt_report_decodes_face_shoulders_system_and_dpad() {
+        let mut report = base_report();
+        report[9] = 0x20 | 0x02;
+        report[10] = 0x01 | 0x20;
+        report[11] = 0x01;
+        let state = parse_dualsense_bt_report(DUALSENSE_BT_REPORT_ID, &report).unwrap();
+        assert!(state.buttons & DUALSENSE_BUTTON_SOUTH != 0);
+        assert!(state.buttons & DUALSENSE_BUTTON_DPAD_RIGHT != 0);
+        assert!(state.buttons & DUALSENSE_BUTTON_LT != 0);
+        assert!(state.buttons & DUALSENSE_BUTTON_START != 0);
+        assert!(state.buttons & DUALSENSE_BUTTON_MODE != 0);
+        assert_eq!(state.buttons & DUALSENSE_BUTTON_DPAD_UP, 0);
+    }
+
+    #[test]
+    fn dualsense_bt_report_decodes_dpad_without_r3_or_guide_leaks() {
+        let mut up_report = base_report();
+        up_report[9] = 0x00;
+        let up = parse_dualsense_bt_report(DUALSENSE_BT_REPORT_ID, &up_report).unwrap();
+        assert!(up.buttons & DUALSENSE_BUTTON_DPAD_UP != 0);
+        assert_eq!(up.buttons & DUALSENSE_BUTTON_RTHUMB, 0);
+        assert_eq!(up.buttons & DUALSENSE_BUTTON_MODE, 0);
+        assert_eq!(dualsense_dpad_axis_values(up.buttons), (0, -1));
+
+        let mut down_report = base_report();
+        down_report[9] = 0x04;
+        let down = parse_dualsense_bt_report(DUALSENSE_BT_REPORT_ID, &down_report).unwrap();
+        assert!(down.buttons & DUALSENSE_BUTTON_DPAD_DOWN != 0);
+        assert_eq!(down.buttons & DUALSENSE_BUTTON_RTHUMB, 0);
+        assert_eq!(down.buttons & DUALSENSE_BUTTON_MODE, 0);
+        assert_eq!(dualsense_dpad_axis_values(down.buttons), (0, 1));
+    }
+
+    #[test]
+    fn dualsense_bt_dpad_axis_values_cover_cardinals_diagonals_and_neutral() {
+        assert_eq!(dualsense_dpad_axis_values(0), (0, 0));
+        assert_eq!(
+            dualsense_dpad_axis_values(DUALSENSE_BUTTON_DPAD_UP),
+            (0, -1)
+        );
+        assert_eq!(
+            dualsense_dpad_axis_values(DUALSENSE_BUTTON_DPAD_DOWN),
+            (0, 1)
+        );
+        assert_eq!(
+            dualsense_dpad_axis_values(DUALSENSE_BUTTON_DPAD_LEFT),
+            (-1, 0)
+        );
+        assert_eq!(
+            dualsense_dpad_axis_values(DUALSENSE_BUTTON_DPAD_RIGHT),
+            (1, 0)
+        );
+        assert_eq!(
+            dualsense_dpad_axis_values(DUALSENSE_BUTTON_DPAD_UP | DUALSENSE_BUTTON_DPAD_RIGHT),
+            (1, -1)
+        );
+        assert_eq!(
+            dualsense_dpad_axis_values(DUALSENSE_BUTTON_DPAD_DOWN | DUALSENSE_BUTTON_DPAD_LEFT),
+            (-1, 1)
+        );
     }
 }
