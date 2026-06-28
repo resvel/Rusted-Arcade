@@ -1196,6 +1196,23 @@ impl NativeServices {
         request: CatalogCoreInstallRequest,
         progress: impl Fn(ManageProgressEvent),
     ) -> Result<ManageOperationSummary> {
+        self.install_catalog_core_with_hooks(
+            request,
+            progress,
+            download_bytes,
+            ad_hoc_codesign,
+            |core_path, core_name| self.probe_installed_catalog_core(core_path, core_name),
+        )
+    }
+
+    fn install_catalog_core_with_hooks(
+        &self,
+        request: CatalogCoreInstallRequest,
+        progress: impl Fn(ManageProgressEvent),
+        download_archive: impl FnOnce(&str) -> Result<Vec<u8>>,
+        codesign_core: impl FnOnce(&Path) -> Result<()>,
+        probe_core: impl FnOnce(&Path, &str) -> Option<String>,
+    ) -> Result<ManageOperationSummary> {
         let config = self.current_config()?;
         let catalog = self.core_catalog_for_config(&config);
         let entry = catalog
@@ -1239,7 +1256,7 @@ impl NativeServices {
             message: format!("Downloading {}...", archive_file_name),
         });
         let archive_url = buildbot_archive_url(base_url, archive_file_name);
-        let archive_bytes = download_bytes(&archive_url)?;
+        let archive_bytes = download_archive(&archive_url)?;
 
         progress(ManageProgressEvent {
             kind: ManageOperationKind::InstallCatalogCore,
@@ -1268,7 +1285,7 @@ impl NativeServices {
             total: Some(1),
             message: format!("Codesigning {}...", entry.target_path.display()),
         });
-        ad_hoc_codesign(&entry.target_path)?;
+        codesign_core(&entry.target_path)?;
 
         progress(ManageProgressEvent {
             kind: ManageOperationKind::InstallCatalogCore,
@@ -1296,7 +1313,7 @@ impl NativeServices {
             total: Some(1),
             message: format!("Probing settings for {}...", entry.display_name),
         });
-        let probe_warning = self.probe_installed_catalog_core(&entry.target_path, &entry.core_name);
+        let probe_warning = probe_core(&entry.target_path, &entry.core_name);
         if let Some(warning) = &probe_warning {
             progress(ManageProgressEvent {
                 kind: ManageOperationKind::InstallCatalogCore,
@@ -3366,6 +3383,111 @@ systemname = "Arcade""#,
         )
         .expect_err("outside target should fail");
         assert!(err.to_string().contains("outside active core root"));
+    }
+
+    #[test]
+    fn catalog_core_install_repairs_existing_installed_core() {
+        let tmp = TempDir::new().expect("tempdir");
+        let config = make_config(&tmp);
+        let db = Database::open(&config).expect("open db");
+        let services = NativeServices::bootstrap(config.clone(), config_path_for(&config), db)
+            .expect("bootstrap");
+        let target = dependency_core_root(&config.paths).join("fceumm_libretro.dylib");
+        fs::create_dir_all(target.parent().expect("target parent")).expect("create core root");
+        fs::write(&target, b"old-core").expect("seed existing core");
+        let progress_messages = std::cell::RefCell::new(Vec::new());
+
+        let summary = services
+            .install_catalog_core_with_hooks(
+                CatalogCoreInstallRequest {
+                    catalog_id: String::from("core-fceumm"),
+                },
+                |event| progress_messages.borrow_mut().push(event.message),
+                |url| {
+                    assert!(url.ends_with("/fceumm_libretro.dylib.zip"));
+                    Ok(zip_with_member("fceumm_libretro.dylib", b"repaired-core"))
+                },
+                |path| {
+                    assert_eq!(path, target.as_path());
+                    Ok(())
+                },
+                |path, core_name| {
+                    assert_eq!(path, target.as_path());
+                    assert_eq!(core_name, "fceumm");
+                    None
+                },
+            )
+            .expect("install catalog core");
+
+        assert_eq!(
+            fs::read(&target).expect("read repaired core"),
+            b"repaired-core"
+        );
+        assert_eq!(summary.kind, Some(ManageOperationKind::InstallCatalogCore));
+        assert_eq!(summary.updated, 1);
+        assert!(summary.message.contains("Installed"));
+        assert!(progress_messages
+            .borrow()
+            .iter()
+            .any(|message| message.contains("Rescanning core catalog")));
+    }
+
+    #[test]
+    fn catalog_core_install_probe_failure_does_not_erase_successful_install() {
+        let tmp = TempDir::new().expect("tempdir");
+        let config = make_config(&tmp);
+        let db = Database::open(&config).expect("open db");
+        let services = NativeServices::bootstrap(config.clone(), config_path_for(&config), db)
+            .expect("bootstrap");
+        let target = dependency_core_root(&config.paths).join("fceumm_libretro.dylib");
+
+        let summary = services
+            .install_catalog_core_with_hooks(
+                CatalogCoreInstallRequest {
+                    catalog_id: String::from("core-fceumm"),
+                },
+                |_| {},
+                |_| Ok(zip_with_member("fceumm_libretro.dylib", b"installed-core")),
+                |_| Ok(()),
+                |_, _| Some(String::from("simulated probe failure")),
+            )
+            .expect("install catalog core despite probe warning");
+
+        assert_eq!(
+            fs::read(&target).expect("read installed core"),
+            b"installed-core"
+        );
+        assert_eq!(summary.updated, 1);
+        assert!(summary.message.contains("Settings probe warning"));
+        assert!(summary.message.contains("simulated probe failure"));
+    }
+
+    #[test]
+    fn catalog_core_install_rescan_reports_installed_state() {
+        let tmp = TempDir::new().expect("tempdir");
+        let config = make_config(&tmp);
+        let db = Database::open(&config).expect("open db");
+        let services = NativeServices::bootstrap(config.clone(), config_path_for(&config), db)
+            .expect("bootstrap");
+
+        services
+            .install_catalog_core_with_hooks(
+                CatalogCoreInstallRequest {
+                    catalog_id: String::from("core-fceumm"),
+                },
+                |_| {},
+                |_| Ok(zip_with_member("fceumm_libretro.dylib", b"installed-core")),
+                |_| Ok(()),
+                |_, _| None,
+            )
+            .expect("install catalog core");
+
+        let catalog = services.core_catalog().expect("core catalog");
+        let entry = catalog.entry("core-fceumm").expect("fceumm entry");
+        assert!(matches!(
+            entry.install_state,
+            CoreCatalogInstallState::Installed { .. }
+        ));
     }
 
     fn seed_rom(config: &AppConfig) {

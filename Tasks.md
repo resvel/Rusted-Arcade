@@ -208,7 +208,7 @@ Goal: expose safe service APIs for Runtime Setup to list and install catalog cor
     - `source_modified_unix`
     - `source_len`
 
-- [ ] P2 Add tests for install workflow boundaries.
+- [x] P2 Add tests for install workflow boundaries.
   - [x] Correct URL construction.
   - [x] Correct extraction target.
   - [x] Nested archive paths still extract by file name.
@@ -216,13 +216,13 @@ Goal: expose safe service APIs for Runtime Setup to list and install catalog cor
   - [x] Target parent directory is created.
   - [x] Invalid/unsafe target paths are rejected.
   - [x] Existing symlink targets under the core root are rejected before write.
-  - [ ] Existing installed core can be repaired/re-downloaded through the public install API.
-  - [ ] Probe failure does not erase successful install through the public install API.
-  - [ ] Full catalog installed-state rescan is covered through the public install API.
+  - [x] Existing installed core can be repaired/re-downloaded through the install API path.
+  - [x] Probe failure does not erase successful install through the install API path.
+  - [x] Full catalog installed-state rescan is covered through the install API path.
 
-- [ ] P2 Add local/fake zip install test path.
+- [x] P2 Add local/fake zip install test path.
   - Avoid depending only on live network for automated tests.
-  - Use temp directories and in-memory zip bytes or an injected downloader.
+  - Use temp directories and in-memory zip bytes through injected download/codesign/probe hooks.
   - Verify requested URL, extracted bytes, and target file existence.
 
 ## Phase 3 — Runtime Setup UI: Per-System Cores Section
