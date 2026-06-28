@@ -4,6 +4,7 @@ pub mod core;
 pub mod core_catalog;
 pub mod core_registry;
 pub mod dependencies;
+pub mod libretro_info;
 pub mod models;
 pub mod platform;
 
@@ -13,5 +14,6 @@ pub use core::*;
 pub use core_catalog::*;
 pub use core_registry::*;
 pub use dependencies::*;
+pub use libretro_info::*;
 pub use models::*;
 pub use platform::*;

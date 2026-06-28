@@ -323,31 +323,38 @@ Goal: connect downloaded cores to actual launch choices without surprising the u
 
 ## Phase 5 — Remote Buildbot Listing and Cache
 
-Goal: move beyond a static curated list while staying safe/offline-friendly.
+Goal: live remote buildbot directory browsing is part of this implementation,
+not a distant optional enhancement. Runtime Setup should use the active
+architecture buildbot listing to decide which curated entries are currently
+available, cache the listing for offline fallback, and expose unclassified live
+buildbot cores only behind Advanced Core Browser warnings.
 
-- [ ] P3 Fetch active-architecture libretro buildbot directory listing.
+- [x] P1 Fetch active-architecture libretro buildbot directory listing.
   - ARM64: `https://buildbot.libretro.com/nightly/apple/osx/arm64/latest/`
   - x86_64: `https://buildbot.libretro.com/nightly/apple/osx/x86_64/latest/`
 
-- [ ] P3 Parse available `*_libretro.dylib.zip` entries.
+- [x] P1 Parse available `*_libretro.dylib.zip` entries.
   - Keep parser tolerant of simple HTML directory listing changes.
   - Ignore non-core files.
 
-- [ ] P3 Cache buildbot listings.
+- [x] P1 Cache buildbot listings.
   - Store source URL, architecture, fetched timestamp, and entries.
   - Use cache when offline or fetch fails.
-  - Add manual refresh action.
+  - Existing Rescan action refreshes dependency status, catalog state, and live
+    buildbot cache.
 
-- [ ] P3 Merge remote listing with curated catalog.
+- [x] P1 Merge remote listing with curated catalog.
   - Curated metadata supplies system classification, display name, recommendation, and warnings.
   - Remote listing supplies availability.
-  - Unknown remote entries go to Advanced only.
+  - Unknown remote entries go to the explicit `ALL` Advanced Buildbot Browser
+    only until metadata classification can place them in per-system groups.
 
-- [ ] P3 Add tests for listing parse and merge behavior.
+- [x] P1 Add tests for listing parse and merge behavior.
   - Known remote entries match curated catalog.
   - Unknown remote entries remain advanced/unknown.
   - Missing remote recommended core reports unavailable rather than installable.
-  - Offline cache fallback works.
+  - Offline cache fallback is implemented in services; direct unit injection for
+    downloader failure remains future polish.
 
 ## Phase 6 — Metadata-Driven Compatibility Classification
 
@@ -356,18 +363,18 @@ Goal: reduce manual catalog maintenance over time.
 - [ ] P3 Investigate libretro `.info` metadata availability for macOS buildbot cores.
   - Determine whether to download `.info`, bundle a snapshot, or use a separate source.
 
-- [ ] P3 Add compatibility inference from metadata where reliable.
+- [x] P3 Add compatibility inference from metadata where reliable.
   - Supported extensions.
   - System/platform tags.
   - Required firmware notes if available.
 
-- [ ] P3 Keep curated overrides on top of inferred metadata.
+- [x] P3 Keep curated overrides on top of inferred metadata.
   - Host policy requirements.
   - Known-bad cores.
   - Special resources.
   - Compatibility-core separation.
 
-- [ ] P3 Add tests for metadata classification.
+- [x] P3 Add tests for metadata classification.
   - Metadata can classify simple systems.
   - Curated override can hide or warn on a core.
   - Metadata does not override PS2/compatibility guardrails.
@@ -445,7 +452,9 @@ Goal: keep the durable project memory accurate.
 ## Open Questions
 
 - [x] P0 Should the first implementation include remote buildbot browsing, or should we ship curated-only browse first?
-  - Answer: curated-only first; remote buildbot browsing is Phase 5.
+  - Updated answer: live remote buildbot browsing is a goal of this implementation.
+    The app now fetches/parses/caches the active-architecture listing, uses it
+    for catalog availability, and exposes remote-only cores as Advanced entries.
 
 - [x] P1 Should Runtime Setup support setting a system-level default core in v1?
   - Answer: not in v1. Hide/disable Set Default until Phase 4.
@@ -459,8 +468,9 @@ Goal: keep the durable project memory accurate.
 - [x] P1 Should post-install probing run automatically, or should there also be a visible “Probe Settings” button?
   - Answer: run automatically best-effort after install. A visible “Probe Settings” button can be added later if useful.
 
-- [ ] P3 Where should buildbot cache data live under `/Library/Application Support/RustedArcade`?
-  - Deferred until Phase 5.
+- [x] P3 Where should buildbot cache data live under `/Library/Application Support/RustedArcade`?
+  - Buildbot listing cache lives under the active core root's `metadata/`
+    folder, e.g. `/Library/Application Support/RustedArcade/cores/metadata/`.
 
 - [ ] P2 How much remote listing/cache behavior should be tested without network?
   - Deferred until Phase 5; use fake/local listing fixtures.
@@ -478,7 +488,8 @@ Goal: keep the durable project memory accurate.
 9. Phase 3 P1: render other curated compatible cores and outcome messages.
 10. Phase 8 P0/P1: run unit tests, fake-zip install tests, and one live/manual smoke test.
 11. Phase 9 P1: update wiki docs/log.
-12. Phase 5+: add remote buildbot listing/cache and metadata-driven compatibility after curated flow works.
+12. Phase 5: add live remote buildbot listing/cache before considering the core browser complete.
+13. Phase 6+: add metadata-driven compatibility so remote-only cores can move from unclassified Advanced entries into accurate per-system groups.
 
 ## Subagent Planning Notes Integrated
 

@@ -824,7 +824,7 @@ impl NativeArcadeUiApp {
         self.draw_runtime_setup_primary_actions(ui, palette, view, "ALL", &mut focus_cursor);
         ui.add_space(10.0);
 
-        self.draw_runtime_setup_all_cores_summary(ui, palette);
+        self.draw_runtime_setup_all_cores_summary(ui, palette, &mut focus_cursor);
         ui.add_space(10.0);
 
         if self.runtime_setup_welcome_visible() {
@@ -967,6 +967,7 @@ impl NativeArcadeUiApp {
         &mut self,
         ui: &mut egui::Ui,
         palette: crate::theme::ThemePalette,
+        focus_cursor: &mut usize,
     ) {
         draw_runtime_section_heading(ui, "Cores", palette);
         let Some(catalog) = self.state.manage.core_catalog.as_ref() else {
@@ -989,20 +990,44 @@ impl NativeArcadeUiApp {
                 }
             }
         }
+        let remote_entries = catalog.remote_buildbot_entries();
         ui.label(
             egui::RichText::new(format!(
-                "Recommended core status: {installed_recommended} installed · {missing_recommended} missing. Pick a system above to download or repair individual cores."
+                "Recommended core status: {installed_recommended} installed · {missing_recommended} missing. Pick a system above to download or repair individual curated cores."
             ))
             .small()
             .color(palette.text_muted),
         );
         ui.label(
             egui::RichText::new(
-                "ALL stays conservative: no full catalog browser and no download-all action.",
+                "ALL stays conservative: no download-all action. Unclassified or ambiguous remote-only buildbot cores remain in the explicit Advanced Buildbot Browser below.",
             )
             .small()
             .color(palette.text_muted),
         );
+        if !remote_entries.is_empty() {
+            ui.add_space(4.0);
+            let label = if self.state.manage.runtime_setup_core_browser_open {
+                "Hide Advanced Buildbot Browser"
+            } else {
+                "Show Advanced Buildbot Browser"
+            };
+            self.draw_runtime_action_button(ui, palette, focus_cursor, label, |app| {
+                app.state.manage.runtime_setup_core_browser_open =
+                    !app.state.manage.runtime_setup_core_browser_open;
+            });
+            if self.state.manage.runtime_setup_core_browser_open {
+                ui.label(
+                    egui::RichText::new("These live buildbot cores could not be safely assigned to one supported system from metadata. They may be untested, incompatible, or inappropriate for this platform lane.")
+                        .small()
+                        .color(palette.accent),
+                );
+                for entry in &remote_entries {
+                    self.draw_runtime_core_catalog_row(ui, entry, palette, focus_cursor);
+                    ui.separator();
+                }
+            }
+        }
     }
 
     fn draw_runtime_setup_cores_section(
@@ -1068,7 +1093,7 @@ impl NativeArcadeUiApp {
             });
             if self.state.manage.runtime_setup_core_browser_open {
                 ui.label(
-                    egui::RichText::new("Advanced buildbot cores may be untested, incompatible, or inappropriate for this platform lane.")
+                    egui::RichText::new("Advanced buildbot cores include metadata-classified candidates and may still be untested, incompatible, or inappropriate for this platform lane.")
                         .small()
                         .color(palette.text_muted),
                 );
@@ -1147,7 +1172,7 @@ impl NativeArcadeUiApp {
                     .small()
                     .color(palette.text_muted),
             );
-            if entry.install_policy.can_install_in_app() {
+            if entry.install_policy.can_install_in_app() && entry.source.can_install_in_app() {
                 let focused = self.runtime_setup_action_focused(*focus_cursor);
                 let label = if entry.installed() {
                     "Repair"
@@ -2157,6 +2182,23 @@ impl NativeArcadeUiApp {
     pub(crate) fn runtime_setup_focus_count(&self, view: &DependencySetupView) -> usize {
         let selected = self.state.manage.settings_selected_system.as_str();
         let mut count = 4; // Rescan, safe setup, open ROM folder, scan games.
+        if selected == "ALL" {
+            if let Some(catalog) = self.state.manage.core_catalog.as_ref() {
+                let remote_entries = catalog.remote_buildbot_entries();
+                if !remote_entries.is_empty() {
+                    count += 1; // Advanced Buildbot Browser toggle.
+                    if self.state.manage.runtime_setup_core_browser_open {
+                        count += remote_entries
+                            .iter()
+                            .filter(|entry| {
+                                entry.install_policy.can_install_in_app()
+                                    && entry.source.can_install_in_app()
+                            })
+                            .count();
+                    }
+                }
+            }
+        }
         if selected == "ALL" && self.runtime_setup_welcome_visible() {
             count += 1;
         }
@@ -2223,6 +2265,33 @@ impl NativeArcadeUiApp {
         }
         index -= 1;
 
+        if selected == "ALL" {
+            if let Some(catalog) = self.state.manage.core_catalog.as_ref() {
+                let remote_entries = catalog.remote_buildbot_entries();
+                if !remote_entries.is_empty() {
+                    if index == 0 {
+                        self.state.manage.runtime_setup_core_browser_open =
+                            !self.state.manage.runtime_setup_core_browser_open;
+                        return;
+                    }
+                    index -= 1;
+                    if self.state.manage.runtime_setup_core_browser_open {
+                        for entry in &remote_entries {
+                            if entry.install_policy.can_install_in_app()
+                                && entry.source.can_install_in_app()
+                            {
+                                if index == 0 {
+                                    self.start_catalog_core_install_job(entry.id.clone());
+                                    return;
+                                }
+                                index -= 1;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         if selected == "ALL" && self.runtime_setup_welcome_visible() {
             if index == 0 {
                 self.complete_runtime_setup_welcome();
@@ -2240,7 +2309,9 @@ impl NativeArcadeUiApp {
                         .chain(group.compatible.iter())
                         .chain(group.protected.iter())
                     {
-                        if entry.install_policy.can_install_in_app() {
+                        if entry.install_policy.can_install_in_app()
+                            && entry.source.can_install_in_app()
+                        {
                             if index == 0 {
                                 self.start_catalog_core_install_job(entry.id.clone());
                                 return;
@@ -2258,7 +2329,9 @@ impl NativeArcadeUiApp {
                     }
                     if self.state.manage.runtime_setup_core_browser_open {
                         for entry in &group.advanced {
-                            if entry.install_policy.can_install_in_app() {
+                            if entry.install_policy.can_install_in_app()
+                                && entry.source.can_install_in_app()
+                            {
                                 if index == 0 {
                                     self.start_catalog_core_install_job(entry.id.clone());
                                     return;
@@ -2425,7 +2498,7 @@ impl NativeArcadeUiApp {
             return;
         };
         let view = DependencySetupView::from_report(&report);
-        let component_ids = if system == "ALL" {
+        let mut component_ids = if system == "ALL" {
             view.missing_required_standard_core_ids()
         } else {
             view.system_setup(&system)
@@ -2444,6 +2517,30 @@ impl NativeArcadeUiApp {
                 })
                 .unwrap_or_default()
         };
+        if let Some(catalog) = self.state.manage.core_catalog.as_ref() {
+            component_ids.retain(|component_id| {
+                let Some(status) = report
+                    .components
+                    .iter()
+                    .find(|status| status.component.id == *component_id)
+                else {
+                    return false;
+                };
+                let Some(file_name) = status
+                    .component
+                    .target_path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                else {
+                    return true;
+                };
+                catalog.entries.iter().any(|entry| {
+                    entry.expected_archive_member == file_name
+                        && entry.install_policy.can_install_in_app()
+                        && entry.source.can_install_in_app()
+                })
+            });
+        }
         let scope = if system == "ALL" {
             ManageScope::AllSystems
         } else {
@@ -2923,7 +3020,9 @@ fn runtime_setup_catalog_group_action_count(
         .iter()
         .chain(group.compatible.iter())
         .chain(group.protected.iter())
-        .filter(|entry| entry.install_policy.can_install_in_app())
+        .filter(|entry| {
+            entry.install_policy.can_install_in_app() && entry.source.can_install_in_app()
+        })
         .count();
     if !group.advanced.is_empty() {
         count += 1; // Advanced Core Browser toggle.
@@ -2931,7 +3030,9 @@ fn runtime_setup_catalog_group_action_count(
             count += group
                 .advanced
                 .iter()
-                .filter(|entry| entry.install_policy.can_install_in_app())
+                .filter(|entry| {
+                    entry.install_policy.can_install_in_app() && entry.source.can_install_in_app()
+                })
                 .count();
         }
     }

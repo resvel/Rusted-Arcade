@@ -3,8 +3,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::{
-    dependency_buildbot_base_url, dependency_core_root, normalize_system, resolve_core,
-    runtime_arch, PathsConfig,
+    classify_libretro_core_info, dependency_buildbot_base_url, dependency_core_root,
+    normalize_system, resolve_core, runtime_arch, LibretroInfoIndex, PathsConfig,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -16,6 +16,26 @@ impl CoreCatalog {
     pub fn for_paths(paths: &PathsConfig) -> Self {
         let core_root = dependency_core_root(paths);
         let entries = curated_catalog_entries(&core_root);
+        Self { entries }
+    }
+
+    pub fn for_paths_with_buildbot_listing(
+        paths: &PathsConfig,
+        listing: Option<&BuildbotCoreListing>,
+    ) -> Self {
+        Self::for_paths_with_buildbot_listing_and_info(paths, listing, None)
+    }
+
+    pub fn for_paths_with_buildbot_listing_and_info(
+        paths: &PathsConfig,
+        listing: Option<&BuildbotCoreListing>,
+        info_index: Option<&LibretroInfoIndex>,
+    ) -> Self {
+        let core_root = dependency_core_root(paths);
+        let mut entries = curated_catalog_entries(&core_root);
+        if let Some(listing) = listing {
+            apply_buildbot_listing(&mut entries, listing, info_index, &core_root);
+        }
         Self { entries }
     }
 
@@ -60,6 +80,20 @@ impl CoreCatalog {
             .map(|(system, entries)| CoreCatalogSystemGroup::from_entries(system, entries))
             .collect()
     }
+
+    pub fn remote_buildbot_entries(&self) -> Vec<CoreCatalogEntry> {
+        let mut entries = self
+            .entries
+            .iter()
+            .filter(|entry| {
+                entry.systems.iter().any(|system| system == "ALL")
+                    && entry.compatibility == CoreCatalogCompatibility::Advanced
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        entries.sort_by(entry_sort);
+        entries
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -95,6 +129,51 @@ impl CoreCatalogEntry {
     pub fn is_recommended_catalog_entry(&self) -> bool {
         self.compatibility == CoreCatalogCompatibility::Recommended
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BuildbotCoreListing {
+    pub source_url: String,
+    pub archive_file_names: Vec<String>,
+}
+
+impl BuildbotCoreListing {
+    pub fn new(source_url: impl Into<String>, mut archive_file_names: Vec<String>) -> Self {
+        archive_file_names.sort();
+        archive_file_names.dedup();
+        Self {
+            source_url: source_url.into(),
+            archive_file_names,
+        }
+    }
+
+    pub fn contains_archive(&self, archive_file_name: &str) -> bool {
+        self.archive_file_names
+            .binary_search_by(|candidate| candidate.as_str().cmp(archive_file_name))
+            .is_ok()
+    }
+}
+
+pub fn parse_buildbot_core_listing(source_url: &str, html: &str) -> BuildbotCoreListing {
+    let mut archive_file_names = Vec::new();
+    for token in html
+        .split(|ch: char| ch == '<' || ch == '>' || ch == '"' || ch == '\'' || ch.is_whitespace())
+    {
+        let file_name = token
+            .rsplit('/')
+            .next()
+            .unwrap_or(token)
+            .split('?')
+            .next()
+            .unwrap_or(token)
+            .split('#')
+            .next()
+            .unwrap_or(token);
+        if file_name.ends_with("_libretro.dylib.zip") {
+            archive_file_names.push(file_name.to_string());
+        }
+    }
+    BuildbotCoreListing::new(source_url, archive_file_names)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -548,8 +627,31 @@ fn protected_entry(spec: CompatibilityEntrySpec, core_root: &Path) -> CoreCatalo
 }
 
 fn advanced_entry(spec: CompatibilityEntrySpec, core_root: &Path) -> CoreCatalogEntry {
-    let archive_file_name = format!("{}.zip", spec.dylib_name);
-    let target_path = core_root.join(spec.dylib_name);
+    advanced_buildbot_entry(
+        spec.id,
+        spec.system,
+        spec.core_name,
+        spec.display_name,
+        spec.dylib_name,
+        core_root,
+        spec.notes.into_iter().map(str::to_string).collect(),
+        spec.warnings.into_iter().map(str::to_string).collect(),
+    )
+}
+
+fn advanced_buildbot_entry(
+    id: impl Into<String>,
+    system: impl Into<String>,
+    core_name: impl Into<String>,
+    display_name: impl Into<String>,
+    dylib_name: impl Into<String>,
+    core_root: &Path,
+    notes: Vec<String>,
+    warnings: Vec<String>,
+) -> CoreCatalogEntry {
+    let dylib_name = dylib_name.into();
+    let archive_file_name = format!("{dylib_name}.zip");
+    let target_path = core_root.join(&dylib_name);
     let source = dependency_buildbot_base_url()
         .map(|base_url| CoreCatalogSource::LibretroBuildbot {
             base_url: base_url.to_string(),
@@ -562,23 +664,132 @@ fn advanced_entry(spec: CompatibilityEntrySpec, core_root: &Path) -> CoreCatalog
             ),
         });
 
+    let install_policy = if matches!(source, CoreCatalogSource::LibretroBuildbot { .. }) {
+        CoreCatalogInstallPolicy::AdvancedDownloadable
+    } else {
+        CoreCatalogInstallPolicy::Unavailable
+    };
+
     CoreCatalogEntry {
-        id: spec.id.to_string(),
-        core_name: spec.core_name.to_string(),
-        display_name: spec.display_name.to_string(),
-        systems: vec![spec.system.to_string()],
+        id: id.into(),
+        core_name: core_name.into(),
+        display_name: display_name.into(),
+        systems: vec![system.into()],
         buildbot_file_name: Some(archive_file_name),
-        expected_archive_member: spec.dylib_name.to_string(),
+        expected_archive_member: dylib_name,
         source,
         target_path: target_path.clone(),
         install_state: CoreCatalogInstallState::from_target_path(&target_path),
         is_default_core_for_system: false,
         compatibility: CoreCatalogCompatibility::Advanced,
-        install_policy: CoreCatalogInstallPolicy::AdvancedDownloadable,
+        install_policy,
         label: CoreCatalogCompatibility::Advanced.label().to_string(),
-        notes: spec.notes.into_iter().map(str::to_string).collect(),
-        warnings: spec.warnings.into_iter().map(str::to_string).collect(),
+        notes,
+        warnings,
     }
+}
+
+fn apply_buildbot_listing(
+    entries: &mut Vec<CoreCatalogEntry>,
+    listing: &BuildbotCoreListing,
+    info_index: Option<&LibretroInfoIndex>,
+    core_root: &Path,
+) {
+    for entry in entries.iter_mut() {
+        let Some(archive_file_name) = entry.buildbot_file_name.as_deref() else {
+            continue;
+        };
+        if !listing.contains_archive(archive_file_name) {
+            entry.source = CoreCatalogSource::Unavailable {
+                reason: format!(
+                    "{} is not present in the live buildbot listing for {}",
+                    archive_file_name,
+                    runtime_arch()
+                ),
+            };
+            entry.install_policy = CoreCatalogInstallPolicy::Unavailable;
+            entry.warnings.push(String::from(
+                "This catalog entry was not present in the latest live buildbot listing.",
+            ));
+        }
+    }
+
+    for archive_file_name in &listing.archive_file_names {
+        if entries
+            .iter()
+            .any(|entry| entry.buildbot_file_name.as_deref() == Some(archive_file_name.as_str()))
+        {
+            continue;
+        }
+        let Some(core_name) = archive_file_name.strip_suffix("_libretro.dylib.zip") else {
+            continue;
+        };
+        let dylib_name = format!("{core_name}_libretro.dylib");
+        let core_info = info_index.and_then(|index| index.get(core_name));
+        let classification = core_info.map(classify_libretro_core_info);
+        let systems = classification
+            .as_ref()
+            .map(|classification| classification.systems.clone())
+            .unwrap_or_else(|| vec![String::from("ALL")]);
+        let display_name = core_info
+            .and_then(|info| info.display_name.as_deref())
+            .filter(|display_name| !display_name.trim().is_empty())
+            .map(str::to_string)
+            .unwrap_or_else(|| remote_core_display_name(core_name));
+        entries.push(advanced_buildbot_entry(
+            format!("remote-buildbot-{core_name}"),
+            systems
+                .first()
+                .cloned()
+                .unwrap_or_else(|| String::from("ALL")),
+            core_name.to_string(),
+            display_name,
+            dylib_name,
+            core_root,
+            vec![format!(
+                "Discovered from live buildbot listing: {}",
+                listing.source_url
+            )],
+            vec![String::from(
+                "Unclassified live buildbot core. It may be untested or incompatible; use only from Advanced Core Browser.",
+            )],
+        ));
+        if let Some(entry) = entries.last_mut() {
+            if let Some(classification) = classification {
+                entry.systems = classification.systems;
+                entry.compatibility = classification.compatibility;
+                entry.label = classification.compatibility.label().to_string();
+                entry.notes.extend(classification.notes);
+                entry.warnings = classification.warnings;
+                if classification.compatibility == CoreCatalogCompatibility::Compatible {
+                    entry.install_policy = CoreCatalogInstallPolicy::Downloadable;
+                }
+            } else if systems.len() > 1 {
+                entry.systems = systems;
+            }
+        }
+    }
+    entries.sort_by(|left, right| {
+        left.systems
+            .first()
+            .cmp(&right.systems.first())
+            .then(entry_sort(left, right))
+    });
+}
+
+fn remote_core_display_name(core_name: &str) -> String {
+    core_name
+        .split('_')
+        .filter(|part| !part.is_empty())
+        .map(|part| {
+            let mut chars = part.chars();
+            match chars.next() {
+                Some(first) => first.to_uppercase().chain(chars).collect::<String>(),
+                None => String::new(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 #[cfg(test)]
@@ -757,5 +968,147 @@ mod tests {
             .map(|entry| entry.display_name.as_str())
             .collect::<Vec<_>>();
         assert_eq!(compatible_names, vec!["MAME 2003", "MAME 2003-Plus"]);
+    }
+
+    #[test]
+    fn buildbot_listing_parser_extracts_core_archives_from_h5ai_html() {
+        let html = r#"
+            <a href="/nightly/apple/osx/arm64/latest/fceumm_libretro.dylib.zip">fceumm_libretro.dylib.zip</a>
+            <a href='/nightly/apple/osx/arm64/latest/snes9x_libretro.dylib.zip?download=1'>Snes9x</a>
+            <a href="/nightly/apple/osx/arm64/latest/not-a-core.txt">ignore</a>
+            <a href="../parent">Parent Directory</a>
+            <a href="/nightly/apple/osx/arm64/latest/fceumm_libretro.dylib.zip">duplicate</a>
+        "#;
+
+        let listing = parse_buildbot_core_listing("https://buildbot.example/latest", html);
+
+        assert_eq!(
+            listing.archive_file_names,
+            vec![
+                "fceumm_libretro.dylib.zip".to_string(),
+                "snes9x_libretro.dylib.zip".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn live_buildbot_listing_marks_missing_curated_entries_unavailable() {
+        let temp = tempdir().expect("tempdir");
+        let listing = BuildbotCoreListing::new(
+            "https://buildbot.example/latest",
+            vec!["fceumm_libretro.dylib.zip".to_string()],
+        );
+
+        let catalog =
+            CoreCatalog::for_paths_with_buildbot_listing(&paths(temp.path()), Some(&listing));
+
+        let nes = catalog.entry("core-fceumm").expect("fceumm entry");
+        assert_eq!(nes.install_policy, CoreCatalogInstallPolicy::Downloadable);
+        let snes = catalog.entry("core-snes9x").expect("snes9x entry");
+        assert_eq!(snes.install_policy, CoreCatalogInstallPolicy::Unavailable);
+        assert!(matches!(snes.source, CoreCatalogSource::Unavailable { .. }));
+    }
+
+    #[test]
+    fn unknown_live_buildbot_entries_become_advanced_global_entries() {
+        let temp = tempdir().expect("tempdir");
+        let listing = BuildbotCoreListing::new(
+            "https://buildbot.example/latest",
+            vec![
+                "fceumm_libretro.dylib.zip".to_string(),
+                "vecx_libretro.dylib.zip".to_string(),
+            ],
+        );
+
+        let catalog =
+            CoreCatalog::for_paths_with_buildbot_listing(&paths(temp.path()), Some(&listing));
+        let nes = catalog.system_group("NES").expect("nes group");
+        assert!(nes
+            .advanced
+            .iter()
+            .all(|entry| entry.id != "remote-buildbot-vecx"));
+        let remote_entries = catalog.remote_buildbot_entries();
+        let remote = remote_entries
+            .iter()
+            .find(|entry| entry.id == "remote-buildbot-vecx")
+            .expect("remote vecx entry");
+
+        assert_eq!(remote.core_name, "vecx");
+        assert_eq!(remote.systems, vec!["ALL".to_string()]);
+        assert_eq!(
+            remote.install_policy,
+            CoreCatalogInstallPolicy::AdvancedDownloadable
+        );
+    }
+
+    #[test]
+    fn libretro_info_can_classify_reliable_remote_only_entries() {
+        let temp = tempdir().expect("tempdir");
+        let listing = BuildbotCoreListing::new(
+            "https://buildbot.example/latest",
+            vec![
+                "quicknes_libretro.dylib.zip".to_string(),
+                "vecx_libretro.dylib.zip".to_string(),
+            ],
+        );
+        let info_index = LibretroInfoIndex::from_infos([(
+            "quicknes",
+            r#"
+                display_name = "QuickNES"
+                systemid = "Nintendo - Nintendo Entertainment System"
+                database = "Nintendo - Nintendo Entertainment System"
+            "#,
+        )]);
+
+        let catalog = CoreCatalog::for_paths_with_buildbot_listing_and_info(
+            &paths(temp.path()),
+            Some(&listing),
+            Some(&info_index),
+        );
+        let nes = catalog.system_group("NES").expect("nes group");
+        let quicknes = nes
+            .compatible
+            .iter()
+            .find(|entry| entry.id == "remote-buildbot-quicknes")
+            .expect("classified quicknes");
+
+        assert_eq!(quicknes.display_name, "QuickNES");
+        assert_eq!(quicknes.systems, vec!["NES".to_string()]);
+        assert_eq!(quicknes.compatibility, CoreCatalogCompatibility::Compatible);
+        assert_eq!(
+            quicknes.install_policy,
+            CoreCatalogInstallPolicy::Downloadable
+        );
+        assert!(catalog
+            .remote_buildbot_entries()
+            .iter()
+            .any(|entry| entry.id == "remote-buildbot-vecx"));
+    }
+
+    #[test]
+    fn libretro_info_does_not_override_curated_catalog_entries() {
+        let temp = tempdir().expect("tempdir");
+        let listing = BuildbotCoreListing::new(
+            "https://buildbot.example/latest",
+            vec!["fceumm_libretro.dylib.zip".to_string()],
+        );
+        let info_index = LibretroInfoIndex::from_infos([(
+            "fceumm",
+            r#"
+                display_name = "Wrong Name"
+                systemid = "Sony - PlayStation 2"
+            "#,
+        )]);
+
+        let catalog = CoreCatalog::for_paths_with_buildbot_listing_and_info(
+            &paths(temp.path()),
+            Some(&listing),
+            Some(&info_index),
+        );
+        let fceumm = catalog.entry("core-fceumm").expect("curated fceumm");
+
+        assert_eq!(fceumm.display_name, "FCEUmm");
+        assert_eq!(fceumm.systems, vec!["NES".to_string()]);
+        assert_eq!(fceumm.compatibility, CoreCatalogCompatibility::Recommended);
     }
 }

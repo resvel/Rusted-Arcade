@@ -11,21 +11,23 @@ use arcade_data::{DataError, Database, ScanUpsertOutcome, ScannedRomInput};
 use arcade_domain::{
     default_gamepad_mapping_for_system, dependency_buildbot_base_url, dependency_core_root,
     dependency_manifest, get_arcade_compatibility, get_dolphin_sys_directory, normalize_core,
-    resolve_core_with_dynamic, resolve_effective_core_override, resolve_path_from_root,
-    scan_dependency_report, AppConfig, CoreCatalog, CoreCatalogInstallState, CoreCatalogSource,
-    CoverScrapePlatformIds, CoverScrapeRunOptions, CoverScrapeSettingsInput, CoverScrapingConfig,
-    DependencyReport, DependencySource, DetectedPadIdentity, DreamcastInputMode,
-    DynamicCoreProfile, LocalCoverRelinkRunOptions, ManageOperationKind, ManageOperationSummary,
-    ManageProgressEvent, ManageRomStatus, ManageScope, ManagementConfig, N64CpuCoreMode,
-    N64PrimaryStick, PathsConfig, RomCard, RomQuery, SaveLimits, SaveSlotData, SaveSlotSummary,
-    SavedGamepadMappingSummary, StoredGamepadMapping, PCECD_ACCEPTED_BIOS_FILES,
-    SATURN_ACCEPTED_BIOS_FILES, SYSTEM_DEFAULT_MAPPING_KEY,
+    parse_buildbot_core_listing, resolve_core_with_dynamic, resolve_effective_core_override,
+    resolve_path_from_root, scan_dependency_report, AppConfig, BuildbotCoreListing, CoreCatalog,
+    CoreCatalogInstallState, CoreCatalogSource, CoverScrapePlatformIds, CoverScrapeRunOptions,
+    CoverScrapeSettingsInput, CoverScrapingConfig, DependencyReport, DependencySource,
+    DetectedPadIdentity, DreamcastInputMode, DynamicCoreProfile, LibretroInfoIndex,
+    LocalCoverRelinkRunOptions, ManageOperationKind, ManageOperationSummary, ManageProgressEvent,
+    ManageRomStatus, ManageScope, ManagementConfig, N64CpuCoreMode, N64PrimaryStick, PathsConfig,
+    RomCard, RomQuery, SaveLimits, SaveSlotData, SaveSlotSummary, SavedGamepadMappingSummary,
+    StoredGamepadMapping, PCECD_ACCEPTED_BIOS_FILES, SATURN_ACCEPTED_BIOS_FILES,
+    SYSTEM_DEFAULT_MAPPING_KEY,
 };
 use sha1::{Digest, Sha1};
 use tracing::warn;
 
 const DEFAULT_SLOT_MAX_BYTES: i64 = 5 * 1024 * 1024;
 const DEFAULT_PROFILE_MAX_BYTES: i64 = 25 * 1024 * 1024;
+const LIBRETRO_INFO_ZIP_URL: &str = "https://buildbot.libretro.com/assets/frontend/info.zip";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ArcadeResolvedMetadata {
@@ -991,7 +993,37 @@ impl NativeServices {
 
     pub fn core_catalog(&self) -> Result<CoreCatalog> {
         let config = self.current_config()?;
-        Ok(CoreCatalog::for_paths(&config.paths))
+        Ok(self.core_catalog_for_config(&config))
+    }
+
+    fn core_catalog_for_config(&self, config: &AppConfig) -> CoreCatalog {
+        let listing = self.load_buildbot_listing_for_paths(&config.paths);
+        let metadata = self.load_buildbot_core_metadata_for_paths(&config.paths);
+        CoreCatalog::for_paths_with_buildbot_listing_and_info(
+            &config.paths,
+            listing.as_ref(),
+            metadata.as_ref(),
+        )
+    }
+
+    fn load_buildbot_listing_for_paths(&self, paths: &PathsConfig) -> Option<BuildbotCoreListing> {
+        let Some(base_url) = dependency_buildbot_base_url() else {
+            return None;
+        };
+        let source_url = base_url.trim_end_matches('/').to_string();
+        let cache_path = buildbot_listing_cache_path(paths);
+        load_buildbot_listing_from_source(&source_url, &cache_path, download_text)
+    }
+
+    fn load_buildbot_core_metadata_for_paths(
+        &self,
+        paths: &PathsConfig,
+    ) -> Option<LibretroInfoIndex> {
+        load_buildbot_core_metadata_from_source(
+            LIBRETRO_INFO_ZIP_URL,
+            &libretro_info_zip_cache_path(paths),
+            download_bytes,
+        )
     }
 
     pub fn runtime_setup_welcome_completed(&self) -> bool {
@@ -1165,7 +1197,7 @@ impl NativeServices {
         progress: impl Fn(ManageProgressEvent),
     ) -> Result<ManageOperationSummary> {
         let config = self.current_config()?;
-        let catalog = CoreCatalog::for_paths(&config.paths);
+        let catalog = self.core_catalog_for_config(&config);
         let entry = catalog
             .entry(&request.catalog_id)
             .cloned()
@@ -1244,7 +1276,7 @@ impl NativeServices {
             total: Some(1),
             message: String::from("Rescanning core catalog..."),
         });
-        let refreshed = CoreCatalog::for_paths(&config.paths);
+        let refreshed = self.core_catalog_for_config(&config);
         let refreshed_entry = refreshed
             .entry(&entry.id)
             .ok_or_else(|| anyhow!("catalog entry disappeared after install: {}", entry.id))?;
@@ -1598,6 +1630,154 @@ fn download_bytes(url: &str) -> Result<Vec<u8>> {
         .into_reader()
         .read_to_end(&mut bytes)?;
     Ok(bytes)
+}
+
+fn download_text(url: &str) -> Result<String> {
+    ureq::get(url)
+        .call()
+        .map_err(|err| anyhow!("download failed from {url}: {err}"))?
+        .into_string()
+        .with_context(|| format!("failed to read text response from {url}"))
+}
+
+fn load_buildbot_listing_from_source(
+    source_url: &str,
+    cache_path: &Path,
+    downloader: impl FnOnce(&str) -> Result<String>,
+) -> Option<BuildbotCoreListing> {
+    match downloader(source_url) {
+        Ok(html) => {
+            let listing = parse_buildbot_core_listing(source_url, &html);
+            if listing.archive_file_names.is_empty() {
+                warn!(
+                    url = %source_url,
+                    "live buildbot listing parsed zero core archives, trying cache instead"
+                );
+                return load_cached_buildbot_listing(source_url, cache_path);
+            }
+            if let Some(parent) = cache_path.parent() {
+                if let Err(err) = fs::create_dir_all(parent) {
+                    warn!(path = %parent.display(), "failed to create buildbot listing cache directory: {err:#}");
+                }
+            }
+            if let Err(err) = fs::write(cache_path, &html) {
+                warn!(path = %cache_path.display(), "failed to write buildbot listing cache: {err:#}");
+            }
+            Some(listing)
+        }
+        Err(err) => {
+            warn!(
+                url = %source_url,
+                "failed to refresh live buildbot listing, trying cache: {err:#}"
+            );
+            load_cached_buildbot_listing(source_url, cache_path)
+        }
+    }
+}
+
+fn load_cached_buildbot_listing(
+    source_url: &str,
+    cache_path: &Path,
+) -> Option<BuildbotCoreListing> {
+    fs::read_to_string(cache_path).ok().and_then(|html| {
+        let listing = parse_buildbot_core_listing(source_url, &html);
+        if listing.archive_file_names.is_empty() {
+            warn!(path = %cache_path.display(), "cached buildbot listing parsed zero core archives");
+            None
+        } else {
+            Some(listing)
+        }
+    })
+}
+
+fn buildbot_listing_cache_path(paths: &PathsConfig) -> PathBuf {
+    paths.core_root.join("metadata").join(format!(
+        "buildbot-{}-latest.html",
+        arcade_domain::runtime_arch()
+    ))
+}
+
+fn load_buildbot_core_metadata_from_source(
+    source_url: &str,
+    cache_path: &Path,
+    downloader: impl FnOnce(&str) -> Result<Vec<u8>>,
+) -> Option<LibretroInfoIndex> {
+    match downloader(source_url) {
+        Ok(bytes) => match parse_libretro_info_zip_bytes(&bytes, source_url) {
+            Ok(index) if !index.is_empty() => {
+                if let Some(parent) = cache_path.parent() {
+                    if let Err(err) = fs::create_dir_all(parent) {
+                        warn!(path = %parent.display(), "failed to create libretro info cache directory: {err:#}");
+                    }
+                }
+                if let Err(err) = fs::write(cache_path, &bytes) {
+                    warn!(path = %cache_path.display(), "failed to write libretro info zip cache: {err:#}");
+                }
+                Some(index)
+            }
+            Ok(_) => {
+                warn!(url = %source_url, "live libretro info.zip parsed zero metadata entries, trying cache instead");
+                load_cached_buildbot_core_metadata(source_url, cache_path)
+            }
+            Err(err) => {
+                warn!(url = %source_url, "failed to parse live libretro info.zip, trying cache: {err:#}");
+                load_cached_buildbot_core_metadata(source_url, cache_path)
+            }
+        },
+        Err(err) => {
+            warn!(url = %source_url, "failed to refresh libretro info.zip, trying cache: {err:#}");
+            load_cached_buildbot_core_metadata(source_url, cache_path)
+        }
+    }
+}
+
+fn load_cached_buildbot_core_metadata(
+    source_url: &str,
+    cache_path: &Path,
+) -> Option<LibretroInfoIndex> {
+    let bytes = fs::read(cache_path).ok()?;
+    match parse_libretro_info_zip_bytes(&bytes, source_url) {
+        Ok(index) if !index.is_empty() => Some(index),
+        Ok(_) => {
+            warn!(path = %cache_path.display(), "cached libretro info.zip parsed zero metadata entries");
+            None
+        }
+        Err(err) => {
+            warn!(path = %cache_path.display(), "failed to parse cached libretro info.zip: {err:#}");
+            None
+        }
+    }
+}
+
+fn parse_libretro_info_zip_bytes(bytes: &[u8], source_label: &str) -> Result<LibretroInfoIndex> {
+    let reader = std::io::Cursor::new(bytes);
+    let mut archive =
+        zip::ZipArchive::new(reader).with_context(|| format!("failed to read {source_label}"))?;
+    let mut index = LibretroInfoIndex::new();
+    for index_in_zip in 0..archive.len() {
+        let mut file = archive.by_index(index_in_zip)?;
+        if !file.is_file() {
+            continue;
+        }
+        let name = file.name().to_string();
+        let Some(file_name) = Path::new(&name).file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        let Some(core_name) = file_name.strip_suffix("_libretro.info") else {
+            continue;
+        };
+        let mut text = String::new();
+        file.read_to_string(&mut text)
+            .with_context(|| format!("failed to read {file_name} from {source_label}"))?;
+        index.insert(LibretroInfoIndex::parse_core(core_name, &text));
+    }
+    Ok(index)
+}
+
+fn libretro_info_zip_cache_path(paths: &PathsConfig) -> PathBuf {
+    dependency_core_root(paths)
+        .join("metadata")
+        .join("libretro-info-latest.zip")
 }
 
 fn install_homebrew_package(package_name: &str) -> Result<()> {
@@ -2916,6 +3096,169 @@ mod tests {
             entry.target_path,
             dependency_core_root(&config.paths).join("fceumm_libretro.dylib")
         );
+    }
+
+    #[test]
+    fn buildbot_listing_loader_refreshes_and_writes_cache_without_network() {
+        let tmp = TempDir::new().expect("tempdir");
+        let cache_path = tmp.path().join("metadata").join("buildbot.html");
+        let source_url = "https://buildbot.example.test/latest";
+        let live_html = r#"<a href="fceumm_libretro.dylib.zip">fceumm</a>"#;
+
+        let listing = load_buildbot_listing_from_source(source_url, &cache_path, |url| {
+            assert_eq!(url, source_url);
+            Ok(live_html.to_string())
+        })
+        .expect("listing from injected downloader");
+
+        assert_eq!(listing.source_url, source_url);
+        assert!(listing.contains_archive("fceumm_libretro.dylib.zip"));
+        assert_eq!(
+            fs::read_to_string(&cache_path).expect("cache html"),
+            live_html
+        );
+    }
+
+    #[test]
+    fn buildbot_listing_loader_falls_back_to_cache_when_downloader_fails() {
+        let tmp = TempDir::new().expect("tempdir");
+        let cache_path = tmp.path().join("metadata").join("buildbot.html");
+        fs::create_dir_all(cache_path.parent().expect("cache parent")).expect("cache dir");
+        fs::write(
+            &cache_path,
+            r#"<a href="cached_core_libretro.dylib.zip">cached</a>"#,
+        )
+        .expect("write cache");
+
+        let listing = load_buildbot_listing_from_source(
+            "https://buildbot.example.test/latest",
+            &cache_path,
+            |_| Err(anyhow!("simulated offline failure")),
+        )
+        .expect("cached listing");
+
+        assert!(listing.contains_archive("cached_core_libretro.dylib.zip"));
+    }
+
+    #[test]
+    fn buildbot_listing_loader_returns_none_when_downloader_and_cache_fail() {
+        let tmp = TempDir::new().expect("tempdir");
+        let cache_path = tmp.path().join("metadata").join("missing-buildbot.html");
+
+        let listing = load_buildbot_listing_from_source(
+            "https://buildbot.example.test/latest",
+            &cache_path,
+            |_| Err(anyhow!("simulated offline failure")),
+        );
+
+        assert!(listing.is_none());
+    }
+
+    #[test]
+    fn libretro_info_loader_refreshes_parses_and_writes_zip_cache_without_network() {
+        let tmp = TempDir::new().expect("tempdir");
+        let cache_path = tmp.path().join("metadata").join("libretro-info-latest.zip");
+        let source_url = "https://buildbot.example.test/assets/frontend/info.zip";
+        let live_zip = zip_with_member(
+            "nested/fceumm_libretro.info",
+            br#"
+                display_name = "FCEUmm Test"
+                systemname = "Nintendo - Nintendo Entertainment System"
+                systemid = "nes"
+                hw_render = "false"
+            "#,
+        );
+
+        let metadata = load_buildbot_core_metadata_from_source(source_url, &cache_path, |url| {
+            assert_eq!(url, source_url);
+            Ok(live_zip.clone())
+        })
+        .expect("metadata from injected downloader");
+
+        let fceumm = metadata.get("fceumm").expect("fceumm metadata");
+        assert_eq!(fceumm.display_name.as_deref(), Some("FCEUmm Test"));
+        assert_eq!(
+            arcade_domain::classify_libretro_core_info(fceumm).systems,
+            vec!["NES".to_string()]
+        );
+        assert_eq!(fs::read(&cache_path).expect("cached info zip"), live_zip);
+    }
+
+    #[test]
+    fn libretro_info_loader_falls_back_to_cached_zip_when_downloader_fails() {
+        let tmp = TempDir::new().expect("tempdir");
+        let cache_path = tmp.path().join("metadata").join("libretro-info-latest.zip");
+        fs::create_dir_all(cache_path.parent().expect("cache parent")).expect("cache dir");
+        fs::write(
+            &cache_path,
+            zip_with_member(
+                "cached_core_libretro.info",
+                br#"display_name = "Cached Core"
+systemname = "Arcade""#,
+            ),
+        )
+        .expect("write cache");
+
+        let metadata = load_buildbot_core_metadata_from_source(
+            "https://buildbot.example.test/assets/frontend/info.zip",
+            &cache_path,
+            |_| Err(anyhow!("simulated offline failure")),
+        )
+        .expect("cached metadata");
+
+        assert_eq!(
+            metadata
+                .get("cached_core")
+                .and_then(|metadata| metadata.display_name.as_deref()),
+            Some("Cached Core")
+        );
+    }
+
+    #[test]
+    fn libretro_info_loader_uses_cache_when_live_zip_is_corrupt() {
+        let tmp = TempDir::new().expect("tempdir");
+        let cache_path = tmp.path().join("metadata").join("libretro-info-latest.zip");
+        let cached_zip = zip_with_member(
+            "cached_core_libretro.info",
+            br#"display_name = "Cached Core"
+systemname = "Arcade""#,
+        );
+        fs::create_dir_all(cache_path.parent().expect("cache parent")).expect("cache dir");
+        fs::write(&cache_path, &cached_zip).expect("write cache");
+
+        let metadata = load_buildbot_core_metadata_from_source(
+            "https://buildbot.example.test/assets/frontend/info.zip",
+            &cache_path,
+            |_| Ok(b"not a zip".to_vec()),
+        )
+        .expect("cached metadata after corrupt live zip");
+
+        assert!(metadata.get("cached_core").is_some());
+        assert_eq!(fs::read(&cache_path).expect("cache unchanged"), cached_zip);
+    }
+
+    #[test]
+    fn libretro_info_loader_does_not_overwrite_cache_with_zero_entry_zip() {
+        let tmp = TempDir::new().expect("tempdir");
+        let cache_path = tmp.path().join("metadata").join("libretro-info-latest.zip");
+        let cached_zip = zip_with_member(
+            "cached_core_libretro.info",
+            br#"display_name = "Cached Core"
+systemname = "Arcade""#,
+        );
+        fs::create_dir_all(cache_path.parent().expect("cache parent")).expect("cache dir");
+        fs::write(&cache_path, &cached_zip).expect("write cache");
+        let zero_entry_zip = zip_with_member("readme.txt", b"not metadata");
+
+        let metadata = load_buildbot_core_metadata_from_source(
+            "https://buildbot.example.test/assets/frontend/info.zip",
+            &cache_path,
+            |_| Ok(zero_entry_zip),
+        )
+        .expect("cached metadata after zero-entry live zip");
+
+        assert!(metadata.get("cached_core").is_some());
+        assert_eq!(fs::read(&cache_path).expect("cache unchanged"), cached_zip);
     }
 
     fn zip_with_member(member: &str, bytes: &[u8]) -> Vec<u8> {
