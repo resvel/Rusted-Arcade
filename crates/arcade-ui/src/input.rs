@@ -2872,12 +2872,20 @@ fn action_to_retro_binding(
             "R" => Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_R)),
             "Start" => Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_START)),
             "Z" => Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_L2)),
-            "C-Up" => Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_X)),
-            "C-Right" => Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_A)),
-            "C-Left" => Some(RetroActionBinding::Analog {
+            "C-Up" => Some(RetroActionBinding::Analog {
+                index: c_stick_index,
+                axis_id: RETRO_DEVICE_ID_ANALOG_Y,
+                value: -1.0,
+            }),
+            "C-Right" => Some(RetroActionBinding::Analog {
                 index: c_stick_index,
                 axis_id: RETRO_DEVICE_ID_ANALOG_X,
                 value: -1.0,
+            }),
+            "C-Left" => Some(RetroActionBinding::Analog {
+                index: c_stick_index,
+                axis_id: RETRO_DEVICE_ID_ANALOG_X,
+                value: 1.0,
             }),
             "C-Down" => Some(RetroActionBinding::Analog {
                 index: c_stick_index,
@@ -5108,18 +5116,26 @@ mod tests {
         );
         assert_eq!(
             action_to_retro_binding("N64", "C-Up", None),
-            Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_X))
+            Some(RetroActionBinding::Analog {
+                index: RETRO_DEVICE_INDEX_ANALOG_RIGHT,
+                axis_id: RETRO_DEVICE_ID_ANALOG_Y,
+                value: -1.0,
+            })
         );
         assert_eq!(
             action_to_retro_binding("N64", "C-Right", None),
-            Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_A))
+            Some(RetroActionBinding::Analog {
+                index: RETRO_DEVICE_INDEX_ANALOG_RIGHT,
+                axis_id: RETRO_DEVICE_ID_ANALOG_X,
+                value: -1.0,
+            })
         );
         assert_eq!(
             action_to_retro_binding("N64", "C-Left", None),
             Some(RetroActionBinding::Analog {
                 index: RETRO_DEVICE_INDEX_ANALOG_RIGHT,
                 axis_id: RETRO_DEVICE_ID_ANALOG_X,
-                value: -1.0,
+                value: 1.0,
             })
         );
         assert_eq!(
@@ -5143,7 +5159,7 @@ mod tests {
             Some(RetroActionBinding::Analog {
                 index: RETRO_DEVICE_INDEX_ANALOG_LEFT,
                 axis_id: RETRO_DEVICE_ID_ANALOG_X,
-                value: -1.0,
+                value: 1.0,
             })
         );
         assert_eq!(
