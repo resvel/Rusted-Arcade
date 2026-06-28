@@ -3,12 +3,13 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 
 use arcade_domain::{
+    CoreCatalogCompatibility, CoreCatalogEntry, CoreCatalogInstallPolicy, CoreCatalogInstallState,
     CoverScrapeRunOptions, CoverScrapeSettingsInput, DependencyComponentKind, DependencySetupView,
     DependencySource, DependencyState, DependencySystemReadiness, LocalCoverRelinkRunOptions,
     ManageOperationKind, ManageOperationSummary, ManageProgressEvent, ManageScope, N64CpuCoreMode,
     PathsConfig,
 };
-use arcade_services::DependencyInstallRequest;
+use arcade_services::{CatalogCoreInstallRequest, DependencyInstallRequest};
 use eframe::egui;
 
 use crate::app::{ManageUiMessage, NativeArcadeUiApp};
@@ -79,7 +80,7 @@ impl NativeArcadeUiApp {
         self.state.manage.settings_delay_ms = scrape.default_delay_ms.to_string();
         self.state.manage.scrape_limit = scrape.default_limit.to_string();
         self.state.manage.scrape_delay_ms = scrape.default_delay_ms.to_string();
-        self.refresh_dependency_report();
+        self.refresh_runtime_setup_state();
     }
 
     pub(crate) fn settings_core_profiles_for_selected_system(
@@ -132,6 +133,7 @@ impl NativeArcadeUiApp {
         self.state.manage.settings_selected_system = system.to_string();
         self.state.manage.runtime_setup_focus_index = 0;
         self.state.manage.runtime_setup_advanced_open = false;
+        self.state.manage.runtime_setup_core_browser_open = false;
         self.state.menu_nav.settings_core_tab_index = 0;
         self.state.menu_nav.settings_core_variable_index = 0;
         self.state.menu_nav.settings_core_option_index = 0;
@@ -210,12 +212,13 @@ impl NativeArcadeUiApp {
                     if let Err(err) = self.refresh_all() {
                         self.state.status = format!("Refresh warning: {err}");
                     }
-                    self.refresh_dependency_report();
+                    self.sync_manage_settings_from_services();
                     self.refresh_manage_rows();
                 }
                 Err(err) => {
                     self.state.manage.status_message = format!("Manage action failed: {err}");
                     self.state.status = self.state.manage.status_message.clone();
+                    self.refresh_runtime_setup_state();
                 }
             }
         }
@@ -821,6 +824,9 @@ impl NativeArcadeUiApp {
         self.draw_runtime_setup_primary_actions(ui, palette, view, "ALL", &mut focus_cursor);
         ui.add_space(10.0);
 
+        self.draw_runtime_setup_all_cores_summary(ui, palette);
+        ui.add_space(10.0);
+
         if self.runtime_setup_welcome_visible() {
             draw_runtime_section_heading(ui, "First Run", palette);
             ui.label(
@@ -891,6 +897,9 @@ impl NativeArcadeUiApp {
         self.draw_runtime_setup_primary_actions(ui, palette, view, system, &mut focus_cursor);
         ui.add_space(10.0);
 
+        self.draw_runtime_setup_cores_section(ui, palette, system, &mut focus_cursor);
+        ui.add_space(10.0);
+
         draw_runtime_section_heading(ui, "Rusted Arcade Can", palette);
         if setup.automatic_actions.is_empty() {
             ui.label(
@@ -954,6 +963,218 @@ impl NativeArcadeUiApp {
         }
     }
 
+    fn draw_runtime_setup_all_cores_summary(
+        &mut self,
+        ui: &mut egui::Ui,
+        palette: crate::theme::ThemePalette,
+    ) {
+        draw_runtime_section_heading(ui, "Cores", palette);
+        let Some(catalog) = self.state.manage.core_catalog.as_ref() else {
+            ui.label(
+                egui::RichText::new("Core catalog has not been scanned yet. Use Rescan to refresh runtime core status.")
+                    .small()
+                    .color(palette.text_muted),
+            );
+            return;
+        };
+
+        let mut missing_recommended = 0usize;
+        let mut installed_recommended = 0usize;
+        for group in catalog.system_groups() {
+            for entry in group.recommended {
+                if entry.installed() {
+                    installed_recommended += 1;
+                } else {
+                    missing_recommended += 1;
+                }
+            }
+        }
+        ui.label(
+            egui::RichText::new(format!(
+                "Recommended core status: {installed_recommended} installed · {missing_recommended} missing. Pick a system above to download or repair individual cores."
+            ))
+            .small()
+            .color(palette.text_muted),
+        );
+        ui.label(
+            egui::RichText::new(
+                "ALL stays conservative: no full catalog browser and no download-all action.",
+            )
+            .small()
+            .color(palette.text_muted),
+        );
+    }
+
+    fn draw_runtime_setup_cores_section(
+        &mut self,
+        ui: &mut egui::Ui,
+        palette: crate::theme::ThemePalette,
+        system: &str,
+        focus_cursor: &mut usize,
+    ) {
+        draw_runtime_section_heading(ui, "Cores", palette);
+        let Some(group) = self
+            .state
+            .manage
+            .core_catalog
+            .as_ref()
+            .and_then(|catalog| catalog.system_group(system))
+        else {
+            ui.label(
+                egui::RichText::new("No catalog entries are available for this system yet.")
+                    .small()
+                    .color(palette.text_muted),
+            );
+            return;
+        };
+
+        if group.recommended.is_empty() {
+            ui.label(
+                egui::RichText::new("No downloadable recommended core is listed for this system.")
+                    .small()
+                    .color(palette.text_muted),
+            );
+        } else {
+            for entry in &group.recommended {
+                self.draw_runtime_core_catalog_row(ui, entry, palette, focus_cursor);
+                ui.separator();
+            }
+        }
+
+        if !group.compatible.is_empty() || !group.protected.is_empty() {
+            ui.add_space(4.0);
+            ui.label(
+                egui::RichText::new("Other compatible / protected cores")
+                    .size(12.0)
+                    .strong()
+                    .color(palette.text),
+            );
+            for entry in group.compatible.iter().chain(group.protected.iter()) {
+                self.draw_runtime_core_catalog_row(ui, entry, palette, focus_cursor);
+                ui.separator();
+            }
+        }
+
+        if !group.advanced.is_empty() {
+            ui.add_space(4.0);
+            let label = if self.state.manage.runtime_setup_core_browser_open {
+                "Hide Advanced Core Browser"
+            } else {
+                "Show Advanced Core Browser"
+            };
+            self.draw_runtime_action_button(ui, palette, focus_cursor, label, |app| {
+                app.state.manage.runtime_setup_core_browser_open =
+                    !app.state.manage.runtime_setup_core_browser_open;
+            });
+            if self.state.manage.runtime_setup_core_browser_open {
+                ui.label(
+                    egui::RichText::new("Advanced buildbot cores may be untested, incompatible, or inappropriate for this platform lane.")
+                        .small()
+                        .color(palette.text_muted),
+                );
+                for entry in &group.advanced {
+                    self.draw_runtime_core_catalog_row(ui, entry, palette, focus_cursor);
+                    ui.separator();
+                }
+            }
+        }
+    }
+
+    fn draw_runtime_core_catalog_row(
+        &mut self,
+        ui: &mut egui::Ui,
+        entry: &CoreCatalogEntry,
+        palette: crate::theme::ThemePalette,
+        focus_cursor: &mut usize,
+    ) {
+        ui.horizontal_wrapped(|ui| {
+            ui.label(
+                egui::RichText::new(&entry.display_name)
+                    .strong()
+                    .color(palette.text),
+            );
+            draw_status_chip(
+                ui,
+                entry.compatibility.label(),
+                catalog_compatibility_color(entry.compatibility, palette),
+            );
+            draw_status_chip(
+                ui,
+                catalog_install_state_label(&entry.install_state),
+                catalog_install_state_color(&entry.install_state, palette),
+            );
+            draw_status_chip(ui, entry.source.label(), palette.text_muted);
+            if entry.is_default_core_for_system {
+                draw_status_chip(ui, "Current default", palette.accent);
+            }
+        });
+        ui.label(
+            egui::RichText::new(format!(
+                "Core: {} · File: {}",
+                entry.core_name, entry.expected_archive_member
+            ))
+            .monospace()
+            .small()
+            .color(palette.text_muted),
+        );
+        if let Some(file_name) = entry.buildbot_file_name.as_deref() {
+            ui.label(
+                egui::RichText::new(format!("Archive: {file_name}"))
+                    .small()
+                    .color(palette.text_muted),
+            );
+        }
+        for note in &entry.notes {
+            ui.label(egui::RichText::new(note).small().color(palette.text_muted));
+        }
+        for warning in &entry.warnings {
+            ui.label(
+                egui::RichText::new(format!("Warning: {warning}"))
+                    .small()
+                    .color(palette.accent),
+            );
+        }
+        if entry.compatibility == CoreCatalogCompatibility::Protected {
+            ui.label(
+                egui::RichText::new("Protected lane: Rusted Arcade will not replace this with a stock buildbot core automatically.")
+                    .small()
+                    .color(palette.accent),
+            );
+        }
+        ui.horizontal_wrapped(|ui| {
+            ui.label(
+                egui::RichText::new(format!("Policy: {}", entry.install_policy.label()))
+                    .small()
+                    .color(palette.text_muted),
+            );
+            if entry.install_policy.can_install_in_app() {
+                let focused = self.runtime_setup_action_focused(*focus_cursor);
+                let label = if entry.installed() {
+                    "Repair"
+                } else {
+                    "Download"
+                };
+                let response = ui.add_enabled(
+                    !self.state.manage.job_running,
+                    manage_button(label, focused, false, palette),
+                );
+                if focused {
+                    Self::paint_selection_glow(ui, response.rect, 255, palette.accent, 0.78);
+                }
+                *focus_cursor += 1;
+                if response.clicked() {
+                    self.start_catalog_core_install_job(entry.id.clone());
+                }
+            } else if entry.install_policy == CoreCatalogInstallPolicy::ManualProtected {
+                ui.label(
+                    egui::RichText::new("Manual import/resource setup only")
+                        .small()
+                        .color(palette.text_muted),
+                );
+            }
+        });
+    }
+
     fn draw_runtime_setup_primary_actions(
         &mut self,
         ui: &mut egui::Ui,
@@ -964,7 +1185,7 @@ impl NativeArcadeUiApp {
     ) {
         ui.horizontal_wrapped(|ui| {
             self.draw_runtime_action_button(ui, palette, focus_cursor, "Rescan", |app| {
-                app.refresh_dependency_report();
+                app.sync_manage_settings_from_services();
             });
             self.draw_runtime_action_button(ui, palette, focus_cursor, "Get What We Can", |app| {
                 app.start_safe_runtime_setup_job(system.to_string());
@@ -1904,6 +2125,11 @@ impl NativeArcadeUiApp {
         });
     }
 
+    pub(crate) fn refresh_runtime_setup_state(&mut self) {
+        self.refresh_dependency_report();
+        self.refresh_core_catalog();
+    }
+
     pub(crate) fn refresh_dependency_report(&mut self) {
         match self.services.dependency_report() {
             Ok(report) => {
@@ -1916,6 +2142,18 @@ impl NativeArcadeUiApp {
         }
     }
 
+    pub(crate) fn refresh_core_catalog(&mut self) {
+        match self.services.core_catalog() {
+            Ok(catalog) => {
+                self.state.manage.core_catalog = Some(catalog);
+            }
+            Err(err) => {
+                self.state.manage.status_message = format!("Failed to scan core catalog: {err}");
+                self.state.status = self.state.manage.status_message.clone();
+            }
+        }
+    }
+
     pub(crate) fn runtime_setup_focus_count(&self, view: &DependencySetupView) -> usize {
         let selected = self.state.manage.settings_selected_system.as_str();
         let mut count = 4; // Rescan, safe setup, open ROM folder, scan games.
@@ -1923,6 +2161,14 @@ impl NativeArcadeUiApp {
             count += 1;
         }
         if selected != "ALL" {
+            if let Some(catalog) = self.state.manage.core_catalog.as_ref() {
+                if let Some(group) = catalog.system_group(selected) {
+                    count += runtime_setup_catalog_group_action_count(
+                        &group,
+                        self.state.manage.runtime_setup_core_browser_open,
+                    );
+                }
+            }
             if let Some(setup) = view.system_setup(selected) {
                 count += setup
                     .automatic_actions
@@ -1954,7 +2200,7 @@ impl NativeArcadeUiApp {
         let selected = self.state.manage.settings_selected_system.clone();
 
         if index == 0 {
-            self.refresh_dependency_report();
+            self.sync_manage_settings_from_services();
             return;
         }
         index -= 1;
@@ -1983,6 +2229,46 @@ impl NativeArcadeUiApp {
                 return;
             }
             index -= 1;
+        }
+
+        if selected != "ALL" {
+            if let Some(catalog) = self.state.manage.core_catalog.as_ref() {
+                if let Some(group) = catalog.system_group(&selected) {
+                    for entry in group
+                        .recommended
+                        .iter()
+                        .chain(group.compatible.iter())
+                        .chain(group.protected.iter())
+                    {
+                        if entry.install_policy.can_install_in_app() {
+                            if index == 0 {
+                                self.start_catalog_core_install_job(entry.id.clone());
+                                return;
+                            }
+                            index -= 1;
+                        }
+                    }
+                    if !group.advanced.is_empty() {
+                        if index == 0 {
+                            self.state.manage.runtime_setup_core_browser_open =
+                                !self.state.manage.runtime_setup_core_browser_open;
+                            return;
+                        }
+                        index -= 1;
+                    }
+                    if self.state.manage.runtime_setup_core_browser_open {
+                        for entry in &group.advanced {
+                            if entry.install_policy.can_install_in_app() {
+                                if index == 0 {
+                                    self.start_catalog_core_install_job(entry.id.clone());
+                                    return;
+                                }
+                                index -= 1;
+                            }
+                        }
+                    }
+                }
+            }
         }
 
         if let Some(setup) = view.system_setup(&selected) {
@@ -2286,6 +2572,20 @@ impl NativeArcadeUiApp {
         });
     }
 
+    fn start_catalog_core_install_job(&mut self, catalog_id: String) {
+        let Some(tx) = self.begin_manage_job("Installing catalog core...") else {
+            return;
+        };
+        let services = self.services.clone();
+        std::thread::spawn(move || {
+            let request = CatalogCoreInstallRequest { catalog_id };
+            let result = services.install_catalog_core(request, |progress| {
+                let _ = tx.send(ManageUiMessage::Progress(progress));
+            });
+            let _ = tx.send(ManageUiMessage::Finished(result));
+        });
+    }
+
     pub(crate) fn sync_manage_nav_state(&mut self) {
         self.state.menu_nav.manage_scope_index = SYSTEM_FILTERS
             .iter()
@@ -2544,6 +2844,39 @@ fn runtime_readiness_color(
     }
 }
 
+fn catalog_install_state_label(state: &CoreCatalogInstallState) -> &'static str {
+    match state {
+        CoreCatalogInstallState::Installed { .. } => "Installed",
+        CoreCatalogInstallState::Missing { .. } => "Missing",
+        CoreCatalogInstallState::Empty { .. } => "Needs repair",
+    }
+}
+
+fn catalog_install_state_color(
+    state: &CoreCatalogInstallState,
+    palette: crate::theme::ThemePalette,
+) -> egui::Color32 {
+    match state {
+        CoreCatalogInstallState::Installed { .. } => palette.text_muted,
+        CoreCatalogInstallState::Missing { .. } | CoreCatalogInstallState::Empty { .. } => {
+            palette.accent
+        }
+    }
+}
+
+fn catalog_compatibility_color(
+    compatibility: CoreCatalogCompatibility,
+    palette: crate::theme::ThemePalette,
+) -> egui::Color32 {
+    match compatibility {
+        CoreCatalogCompatibility::Recommended => palette.accent,
+        CoreCatalogCompatibility::Protected | CoreCatalogCompatibility::Advanced => palette.accent,
+        CoreCatalogCompatibility::Compatible | CoreCatalogCompatibility::Optional => {
+            palette.text_muted
+        }
+    }
+}
+
 fn paint_rect_gradient(ui: &egui::Ui, rect: egui::Rect, top: egui::Color32, bottom: egui::Color32) {
     let mut mesh = egui::epaint::Mesh::default();
     mesh.colored_vertex(rect.left_top(), top);
@@ -2577,6 +2910,30 @@ fn runtime_setup_component_action_count(
     let mut count = 1; // Open Folder.
     if !matches!(status.component.source, DependencySource::UserProvided) {
         count += 1;
+    }
+    count
+}
+
+fn runtime_setup_catalog_group_action_count(
+    group: &arcade_domain::CoreCatalogSystemGroup,
+    advanced_open: bool,
+) -> usize {
+    let mut count = group
+        .recommended
+        .iter()
+        .chain(group.compatible.iter())
+        .chain(group.protected.iter())
+        .filter(|entry| entry.install_policy.can_install_in_app())
+        .count();
+    if !group.advanced.is_empty() {
+        count += 1; // Advanced Core Browser toggle.
+        if advanced_open {
+            count += group
+                .advanced
+                .iter()
+                .filter(|entry| entry.install_policy.can_install_in_app())
+                .count();
+        }
     }
     count
 }

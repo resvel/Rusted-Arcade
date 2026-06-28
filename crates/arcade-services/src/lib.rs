@@ -9,16 +9,17 @@ use std::time::{Duration, UNIX_EPOCH};
 use anyhow::{anyhow, Context, Result};
 use arcade_data::{DataError, Database, ScanUpsertOutcome, ScannedRomInput};
 use arcade_domain::{
-    default_gamepad_mapping_for_system, dependency_buildbot_base_url, dependency_manifest,
-    get_arcade_compatibility, get_dolphin_sys_directory, normalize_core, resolve_core_with_dynamic,
-    resolve_effective_core_override, resolve_path_from_root, scan_dependency_report, AppConfig,
+    default_gamepad_mapping_for_system, dependency_buildbot_base_url, dependency_core_root,
+    dependency_manifest, get_arcade_compatibility, get_dolphin_sys_directory, normalize_core,
+    resolve_core_with_dynamic, resolve_effective_core_override, resolve_path_from_root,
+    scan_dependency_report, AppConfig, CoreCatalog, CoreCatalogInstallState, CoreCatalogSource,
     CoverScrapePlatformIds, CoverScrapeRunOptions, CoverScrapeSettingsInput, CoverScrapingConfig,
     DependencyReport, DependencySource, DetectedPadIdentity, DreamcastInputMode,
-    LocalCoverRelinkRunOptions, ManageOperationKind, ManageOperationSummary, ManageProgressEvent,
-    ManageRomStatus, ManageScope, ManagementConfig, N64CpuCoreMode, N64PrimaryStick, PathsConfig,
-    RomCard, RomQuery, SaveLimits, SaveSlotData, SaveSlotSummary, SavedGamepadMappingSummary,
-    StoredGamepadMapping, PCECD_ACCEPTED_BIOS_FILES, SATURN_ACCEPTED_BIOS_FILES,
-    SYSTEM_DEFAULT_MAPPING_KEY,
+    DynamicCoreProfile, LocalCoverRelinkRunOptions, ManageOperationKind, ManageOperationSummary,
+    ManageProgressEvent, ManageRomStatus, ManageScope, ManagementConfig, N64CpuCoreMode,
+    N64PrimaryStick, PathsConfig, RomCard, RomQuery, SaveLimits, SaveSlotData, SaveSlotSummary,
+    SavedGamepadMappingSummary, StoredGamepadMapping, PCECD_ACCEPTED_BIOS_FILES,
+    SATURN_ACCEPTED_BIOS_FILES, SYSTEM_DEFAULT_MAPPING_KEY,
 };
 use sha1::{Digest, Sha1};
 use tracing::warn;
@@ -97,6 +98,11 @@ pub struct AppConfigUpdateOutcome {
 pub struct DependencyInstallRequest {
     pub component_id: String,
     pub local_source: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone)]
+pub struct CatalogCoreInstallRequest {
+    pub catalog_id: String,
 }
 
 impl NativeServices {
@@ -983,6 +989,11 @@ impl NativeServices {
         Ok(scan_dependency_report(&config.paths))
     }
 
+    pub fn core_catalog(&self) -> Result<CoreCatalog> {
+        let config = self.current_config()?;
+        Ok(CoreCatalog::for_paths(&config.paths))
+    }
+
     pub fn runtime_setup_welcome_completed(&self) -> bool {
         self.config().management.runtime_setup.welcome_completed
     }
@@ -1147,6 +1158,205 @@ impl NativeServices {
             ..ManageOperationSummary::default()
         })
     }
+
+    pub fn install_catalog_core(
+        &self,
+        request: CatalogCoreInstallRequest,
+        progress: impl Fn(ManageProgressEvent),
+    ) -> Result<ManageOperationSummary> {
+        let config = self.current_config()?;
+        let catalog = CoreCatalog::for_paths(&config.paths);
+        let entry = catalog
+            .entry(&request.catalog_id)
+            .cloned()
+            .ok_or_else(|| anyhow!("unknown catalog core: {}", request.catalog_id))?;
+
+        progress(ManageProgressEvent {
+            kind: ManageOperationKind::InstallCatalogCore,
+            processed: 0,
+            total: Some(1),
+            message: format!("Preparing {}...", entry.display_name),
+        });
+
+        if !entry.install_policy.can_install_in_app() || !entry.source.can_install_in_app() {
+            return Err(anyhow!(
+                "{} cannot be installed in-app from source {}",
+                entry.display_name,
+                entry.source.label()
+            ));
+        }
+
+        let CoreCatalogSource::LibretroBuildbot {
+            base_url,
+            archive_file_name,
+        } = &entry.source
+        else {
+            return Err(anyhow!(
+                "{} does not have an installable buildbot source",
+                entry.display_name
+            ));
+        };
+
+        let active_core_root = dependency_core_root(&config.paths);
+        validate_target_under_core_root(&entry.target_path, &active_core_root)?;
+
+        progress(ManageProgressEvent {
+            kind: ManageOperationKind::InstallCatalogCore,
+            processed: 0,
+            total: Some(1),
+            message: format!("Downloading {}...", archive_file_name),
+        });
+        let archive_url = buildbot_archive_url(base_url, archive_file_name);
+        let archive_bytes = download_bytes(&archive_url)?;
+
+        progress(ManageProgressEvent {
+            kind: ManageOperationKind::InstallCatalogCore,
+            processed: 0,
+            total: Some(1),
+            message: format!("Extracting {}...", entry.expected_archive_member),
+        });
+        extract_buildbot_archive_bytes(
+            &archive_bytes,
+            &archive_url,
+            &entry.expected_archive_member,
+            &entry.target_path,
+        )?;
+
+        progress(ManageProgressEvent {
+            kind: ManageOperationKind::InstallCatalogCore,
+            processed: 0,
+            total: Some(1),
+            message: format!("Verifying {}...", entry.target_path.display()),
+        });
+        verify_installed_core_file(&entry.target_path)?;
+
+        progress(ManageProgressEvent {
+            kind: ManageOperationKind::InstallCatalogCore,
+            processed: 0,
+            total: Some(1),
+            message: format!("Codesigning {}...", entry.target_path.display()),
+        });
+        ad_hoc_codesign(&entry.target_path)?;
+
+        progress(ManageProgressEvent {
+            kind: ManageOperationKind::InstallCatalogCore,
+            processed: 0,
+            total: Some(1),
+            message: String::from("Rescanning core catalog..."),
+        });
+        let refreshed = CoreCatalog::for_paths(&config.paths);
+        let refreshed_entry = refreshed
+            .entry(&entry.id)
+            .ok_or_else(|| anyhow!("catalog entry disappeared after install: {}", entry.id))?;
+        if !matches!(
+            refreshed_entry.install_state,
+            CoreCatalogInstallState::Installed { .. }
+        ) {
+            return Err(anyhow!(
+                "installed {}, but catalog validation still reports it missing",
+                entry.display_name
+            ));
+        }
+
+        progress(ManageProgressEvent {
+            kind: ManageOperationKind::InstallCatalogCore,
+            processed: 0,
+            total: Some(1),
+            message: format!("Probing settings for {}...", entry.display_name),
+        });
+        let probe_warning = self.probe_installed_catalog_core(&entry.target_path, &entry.core_name);
+        if let Some(warning) = &probe_warning {
+            progress(ManageProgressEvent {
+                kind: ManageOperationKind::InstallCatalogCore,
+                processed: 1,
+                total: Some(1),
+                message: format!(
+                    "Installed {}, but settings probe was skipped: {warning}",
+                    entry.display_name
+                ),
+            });
+        } else {
+            progress(ManageProgressEvent {
+                kind: ManageOperationKind::InstallCatalogCore,
+                processed: 1,
+                total: Some(1),
+                message: format!("Installed {}.", entry.display_name),
+            });
+        }
+
+        let message = if let Some(warning) = probe_warning {
+            format!(
+                "Installed {}. Settings probe warning: {warning}",
+                entry.display_name
+            )
+        } else {
+            format!("Installed {}.", entry.display_name)
+        };
+        Ok(ManageOperationSummary {
+            kind: Some(ManageOperationKind::InstallCatalogCore),
+            updated: 1,
+            message,
+            ..ManageOperationSummary::default()
+        })
+    }
+
+    fn probe_installed_catalog_core(&self, core_path: &Path, core_name: &str) -> Option<String> {
+        match self.probe_installed_core_options(core_path, core_name) {
+            Ok(true) => None,
+            Ok(false) => Some(String::from("no configurable variables were discovered")),
+            Err(err) => {
+                warn!(
+                    core = %core_name,
+                    path = %core_path.display(),
+                    "catalog core post-install probe failed: {err:#}"
+                );
+                Some(err.to_string())
+            }
+        }
+    }
+
+    fn probe_installed_core_options(&self, core_path: &Path, core_name: &str) -> Result<bool> {
+        let helper = core_probe_helper_path()?;
+        if !helper.is_file() {
+            return Err(anyhow!(
+                "core probe helper not found at {}. Build it with `cargo build -p arcade-libretro --bin arcade-core-probe`.",
+                helper.display()
+            ));
+        }
+        let metadata = fs::metadata(core_path)
+            .with_context(|| format!("failed to stat core {}", core_path.display()))?;
+        let modified_unix = metadata
+            .modified()
+            .ok()
+            .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
+            .map(|duration| duration.as_secs())
+            .unwrap_or_default();
+        let source_path = core_path.display().to_string();
+        let system = arcade_domain::infer_system_for_core(core_name);
+        let output = Command::new(&helper)
+            .arg(core_path)
+            .arg(core_name)
+            .arg(&system)
+            .output()
+            .with_context(|| format!("failed to run core probe helper {}", helper.display()))?;
+        if !output.status.success() {
+            return Err(anyhow!(
+                "core probe helper failed with status {:?}: {}",
+                output.status.code(),
+                String::from_utf8_lossy(&output.stderr)
+            ));
+        }
+        let mut profile: DynamicCoreProfile = serde_json::from_slice(&output.stdout)
+            .with_context(|| format!("failed to parse core probe output for {core_name}"))?;
+        if profile.variables.is_empty() {
+            return Ok(false);
+        }
+        profile.source_path = Some(source_path);
+        profile.source_modified_unix = Some(modified_unix);
+        profile.source_len = Some(metadata.len());
+        self.update_discovered_core_profile(profile)?;
+        Ok(true)
+    }
 }
 
 fn native_arcade_core_note(system: &str, core_override: Option<&str>) -> Option<&'static str> {
@@ -1235,16 +1445,44 @@ fn install_buildbot_core(file_name: &str, target_path: &Path) -> Result<()> {
     let base_url = dependency_buildbot_base_url().ok_or_else(|| {
         anyhow!("no libretro buildbot source is configured for this architecture")
     })?;
-    let url = format!("{base_url}/{file_name}.zip");
+    let archive_file_name = format!("{file_name}.zip");
+    install_buildbot_archive(base_url, &archive_file_name, file_name, target_path)
+}
+
+fn install_buildbot_archive(
+    base_url: &str,
+    archive_file_name: &str,
+    expected_archive_member: &str,
+    target_path: &Path,
+) -> Result<()> {
+    let url = buildbot_archive_url(base_url, archive_file_name);
     let bytes = download_bytes(&url)?;
+    extract_buildbot_archive_bytes(&bytes, &url, expected_archive_member, target_path)
+}
+
+fn buildbot_archive_url(base_url: &str, archive_file_name: &str) -> String {
+    format!(
+        "{}/{}",
+        base_url.trim_end_matches('/'),
+        archive_file_name.trim_start_matches('/')
+    )
+}
+
+fn extract_buildbot_archive_bytes(
+    bytes: &[u8],
+    source_label: &str,
+    expected_archive_member: &str,
+    target_path: &Path,
+) -> Result<()> {
     let parent = target_path
         .parent()
         .ok_or_else(|| anyhow!("target path has no parent: {}", target_path.display()))?;
     fs::create_dir_all(parent)?;
+    reject_symlink_target(target_path)?;
 
     let reader = std::io::Cursor::new(bytes);
     let mut archive =
-        zip::ZipArchive::new(reader).with_context(|| format!("failed to read {url}"))?;
+        zip::ZipArchive::new(reader).with_context(|| format!("failed to read {source_label}"))?;
     let mut extracted = false;
     for index in 0..archive.len() {
         let mut file = archive.by_index(index)?;
@@ -1254,7 +1492,7 @@ fn install_buildbot_core(file_name: &str, target_path: &Path) -> Result<()> {
         else {
             continue;
         };
-        if name != file_name {
+        if name != expected_archive_member {
             continue;
         }
         let mut out = fs::File::create(target_path)
@@ -1267,8 +1505,79 @@ fn install_buildbot_core(file_name: &str, target_path: &Path) -> Result<()> {
     if extracted {
         Ok(())
     } else {
-        Err(anyhow!("{url} did not contain {file_name}"))
+        Err(anyhow!(
+            "{source_label} did not contain {expected_archive_member}"
+        ))
     }
+}
+
+fn verify_installed_core_file(target_path: &Path) -> Result<()> {
+    reject_symlink_target(target_path)?;
+    let metadata = fs::metadata(target_path)
+        .with_context(|| format!("installed core is missing: {}", target_path.display()))?;
+    if !metadata.is_file() {
+        return Err(anyhow!(
+            "installed core target is not a file: {}",
+            target_path.display()
+        ));
+    }
+    if metadata.len() == 0 {
+        return Err(anyhow!(
+            "installed core is empty: {}",
+            target_path.display()
+        ));
+    }
+    Ok(())
+}
+
+fn reject_symlink_target(target_path: &Path) -> Result<()> {
+    match fs::symlink_metadata(target_path) {
+        Ok(metadata) if metadata.file_type().is_symlink() => Err(anyhow!(
+            "catalog core target must not be a symlink: {}",
+            target_path.display()
+        )),
+        Ok(_) => Ok(()),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(err) => Err(err).with_context(|| {
+            format!(
+                "failed to inspect catalog core target {}",
+                target_path.display()
+            )
+        }),
+    }
+}
+
+fn validate_target_under_core_root(target_path: &Path, core_root: &Path) -> Result<()> {
+    let target_abs = normalize_absolute_path(target_path)?;
+    let root_abs = normalize_absolute_path(core_root)?;
+    if target_abs == root_abs || !target_abs.starts_with(&root_abs) {
+        return Err(anyhow!(
+            "catalog core target {} is outside active core root {}",
+            target_path.display(),
+            core_root.display()
+        ));
+    }
+    Ok(())
+}
+
+fn normalize_absolute_path(path: &Path) -> Result<PathBuf> {
+    let absolute = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()?.join(path)
+    };
+    let mut normalized = PathBuf::new();
+    for component in absolute.components() {
+        use std::path::Component;
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                normalized.pop();
+            }
+            other => normalized.push(other.as_os_str()),
+        }
+    }
+    Ok(normalized)
 }
 
 fn install_upstream_download(url: &str, target_path: &Path) -> Result<()> {
@@ -2591,6 +2900,129 @@ mod tests {
             names,
             vec!["quicknes_libretro.dylib", "snes9x_libretro.dylib"]
         );
+    }
+
+    #[test]
+    fn core_catalog_uses_active_runtime_paths() {
+        let tmp = TempDir::new().expect("tempdir");
+        let config = make_config(&tmp);
+        let db = Database::open(&config).expect("open db");
+        let services = NativeServices::bootstrap(config.clone(), config_path_for(&config), db)
+            .expect("bootstrap");
+
+        let catalog = services.core_catalog().expect("core catalog");
+        let entry = catalog.entry("core-fceumm").expect("fceumm entry");
+        assert_eq!(
+            entry.target_path,
+            dependency_core_root(&config.paths).join("fceumm_libretro.dylib")
+        );
+    }
+
+    fn zip_with_member(member: &str, bytes: &[u8]) -> Vec<u8> {
+        use std::io::Write;
+        let cursor = std::io::Cursor::new(Vec::new());
+        let mut writer = zip::ZipWriter::new(cursor);
+        writer
+            .start_file(member, zip::write::SimpleFileOptions::default())
+            .expect("start zip file");
+        writer.write_all(bytes).expect("write zip member");
+        writer.finish().expect("finish zip").into_inner()
+    }
+
+    #[test]
+    fn buildbot_archive_url_is_stable() {
+        assert_eq!(
+            buildbot_archive_url("https://example.test/latest/", "/fceumm_libretro.dylib.zip"),
+            "https://example.test/latest/fceumm_libretro.dylib.zip"
+        );
+    }
+
+    #[test]
+    fn buildbot_archive_extracts_expected_member_by_file_name() {
+        let tmp = TempDir::new().expect("tempdir");
+        let target = tmp.path().join("cores").join("fceumm_libretro.dylib");
+        let bytes = zip_with_member("nested/path/fceumm_libretro.dylib", b"fake-core");
+
+        extract_buildbot_archive_bytes(
+            &bytes,
+            "fake-buildbot.zip",
+            "fceumm_libretro.dylib",
+            &target,
+        )
+        .expect("extract core");
+
+        assert_eq!(
+            fs::read(&target).expect("read extracted core"),
+            b"fake-core"
+        );
+        verify_installed_core_file(&target).expect("verify non-empty core");
+    }
+
+    #[test]
+    fn buildbot_archive_missing_expected_member_is_error() {
+        let tmp = TempDir::new().expect("tempdir");
+        let target = tmp.path().join("cores").join("fceumm_libretro.dylib");
+        let bytes = zip_with_member("other_libretro.dylib", b"fake-core");
+
+        let err = extract_buildbot_archive_bytes(
+            &bytes,
+            "fake-buildbot.zip",
+            "fceumm_libretro.dylib",
+            &target,
+        )
+        .expect_err("missing member should fail");
+
+        assert!(err
+            .to_string()
+            .contains("fake-buildbot.zip did not contain fceumm_libretro.dylib"));
+        assert!(!target.exists());
+    }
+
+    #[test]
+    fn buildbot_archive_rejects_existing_symlink_target() {
+        let tmp = TempDir::new().expect("tempdir");
+        let target = tmp.path().join("cores").join("fceumm_libretro.dylib");
+        fs::create_dir_all(target.parent().expect("target parent")).expect("create core root");
+        let escaped = tmp.path().join("escaped.dylib");
+        fs::write(&escaped, b"outside").expect("write escaped target");
+        make_symlink(&escaped, &target);
+        let bytes = zip_with_member("fceumm_libretro.dylib", b"fake-core");
+
+        let err = extract_buildbot_archive_bytes(
+            &bytes,
+            "fake-buildbot.zip",
+            "fceumm_libretro.dylib",
+            &target,
+        )
+        .expect_err("symlink target should fail");
+
+        assert!(err.to_string().contains("must not be a symlink"));
+        assert_eq!(fs::read(&escaped).expect("read escaped target"), b"outside");
+    }
+
+    #[cfg(unix)]
+    fn make_symlink(source: &Path, link: &Path) {
+        std::os::unix::fs::symlink(source, link).expect("create symlink");
+    }
+
+    #[cfg(windows)]
+    fn make_symlink(source: &Path, link: &Path) {
+        std::os::windows::fs::symlink_file(source, link).expect("create symlink");
+    }
+
+    #[test]
+    fn catalog_install_target_must_stay_under_active_core_root() {
+        let tmp = TempDir::new().expect("tempdir");
+        let root = tmp.path().join("cores");
+        validate_target_under_core_root(&root.join("nested").join("core.dylib"), &root)
+            .expect("target inside root");
+
+        let err = validate_target_under_core_root(
+            &tmp.path().join("elsewhere").join("core.dylib"),
+            &root,
+        )
+        .expect_err("outside target should fail");
+        assert!(err.to_string().contains("outside active core root"));
     }
 
     fn seed_rom(config: &AppConfig) {

@@ -88,6 +88,7 @@ pub enum ManageOperationKind {
     ScrapeMissingCovers,
     RelinkLocalCovers,
     InstallDependency,
+    InstallCatalogCore,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
