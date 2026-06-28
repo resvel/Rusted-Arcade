@@ -2898,9 +2898,9 @@ fn action_to_retro_binding(
             "B" => Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_B)),
             "X" => Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_X)),
             "Y" => Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_Y)),
-            "Z" => Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_L2)),
-            "L" => Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_L)),
-            "R" => Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_R)),
+            "Z" => Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_R)),
+            "L" => Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_L2)),
+            "R" => Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_R2)),
             "Start" => Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_START)),
             "Main Stick Up" => Some(RetroActionBinding::Analog {
                 index: RETRO_DEVICE_INDEX_ANALOG_LEFT,
@@ -5252,15 +5252,15 @@ mod tests {
         );
         assert_eq!(
             action_to_retro_binding("GAMECUBE", "Z", None),
-            Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_L2))
+            Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_R))
         );
         assert_eq!(
             action_to_retro_binding("GAMECUBE", "L", None),
-            Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_L))
+            Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_L2))
         );
         assert_eq!(
             action_to_retro_binding("GAMECUBE", "R", None),
-            Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_R))
+            Some(RetroActionBinding::Joypad(RETRO_DEVICE_ID_JOYPAD_R2))
         );
         assert_eq!(
             action_to_retro_binding("GAMECUBE", "Main Stick Up", None),
