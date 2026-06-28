@@ -7,8 +7,10 @@ pub(super) fn default_core_variables_for(
 ) -> HashMap<String, CString> {
     let mut variables = HashMap::new();
 
-    // Step 1: Apply user-configurable settings from the core registry.
-    if let Some(profile) = arcade_domain::core_profile_for(core_name) {
+    // Step 1: Apply user-configurable settings from the curated/dynamic core registry.
+    if let Some(profile) =
+        arcade_domain::core_profile_for_with_dynamic(core_name, &emulation.discovered_core_profiles)
+    {
         for var_def in &profile.variables {
             let value =
                 arcade_domain::resolve_core_variable(&emulation.core_settings, core_name, var_def);
@@ -453,6 +455,25 @@ fn apply_parallel_n64_env_overrides(variables: &mut HashMap<String, CString>) {
 }
 
 pub(super) fn store_default_variable(context: &mut EnvironmentContext, key: &str, spec: &str) {
+    if let Some(discovered) = arcade_domain::parse_legacy_core_variable(
+        key,
+        spec,
+        context.loaded_core_name.as_deref().unwrap_or("unknown"),
+        context
+            .loaded_core_name
+            .as_deref()
+            .and_then(system_for_core_name)
+            .unwrap_or("UNKNOWN"),
+    ) {
+        if !context
+            .discovered_variables
+            .iter()
+            .any(|variable| variable.key == discovered.key)
+        {
+            context.discovered_variables.push(discovered);
+        }
+    }
+
     if context.variables.contains_key(key) {
         return;
     }
@@ -464,6 +485,13 @@ pub(super) fn store_default_variable(context: &mut EnvironmentContext, key: &str
         return;
     };
     context.variables.insert(key.to_string(), default_cstring);
+}
+
+fn system_for_core_name(core_name: &str) -> Option<&'static str> {
+    arcade_domain::core_profiles()
+        .into_iter()
+        .find(|profile| profile.core_name == core_name)
+        .map(|profile| profile.system)
 }
 
 #[cfg(test)]

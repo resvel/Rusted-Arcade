@@ -13,7 +13,14 @@ impl NativeArcadeUiApp {
             self.state.play.set_status("Select a ROM first.");
             return;
         };
-        self.launch_rom_id(&rom_id, None);
+        let core_choice = self
+            .state
+            .library
+            .launch_core_choices
+            .get(&rom_id)
+            .filter(|core| !core.eq_ignore_ascii_case("auto"))
+            .cloned();
+        self.launch_rom_id(&rom_id, core_choice.as_deref());
     }
 
     pub(crate) fn launch_rom_with_core_override(&mut self, rom_id: &str, core: &str) {
@@ -133,6 +140,13 @@ impl NativeArcadeUiApp {
                         "Using the stable cached lane for this launch.",
                     ))
                     .or_else(|| plan.active_core_note.map(String::from));
+                if let Some(profile) = self.host.discovered_core_profile() {
+                    if let Err(err) = self.services.update_discovered_core_profile(profile) {
+                        warn!(error = %err, "Failed to persist discovered core options");
+                    } else {
+                        self.sync_manage_settings_from_services();
+                    }
+                }
                 self.state.play.begin_session(
                     status_message,
                     plan.rom_id.clone(),

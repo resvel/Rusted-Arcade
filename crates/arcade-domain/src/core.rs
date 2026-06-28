@@ -128,6 +128,30 @@ pub fn resolve_core(system: &str, core_override: Option<&str>) -> String {
     String::from(default_core(&normalized_system))
 }
 
+pub fn resolve_core_with_dynamic(
+    system: &str,
+    core_override: Option<&str>,
+    dynamic_profiles: &[crate::DynamicCoreProfile],
+) -> String {
+    let normalized_system = normalize_system(system).unwrap_or_else(|| String::from("NES"));
+
+    if let Some(raw_override) = core_override {
+        let core = raw_override.trim().to_lowercase();
+        if allowlist(&normalized_system).contains(&core.as_str()) {
+            return core;
+        }
+        if dynamic_profiles.iter().any(|profile| {
+            profile.core_name.eq_ignore_ascii_case(&core)
+                && (profile.system.eq_ignore_ascii_case(&normalized_system)
+                    || profile.system.eq_ignore_ascii_case("UNKNOWN"))
+        }) {
+            return core;
+        }
+    }
+
+    String::from(default_core(&normalized_system))
+}
+
 const FBNEO_PREFERRED_TITLES: &[&str] = &[
     "garou", "galaxyfg", "galaga", "toutrun", "fatfury1", "fatfury2", "fatfury3", "fatfursp",
     "sf2ce", "sf2hf", "kof94", "kof95", "kof96", "kof98", "kof99", "kof2000", "kof2001", "kof2003",

@@ -1,5 +1,39 @@
 use std::collections::HashMap;
 
+use serde::{Deserialize, Serialize};
+
+/// Metadata for a single allowed value of a dynamically discovered core variable.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DynamicCoreVariableOption {
+    pub value: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display: Option<String>,
+}
+
+/// Metadata for a dynamically discovered libretro core variable.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DynamicCoreVariableDefinition {
+    pub key: String,
+    pub label: String,
+    pub group: String,
+    pub options: Vec<DynamicCoreVariableOption>,
+}
+
+/// A dynamically discovered profile for an installed libretro core.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DynamicCoreProfile {
+    pub core_name: String,
+    pub display_name: String,
+    pub system: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_modified_unix: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_len: Option<u64>,
+    pub variables: Vec<DynamicCoreVariableDefinition>,
+}
+
 /// Metadata for a single allowed value of a core variable.
 #[derive(Debug, Clone)]
 pub struct CoreVariableOption {
@@ -130,6 +164,168 @@ pub fn configurable_core_profiles() -> Vec<CoreProfile> {
             crate::core::supported_cores_for_system(profile.system).contains(&profile.core_name)
         })
         .collect()
+}
+
+/// Returns all curated profiles plus dynamically discovered profiles.
+pub fn core_profiles_with_dynamic(dynamic: &[DynamicCoreProfile]) -> Vec<CoreProfile> {
+    let mut profiles = core_profiles();
+    for discovered in dynamic {
+        if discovered.core_name.trim().is_empty()
+            || discovered.system.trim().is_empty()
+            || discovered.variables.is_empty()
+        {
+            continue;
+        }
+        merge_dynamic_profile(&mut profiles, discovered);
+    }
+    profiles
+}
+
+/// Returns curated profiles plus dynamically discovered profiles for installed
+/// cores. Dynamic profiles are intentionally not constrained by the static
+/// allowlist so imported cores can populate Settings -> Core Settings.
+pub fn configurable_core_profiles_with_dynamic(dynamic: &[DynamicCoreProfile]) -> Vec<CoreProfile> {
+    let mut profiles = configurable_core_profiles();
+    for discovered in dynamic {
+        if discovered.core_name.trim().is_empty()
+            || discovered.system.trim().is_empty()
+            || discovered.variables.is_empty()
+        {
+            continue;
+        }
+        merge_dynamic_profile(&mut profiles, discovered);
+    }
+    profiles
+}
+
+pub fn core_profile_for_with_dynamic(
+    core_name: &str,
+    dynamic: &[DynamicCoreProfile],
+) -> Option<CoreProfile> {
+    core_profiles_with_dynamic(dynamic)
+        .into_iter()
+        .find(|p| p.core_name == core_name)
+}
+
+pub fn parse_legacy_core_variable(
+    key: &str,
+    spec: &str,
+    _core_name: &str,
+    _system: &str,
+) -> Option<DynamicCoreVariableDefinition> {
+    let key = key.trim();
+    if key.is_empty() {
+        return None;
+    }
+    let (label, values) = spec.split_once(';')?;
+    let options = values
+        .split('|')
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| DynamicCoreVariableOption {
+            value: value.to_string(),
+            display: None,
+        })
+        .collect::<Vec<_>>();
+    if options.is_empty() {
+        return None;
+    }
+    Some(DynamicCoreVariableDefinition {
+        key: key.to_string(),
+        label: label.trim().to_string(),
+        group: String::from("Discovered"),
+        options,
+    })
+}
+
+pub fn dynamic_profile_matches_core_file(
+    profile: &DynamicCoreProfile,
+    core_path: &str,
+    modified_unix: u64,
+    len: u64,
+) -> bool {
+    profile.source_path.as_deref() == Some(core_path)
+        && profile.source_modified_unix == Some(modified_unix)
+        && profile.source_len == Some(len)
+}
+
+pub fn infer_core_name_from_library_path(path: &std::path::Path) -> Option<String> {
+    let stem = path.file_stem()?.to_string_lossy();
+    let core = stem.strip_suffix("_libretro").unwrap_or(&stem).trim();
+    if core.is_empty() {
+        None
+    } else {
+        Some(core.to_ascii_lowercase())
+    }
+}
+
+pub fn infer_system_for_core(core_name: &str) -> String {
+    core_profiles()
+        .into_iter()
+        .find(|profile| profile.core_name.eq_ignore_ascii_case(core_name))
+        .map(|profile| profile.system.to_string())
+        .unwrap_or_else(|| String::from("UNKNOWN"))
+}
+
+pub fn display_name_for_core(core_name: &str) -> String {
+    core_profile_for(core_name)
+        .map(|profile| profile.display_name.to_string())
+        .unwrap_or_else(|| core_name.to_string())
+}
+
+fn merge_dynamic_profile(profiles: &mut Vec<CoreProfile>, discovered: &DynamicCoreProfile) {
+    let dynamic_profile = dynamic_profile_to_static(discovered);
+    if let Some(existing) = profiles
+        .iter_mut()
+        .find(|profile| profile.core_name == dynamic_profile.core_name)
+    {
+        existing.display_name = dynamic_profile.display_name;
+        let mut keys = existing
+            .variables
+            .iter()
+            .map(|variable| variable.key)
+            .collect::<std::collections::HashSet<_>>();
+        for variable in dynamic_profile.variables {
+            if keys.insert(variable.key) {
+                existing.variables.push(variable);
+            }
+        }
+    } else {
+        profiles.push(dynamic_profile);
+    }
+}
+
+fn dynamic_profile_to_static(discovered: &DynamicCoreProfile) -> CoreProfile {
+    CoreProfile {
+        core_name: leak_string(discovered.core_name.clone()),
+        display_name: leak_string(discovered.display_name.clone()),
+        system: leak_string(discovered.system.clone()),
+        variables: discovered
+            .variables
+            .iter()
+            .map(dynamic_variable_to_static)
+            .collect(),
+    }
+}
+
+fn dynamic_variable_to_static(variable: &DynamicCoreVariableDefinition) -> CoreVariableDefinition {
+    CoreVariableDefinition {
+        key: leak_string(variable.key.clone()),
+        label: leak_string(variable.label.clone()),
+        group: leak_string(variable.group.clone()),
+        options: variable
+            .options
+            .iter()
+            .map(|option| CoreVariableOption {
+                value: leak_string(option.value.clone()),
+                display: option.display.clone().map(leak_string),
+            })
+            .collect(),
+    }
+}
+
+fn leak_string(value: String) -> &'static str {
+    Box::leak(value.into_boxed_str())
 }
 
 // ---------------------------------------------------------------------------
@@ -2529,5 +2725,151 @@ mod tests {
             resolve_core_variable(&settings, "mupen64plus_next", aspect),
             "16:9"
         );
+    }
+
+    #[test]
+    fn legacy_libretro_variable_spec_parses_default_and_options() {
+        let variable = parse_legacy_core_variable(
+            "quicknes_palette",
+            "Palette; Composite|RGB|Monochrome",
+            "quicknes",
+            "NES",
+        )
+        .unwrap();
+
+        assert_eq!(variable.key, "quicknes_palette");
+        assert_eq!(variable.label, "Palette");
+        assert_eq!(variable.group, "Discovered");
+        assert_eq!(
+            variable
+                .options
+                .iter()
+                .map(|o| o.value.as_str())
+                .collect::<Vec<_>>(),
+            vec!["Composite", "RGB", "Monochrome"]
+        );
+    }
+
+    #[test]
+    fn dynamic_profile_is_available_for_all_system_settings() {
+        let dynamic = DynamicCoreProfile {
+            core_name: "quicknes".to_string(),
+            display_name: "QuickNES".to_string(),
+            system: "NES".to_string(),
+            source_path: None,
+            source_modified_unix: None,
+            source_len: None,
+            variables: vec![DynamicCoreVariableDefinition {
+                key: "quicknes_palette".to_string(),
+                label: "Palette".to_string(),
+                group: "Video".to_string(),
+                options: vec![
+                    DynamicCoreVariableOption {
+                        value: "Composite".to_string(),
+                        display: None,
+                    },
+                    DynamicCoreVariableOption {
+                        value: "RGB".to_string(),
+                        display: None,
+                    },
+                ],
+            }],
+        };
+
+        let profiles = configurable_core_profiles_with_dynamic(&[dynamic]);
+        let profile = profiles
+            .iter()
+            .find(|profile| profile.core_name == "quicknes")
+            .expect("dynamic NES core should appear in configurable profiles");
+
+        assert_eq!(profile.system, "NES");
+        assert_eq!(profile.display_name, "QuickNES");
+        assert!(profile
+            .variables
+            .iter()
+            .any(|variable| variable.key == "quicknes_palette"));
+    }
+
+    #[test]
+    fn dynamic_profile_overrides_curated_placeholder_with_discovered_options() {
+        let dynamic = DynamicCoreProfile {
+            core_name: "fbneo".to_string(),
+            display_name: "FinalBurn Neo".to_string(),
+            system: "ARCADE".to_string(),
+            source_path: None,
+            source_modified_unix: None,
+            source_len: None,
+            variables: vec![DynamicCoreVariableDefinition {
+                key: "fbneo-new-option".to_string(),
+                label: "New Option".to_string(),
+                group: "Discovered".to_string(),
+                options: vec![DynamicCoreVariableOption {
+                    value: "enabled".to_string(),
+                    display: Some("On".to_string()),
+                }],
+            }],
+        };
+
+        let profiles = configurable_core_profiles_with_dynamic(&[dynamic]);
+        let profile = profiles
+            .iter()
+            .find(|profile| profile.core_name == "fbneo")
+            .unwrap();
+
+        assert_eq!(profile.display_name, "FinalBurn Neo");
+        assert!(profile
+            .variables
+            .iter()
+            .any(|variable| variable.key == "fbneo-new-option"));
+        assert!(profile
+            .variables
+            .iter()
+            .any(|variable| variable.key == "fbneo-frameskip"));
+    }
+
+    #[test]
+    fn dynamic_profile_cache_matches_core_file_identity() {
+        let profile = DynamicCoreProfile {
+            core_name: "quicknes".to_string(),
+            display_name: "QuickNES".to_string(),
+            system: "NES".to_string(),
+            source_path: Some("/cores/quicknes_libretro.dylib".to_string()),
+            source_modified_unix: Some(1234),
+            source_len: Some(5678),
+            variables: vec![DynamicCoreVariableDefinition {
+                key: "quicknes_palette".to_string(),
+                label: "Palette".to_string(),
+                group: "Video".to_string(),
+                options: vec![DynamicCoreVariableOption {
+                    value: "Composite".to_string(),
+                    display: None,
+                }],
+            }],
+        };
+
+        assert!(dynamic_profile_matches_core_file(
+            &profile,
+            "/cores/quicknes_libretro.dylib",
+            1234,
+            5678
+        ));
+        assert!(!dynamic_profile_matches_core_file(
+            &profile,
+            "/cores/quicknes_libretro.dylib",
+            1235,
+            5678
+        ));
+    }
+
+    #[test]
+    fn core_name_and_system_can_be_inferred_for_probe_inputs() {
+        assert_eq!(
+            infer_core_name_from_library_path(std::path::Path::new(
+                "/cores/quicknes_libretro.dylib"
+            )),
+            Some(String::from("quicknes"))
+        );
+        assert_eq!(infer_system_for_core("snes9x"), "SNES");
+        assert_eq!(infer_system_for_core("totally_unknown"), "UNKNOWN");
     }
 }

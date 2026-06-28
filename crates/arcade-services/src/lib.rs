@@ -4,13 +4,13 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, UNIX_EPOCH};
 
 use anyhow::{anyhow, Context, Result};
 use arcade_data::{DataError, Database, ScanUpsertOutcome, ScannedRomInput};
 use arcade_domain::{
     default_gamepad_mapping_for_system, dependency_buildbot_base_url, dependency_manifest,
-    get_arcade_compatibility, get_dolphin_sys_directory, normalize_core, resolve_core,
+    get_arcade_compatibility, get_dolphin_sys_directory, normalize_core, resolve_core_with_dynamic,
     resolve_effective_core_override, resolve_path_from_root, scan_dependency_report, AppConfig,
     CoverScrapePlatformIds, CoverScrapeRunOptions, CoverScrapeSettingsInput, CoverScrapingConfig,
     DependencyReport, DependencySource, DetectedPadIdentity, DreamcastInputMode,
@@ -163,13 +163,31 @@ impl NativeServices {
         rom_id: &str,
         core_override: &str,
     ) -> Result<LaunchPlan> {
+        let config = self.current_config()?;
         let normalized = normalize_core(core_override)
+            .or_else(|| {
+                config
+                    .emulation
+                    .discovered_core_profiles
+                    .iter()
+                    .find(|profile| profile.core_name.eq_ignore_ascii_case(core_override.trim()))
+                    .map(|profile| profile.core_name.clone())
+            })
             .ok_or_else(|| anyhow!("Unsupported core override: {core_override}"))?;
         self.prepare_launch_inner(rom_id, Some(normalized.as_str()))
     }
 
     pub fn set_rom_core_override(&self, rom_id: &str, core_override: &str) -> Result<()> {
+        let config = self.current_config()?;
         let normalized = normalize_core(core_override)
+            .or_else(|| {
+                config
+                    .emulation
+                    .discovered_core_profiles
+                    .iter()
+                    .find(|profile| profile.core_name.eq_ignore_ascii_case(core_override.trim()))
+                    .map(|profile| profile.core_name.clone())
+            })
             .ok_or_else(|| anyhow!("Unsupported core override: {core_override}"))?;
         self.db.update_rom_core(rom_id, &normalized)
     }
@@ -209,11 +227,23 @@ impl NativeServices {
                 .or(rom.emulator_core.as_deref())
         });
         let effective_override = if one_shot_core_override.is_some() {
-            configured_core.and_then(normalize_core)
+            configured_core.map(|core| core.to_string())
+        } else if configured_core.is_some_and(|core| {
+            config
+                .emulation
+                .discovered_core_profiles
+                .iter()
+                .any(|profile| profile.core_name.eq_ignore_ascii_case(core))
+        }) {
+            configured_core.map(|core| core.to_string())
         } else {
             resolve_effective_core_override(&rom.system, configured_core, Some(&rom.title))
         };
-        let resolved_core_name = resolve_core(&rom.system, effective_override.as_deref());
+        let resolved_core_name = resolve_core_with_dynamic(
+            &rom.system,
+            effective_override.as_deref(),
+            &config.emulation.discovered_core_profiles,
+        );
         let active_core_note = native_arcade_core_note(&rom.system, Some(&resolved_core_name));
 
         let compatibility = get_arcade_compatibility(
@@ -414,6 +444,104 @@ impl NativeServices {
         };
         config.save_to_path(self.config_path.as_ref())?;
         Ok(())
+    }
+
+    pub fn update_discovered_core_profile(
+        &self,
+        profile: arcade_domain::DynamicCoreProfile,
+    ) -> Result<()> {
+        if profile.core_name.trim().is_empty() || profile.variables.is_empty() {
+            return Ok(());
+        }
+        let mut config = self
+            .config
+            .lock()
+            .map_err(|_| anyhow!("config lock poisoned"))?;
+        config
+            .emulation
+            .discovered_core_profiles
+            .retain(|existing| existing.core_name != profile.core_name);
+        config.emulation.discovered_core_profiles.push(profile);
+        config.save_to_path(self.config_path.as_ref())?;
+        Ok(())
+    }
+
+    pub fn discover_installed_core_options(&self) -> Result<usize> {
+        let helper = core_probe_helper_path()?;
+        if !helper.is_file() {
+            return Err(anyhow!(
+                "core probe helper not found at {}. Build it with `cargo build -p arcade-libretro --bin arcade-core-probe`.",
+                helper.display()
+            ));
+        }
+
+        let config = self.current_config()?;
+        let core_root = config.paths.core_root.clone();
+        let core_paths = installed_core_library_paths(&core_root)?;
+        let mut discovered = 0usize;
+
+        for core_path in core_paths {
+            let Some(core_name) = arcade_domain::infer_core_name_from_library_path(&core_path)
+            else {
+                continue;
+            };
+            let metadata = fs::metadata(&core_path)?;
+            let modified_unix = metadata
+                .modified()
+                .ok()
+                .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
+                .map(|duration| duration.as_secs())
+                .unwrap_or_default();
+            let source_path = core_path.display().to_string();
+            if config
+                .emulation
+                .discovered_core_profiles
+                .iter()
+                .any(|profile| {
+                    profile.core_name.eq_ignore_ascii_case(&core_name)
+                        && arcade_domain::dynamic_profile_matches_core_file(
+                            profile,
+                            &source_path,
+                            modified_unix,
+                            metadata.len(),
+                        )
+                })
+            {
+                continue;
+            }
+
+            let system = arcade_domain::infer_system_for_core(&core_name);
+            let output = Command::new(&helper)
+                .arg(&core_path)
+                .arg(&core_name)
+                .arg(&system)
+                .output()
+                .with_context(|| format!("failed to run core probe helper {}", helper.display()))?;
+            if !output.status.success() {
+                warn!(
+                    core = %core_name,
+                    path = %core_path.display(),
+                    status = ?output.status.code(),
+                    stderr = %String::from_utf8_lossy(&output.stderr),
+                    "core probe helper failed"
+                );
+                continue;
+            }
+            let mut profile: arcade_domain::DynamicCoreProfile =
+                serde_json::from_slice(&output.stdout).with_context(|| {
+                    format!("failed to parse core probe output for {core_name}")
+                })?;
+            if profile.variables.is_empty() {
+                continue;
+            }
+            profile.source_path = Some(source_path);
+            profile.source_modified_unix = Some(modified_unix);
+            profile.source_len = Some(metadata.len());
+            self.update_discovered_core_profile(profile)?;
+            discovered += 1;
+        }
+
+        Ok(discovered)
     }
 
     pub fn update_app_config_settings(
@@ -1824,6 +1952,59 @@ fn html_unescape(value: &str) -> String {
         .replace("&gt;", ">")
 }
 
+fn core_probe_helper_path() -> Result<PathBuf> {
+    if let Some(path) = std::env::var_os("ARCADE_CORE_PROBE_HELPER") {
+        return Ok(PathBuf::from(path));
+    }
+    let current_exe =
+        std::env::current_exe().context("failed to resolve current executable path")?;
+    let Some(dir) = current_exe.parent() else {
+        return Err(anyhow!("current executable has no parent directory"));
+    };
+    #[cfg(windows)]
+    let helper_name = "arcade-core-probe.exe";
+    #[cfg(not(windows))]
+    let helper_name = "arcade-core-probe";
+    Ok(dir.join(helper_name))
+}
+
+fn installed_core_library_paths(core_root: &Path) -> Result<Vec<PathBuf>> {
+    if !core_root.is_dir() {
+        return Ok(Vec::new());
+    }
+    let mut paths = Vec::new();
+    collect_core_libraries(core_root, 0, &mut paths)?;
+    paths.sort();
+    Ok(paths)
+}
+
+fn collect_core_libraries(dir: &Path, depth: usize, out: &mut Vec<PathBuf>) -> Result<()> {
+    if depth > 1 {
+        return Ok(());
+    }
+    for entry in fs::read_dir(dir).with_context(|| format!("failed to read {}", dir.display()))? {
+        let entry = entry?;
+        let path = entry.path();
+        let file_type = entry.file_type()?;
+        if file_type.is_dir() {
+            collect_core_libraries(&path, depth + 1, out)?;
+        } else if is_libretro_library_path(&path) {
+            out.push(path);
+        }
+    }
+    Ok(())
+}
+
+fn is_libretro_library_path(path: &Path) -> bool {
+    let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
+        return false;
+    };
+    file_name.contains("_libretro")
+        && (file_name.ends_with(".dylib")
+            || file_name.ends_with(".so")
+            || file_name.ends_with(".dll"))
+}
+
 fn resolve_cover_root(paths: &PathsConfig) -> Result<PathBuf> {
     let cwd = std::env::current_dir()?;
     let runtime_root = paths
@@ -2389,6 +2570,27 @@ mod tests {
 
     fn config_path_for(config: &AppConfig) -> PathBuf {
         config.paths.db_path.with_file_name("config.toml")
+    }
+
+    #[test]
+    fn installed_core_library_paths_finds_root_and_arch_specific_libretro_cores() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path().join("cores");
+        fs::create_dir_all(root.join("x86_64")).unwrap();
+        fs::write(root.join("quicknes_libretro.dylib"), b"core").unwrap();
+        fs::write(root.join("notes.txt"), b"ignore").unwrap();
+        fs::write(root.join("x86_64").join("snes9x_libretro.dylib"), b"core").unwrap();
+
+        let paths = installed_core_library_paths(&root).unwrap();
+        let names = paths
+            .iter()
+            .map(|path| path.file_name().unwrap().to_string_lossy().to_string())
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            names,
+            vec!["quicknes_libretro.dylib", "snes9x_libretro.dylib"]
+        );
     }
 
     fn seed_rom(config: &AppConfig) {

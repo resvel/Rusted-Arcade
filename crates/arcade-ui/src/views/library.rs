@@ -115,6 +115,8 @@ impl NativeArcadeUiApp {
         }
         self.apply_current_view_filter_change(system_changed, alpha_changed, apply_filters);
 
+        self.draw_selected_launch_options(ui);
+
         ui.add_space(4.0);
         if self.state.library.visible_rom_ids.is_empty() {
             self.panel_frame().show(ui, |ui| {
@@ -128,4 +130,147 @@ impl NativeArcadeUiApp {
 
         self.draw_rom_grid(ctx, ui, GridSource::Library, "library-grid");
     }
+
+    pub(crate) fn draw_selected_launch_options(&mut self, ui: &mut egui::Ui) {
+        let Some(rom) = self.current_selected_rom().cloned() else {
+            return;
+        };
+        let config = self.services.config();
+        let profiles = arcade_domain::configurable_core_profiles_with_dynamic(
+            &config.emulation.discovered_core_profiles,
+        )
+        .into_iter()
+        .filter(|profile| profile.system.eq_ignore_ascii_case(&rom.rom.system))
+        .collect::<Vec<_>>();
+        if profiles.is_empty() {
+            return;
+        }
+
+        let palette = self.palette();
+        let current_choice = self
+            .state
+            .library
+            .launch_core_choices
+            .entry(rom.rom.id.clone())
+            .or_insert_with(|| String::from("auto"))
+            .clone();
+        let auto_core = arcade_domain::resolve_core_with_dynamic(
+            &rom.rom.system,
+            rom.rom.emulator_core.as_deref(),
+            &config.emulation.discovered_core_profiles,
+        );
+        let chosen_label = if current_choice == "auto" {
+            format!(
+                "Auto ({})",
+                display_core_name_for_launch(&auto_core, &profiles)
+            )
+        } else {
+            display_core_name_for_launch(&current_choice, &profiles).to_string()
+        };
+
+        self.panel_frame().fill(palette.panel).show(ui, |ui| {
+            ui.horizontal_wrapped(|ui| {
+                ui.label(
+                    egui::RichText::new("Launch")
+                        .strong()
+                        .color(palette.text),
+                );
+                ui.label(
+                    egui::RichText::new(&rom.display_title)
+                        .small()
+                        .color(palette.text_muted),
+                );
+                ui.add_space(8.0);
+                if ui.button("Play").clicked() {
+                    self.launch_selected_rom();
+                }
+                let toggle_label = if self.state.library.launch_options_open {
+                    "Hide Core Options"
+                } else {
+                    "Core Options"
+                };
+                if ui.button(toggle_label).clicked() {
+                    self.state.library.launch_options_open = !self.state.library.launch_options_open;
+                }
+                ui.label(
+                    egui::RichText::new(format!("Core: {chosen_label}"))
+                        .small()
+                        .color(palette.text_muted),
+                );
+            });
+
+            if self.state.library.launch_options_open {
+                ui.add_space(6.0);
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(egui::RichText::new("Use core").small().color(palette.text_muted));
+                    egui::ComboBox::from_id_salt(("launch-core", rom.rom.id.as_str()))
+                        .selected_text(chosen_label)
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(
+                                self.state
+                                    .library
+                                    .launch_core_choices
+                                    .entry(rom.rom.id.clone())
+                                    .or_insert_with(|| String::from("auto")),
+                                String::from("auto"),
+                                format!(
+                                    "Auto ({})",
+                                    display_core_name_for_launch(&auto_core, &profiles)
+                                ),
+                            );
+                            for profile in &profiles {
+                                ui.selectable_value(
+                                    self.state
+                                        .library
+                                        .launch_core_choices
+                                        .entry(rom.rom.id.clone())
+                                        .or_insert_with(|| String::from("auto")),
+                                    profile.core_name.to_string(),
+                                    profile.display_name,
+                                );
+                            }
+                        });
+                    if ui.button("Always use for this game").clicked() {
+                        if let Some(core) = self
+                            .state
+                            .library
+                            .launch_core_choices
+                            .get(&rom.rom.id)
+                            .filter(|core| !core.eq_ignore_ascii_case("auto"))
+                            .cloned()
+                        {
+                            match self.services.set_rom_core_override(&rom.rom.id, &core) {
+                                Ok(()) => self.state.status = format!(
+                                    "Saved {} for {}.",
+                                    display_core_name_for_launch(&core, &profiles),
+                                    rom.display_title
+                                ),
+                                Err(err) => {
+                                    self.state.status = format!("Failed to save core choice: {err}")
+                                }
+                            }
+                        }
+                    }
+                });
+                ui.label(
+                    egui::RichText::new(
+                        "Core knobs auto-populate under Settings → Core Settings after a core exposes libretro options.",
+                    )
+                    .small()
+                    .color(palette.text_muted),
+                );
+            }
+        });
+    }
+}
+
+fn display_core_name_for_launch<'a>(
+    core_name: &str,
+    profiles: &'a [arcade_domain::CoreProfile],
+) -> &'a str {
+    profiles
+        .iter()
+        .find(|profile| profile.core_name.eq_ignore_ascii_case(core_name))
+        .map(|profile| profile.display_name)
+        .unwrap_or("Selected Core")
 }

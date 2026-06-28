@@ -36,6 +36,8 @@ pub(crate) struct LibraryState {
     pub(crate) filters_panel_collapsed: bool,
     pub(crate) loaded: bool,
     pub(crate) page_size: usize,
+    pub(crate) launch_options_open: bool,
+    pub(crate) launch_core_choices: HashMap<String, String>,
 }
 
 impl LibraryState {
@@ -215,6 +217,8 @@ impl Default for LibraryState {
             filters_panel_collapsed: false,
             loaded: false,
             page_size: 0,
+            launch_options_open: false,
+            launch_core_choices: HashMap::new(),
         }
     }
 }

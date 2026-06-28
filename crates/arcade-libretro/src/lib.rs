@@ -23,7 +23,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Weak};
 
 use anyhow::{anyhow, Context, Result};
-use arcade_domain::{resolve_core, EmulationConfig};
+use arcade_domain::EmulationConfig;
 use ash::vk;
 #[cfg(feature = "audio")]
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
@@ -380,6 +380,7 @@ struct EnvironmentContext {
     save_dir: Option<StableCStringBuffer>,
     core_assets_dir: Option<StableCStringBuffer>,
     variables: HashMap<String, CString>,
+    discovered_variables: Vec<arcade_domain::DynamicCoreVariableDefinition>,
     variables_updated: bool,
     allow_vfs: bool,
     controller_info: Vec<Vec<u32>>,
@@ -1585,7 +1586,11 @@ impl LibretroHost {
         core_override: Option<&str>,
         rom_path: &Path,
     ) -> Result<String> {
-        let core_name = resolve_core(system, core_override);
+        let core_name = arcade_domain::resolve_core_with_dynamic(
+            system,
+            core_override,
+            &self.emulation.discovered_core_profiles,
+        );
         let candidates = self.resolve_core_candidates(&core_name);
         let core_path = candidates
             .iter()
@@ -2515,6 +2520,34 @@ impl LibretroHost {
         reset_vulkan_present_metrics(&self.runtime);
         clear_active_runtime(&self.runtime);
         Ok(())
+    }
+
+    /// Return the core-option profile most recently discovered through libretro
+    /// SET_VARIABLES for the loaded core. Callers persist this into AppConfig so
+    /// Settings can show knobs for cores that were not in the curated registry.
+    pub fn discovered_core_profile(&self) -> Option<arcade_domain::DynamicCoreProfile> {
+        let context = self.runtime.environment_context.lock();
+        let core_name = context.loaded_core_name.clone()?;
+        if context.discovered_variables.is_empty() {
+            return None;
+        }
+        let system = arcade_domain::core_profiles()
+            .into_iter()
+            .find(|profile| profile.core_name == core_name)
+            .map(|profile| profile.system.to_string())
+            .unwrap_or_else(|| String::from("UNKNOWN"));
+        let display_name = arcade_domain::core_profile_for(&core_name)
+            .map(|profile| profile.display_name.to_string())
+            .unwrap_or_else(|| core_name.clone());
+        Some(arcade_domain::DynamicCoreProfile {
+            core_name,
+            display_name,
+            system,
+            source_path: None,
+            source_modified_unix: None,
+            source_len: None,
+            variables: context.discovered_variables.clone(),
+        })
     }
 
     /// Push updated emulation settings so they take effect on the next game

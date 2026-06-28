@@ -24,6 +24,7 @@ ash.workspace = true
 cpal = { workspace = true, optional = true }
 zip.workspace = true
 arcade-domain = { path = "../arcade-domain" }
+serde_json.workspace = true
 tempfile.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]

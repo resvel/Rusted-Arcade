@@ -24,6 +24,7 @@ pub(super) fn configure_environment_context(
         context.save_dir = StableCStringBuffer::from_path(save_root);
         context.core_assets_dir = StableCStringBuffer::from_path(system_root);
         context.variables = default_core_variables_for(core_name, backend, emulation);
+        context.discovered_variables.clear();
         context.variables_updated = false;
         context.allow_vfs = !core_name.eq_ignore_ascii_case("fbneo");
         context.controller_info.clear();

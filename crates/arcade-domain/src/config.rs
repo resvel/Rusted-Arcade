@@ -5,6 +5,8 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
+use crate::DynamicCoreProfile;
+
 #[cfg(not(target_os = "macos"))]
 const USER_DOCUMENTS_APP_DIR: &str = "Arcade";
 #[cfg(target_os = "macos")]
@@ -25,6 +27,12 @@ pub struct EmulationConfig {
     /// values are maps of variable_key → chosen value.
     #[serde(default)]
     pub core_settings: HashMap<String, HashMap<String, String>>,
+
+    /// Profiles discovered from installed/libretro cores at runtime. These
+    /// augment the curated registry so Settings can show knobs for imported
+    /// cores across every system.
+    #[serde(default)]
+    pub discovered_core_profiles: Vec<DynamicCoreProfile>,
 }
 
 impl EmulationConfig {

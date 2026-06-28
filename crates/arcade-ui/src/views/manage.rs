@@ -44,8 +44,10 @@ impl NativeArcadeUiApp {
 
         // Populate the generic core_values map from the persisted core_settings,
         // resolving defaults from the registry for any keys not yet stored.
-        let profiles = arcade_domain::core_profiles();
-        let configurable_profiles = arcade_domain::configurable_core_profiles();
+        let profiles = arcade_domain::configurable_core_profiles_with_dynamic(
+            &config.emulation.discovered_core_profiles,
+        );
+        let configurable_profiles = profiles.clone();
         let mut core_values: HashMap<String, HashMap<String, String>> = HashMap::new();
         for profile in &profiles {
             let mut vars = HashMap::new();
@@ -84,7 +86,9 @@ impl NativeArcadeUiApp {
         &self,
     ) -> Vec<arcade_domain::CoreProfile> {
         let selected = self.state.manage.settings_selected_system.as_str();
-        let profiles = arcade_domain::configurable_core_profiles();
+        let profiles = arcade_domain::configurable_core_profiles_with_dynamic(
+            &self.services.config().emulation.discovered_core_profiles,
+        );
         if selected == "ALL" {
             profiles
         } else {
@@ -344,7 +348,9 @@ impl NativeArcadeUiApp {
 
         ui.add_space(8.0);
         draw_runtime_section_heading(ui, "Core Settings", palette);
-        let profiles = arcade_domain::configurable_core_profiles();
+        let profiles = arcade_domain::configurable_core_profiles_with_dynamic(
+            &self.services.config().emulation.discovered_core_profiles,
+        );
         for system in SYSTEM_FILTERS
             .iter()
             .copied()
@@ -373,6 +379,32 @@ impl NativeArcadeUiApp {
                 );
             });
         }
+
+        ui.add_space(6.0);
+        if ui.button("Discover Installed Core Options").clicked() {
+            match self.services.discover_installed_core_options() {
+                Ok(count) => {
+                    self.sync_manage_settings_from_services();
+                    self.state.manage.status_message = if count == 0 {
+                        String::from("No new core options discovered.")
+                    } else {
+                        format!("Discovered options for {count} installed core(s).")
+                    };
+                    self.state.status = self.state.manage.status_message.clone();
+                }
+                Err(err) => {
+                    self.state.manage.status_message = format!("Core discovery failed: {err}");
+                    self.state.status = self.state.manage.status_message.clone();
+                }
+            }
+        }
+        ui.label(
+            egui::RichText::new(
+                "Runs the out-of-process core probe helper so newly installed cores can populate Core Settings before launch.",
+            )
+            .small()
+            .color(palette.text_muted),
+        );
 
         ui.add_space(6.0);
         ui.label(

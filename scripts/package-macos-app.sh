@@ -46,17 +46,26 @@ fi
 
 if [[ "${PROFILE}" == "release" ]]; then
   BUILD_ARGS=(build --release -p arcade-app)
+  HELPER_BUILD_ARGS=(build --release -p arcade-libretro --bin arcade-core-probe)
   PROFILE_DIR="release"
+elif [[ "${PROFILE}" == "dev" ]]; then
+  BUILD_ARGS=(build -p arcade-app)
+  HELPER_BUILD_ARGS=(build -p arcade-libretro --bin arcade-core-probe)
+  PROFILE_DIR="debug"
 else
   BUILD_ARGS=(build --profile "${PROFILE}" -p arcade-app)
+  HELPER_BUILD_ARGS=(build --profile "${PROFILE}" -p arcade-libretro --bin arcade-core-probe)
   PROFILE_DIR="${PROFILE}"
 fi
 
 if [[ -n "${TARGET}" ]]; then
   BUILD_ARGS+=(--target "${TARGET}")
+  HELPER_BUILD_ARGS+=(--target "${TARGET}")
   BINARY_PATH="${REPO_ROOT}/target/${TARGET}/${PROFILE_DIR}/arcade-app"
+  HELPER_BINARY_PATH="${REPO_ROOT}/target/${TARGET}/${PROFILE_DIR}/arcade-core-probe"
 else
   BINARY_PATH="${REPO_ROOT}/target/${PROFILE_DIR}/arcade-app"
+  HELPER_BINARY_PATH="${REPO_ROOT}/target/${PROFILE_DIR}/arcade-core-probe"
 fi
 
 APP_BUNDLE="${REPO_ROOT}/dist/${APP_NAME}.app"
@@ -67,6 +76,8 @@ ICON_FILE="${RESOURCES_DIR}/AppIcon.icns"
 
 echo "Building arcade-app (${PROFILE}${TARGET:+, target ${TARGET}})..."
 (cd "${REPO_ROOT}" && cargo "${BUILD_ARGS[@]}")
+echo "Building arcade-core-probe helper (${PROFILE}${TARGET:+, target ${TARGET}})..."
+(cd "${REPO_ROOT}" && cargo "${HELPER_BUILD_ARGS[@]}")
 
 echo "Creating ${APP_BUNDLE}..."
 rm -rf "${APP_BUNDLE}"
@@ -74,6 +85,8 @@ mkdir -p "${MACOS_DIR}" "${RESOURCES_DIR}"
 
 cp "${BINARY_PATH}" "${MACOS_DIR}/arcade-app"
 chmod 755 "${MACOS_DIR}/arcade-app"
+cp "${HELPER_BINARY_PATH}" "${MACOS_DIR}/arcade-core-probe"
+chmod 755 "${MACOS_DIR}/arcade-core-probe"
 cp -R "${REPO_ROOT}/assets" "${RESOURCES_DIR}/assets"
 
 if command -v sips >/dev/null 2>&1; then
