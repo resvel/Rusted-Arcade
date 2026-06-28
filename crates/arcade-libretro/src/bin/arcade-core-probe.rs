@@ -17,6 +17,7 @@ const RETRO_ENVIRONMENT_SET_CORE_OPTIONS: u32 = 53;
 const RETRO_ENVIRONMENT_SET_CORE_OPTIONS_INTL: u32 = 54;
 const RETRO_ENVIRONMENT_SET_CORE_OPTIONS_V2: u32 = 67;
 const RETRO_ENVIRONMENT_SET_CORE_OPTIONS_V2_INTL: u32 = 68;
+const RETRO_NUM_CORE_OPTION_VALUES_MAX: usize = 128;
 
 type RetroSetEnvironment = unsafe extern "C" fn(RetroEnvironmentFn);
 type RetroInit = unsafe extern "C" fn();
@@ -41,7 +42,7 @@ struct RetroCoreOptionDefinition {
     key: *const c_char,
     desc: *const c_char,
     info: *const c_char,
-    values: *const RetroCoreOptionValue,
+    values: [RetroCoreOptionValue; RETRO_NUM_CORE_OPTION_VALUES_MAX],
     default_value: *const c_char,
 }
 
@@ -65,7 +66,7 @@ struct RetroCoreOptionV2Definition {
     info: *const c_char,
     info_categorized: *const c_char,
     category_key: *const c_char,
-    values: *const RetroCoreOptionValue,
+    values: [RetroCoreOptionValue; RETRO_NUM_CORE_OPTION_VALUES_MAX],
     default_value: *const c_char,
 }
 
@@ -301,7 +302,7 @@ unsafe fn collect_core_option_definitions(
             dynamic_variable_from_core_option(
                 current.key,
                 current.desc,
-                current.values,
+                current.values.as_ptr(),
                 current.default_value,
                 group.clone().unwrap_or_else(|| String::from("Discovered")),
             )
@@ -331,7 +332,7 @@ unsafe fn collect_core_option_v2_definitions(
             dynamic_variable_from_core_option(
                 current.key,
                 current.desc,
-                current.values,
+                current.values.as_ptr(),
                 current.default_value,
                 group,
             )
@@ -385,10 +386,13 @@ unsafe fn collect_option_values(
         let Some(raw_value) = (unsafe { c_string_to_string(current.value) }) else {
             break;
         };
-        let display = unsafe { c_string_to_string(current.label) };
+        // Some cores expose modern option values with invalid or non-owned
+        // label pointers during bare retro_init probing. The raw value is the
+        // stable part of the ABI and is enough for a usable dynamic profile, so
+        // avoid dereferencing labels in the out-of-process probe.
         values.push(DynamicCoreVariableOption {
             value: raw_value,
-            display,
+            display: None,
         });
         value = unsafe { value.add(1) };
     }

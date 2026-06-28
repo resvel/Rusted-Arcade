@@ -474,6 +474,26 @@ impl NativeServices {
         Ok(())
     }
 
+    fn prune_missing_discovered_core_profiles(&self) -> Result<usize> {
+        let mut config = self
+            .config
+            .lock()
+            .map_err(|_| anyhow!("config lock poisoned"))?;
+        let before = config.emulation.discovered_core_profiles.len();
+        config.emulation.discovered_core_profiles.retain(|profile| {
+            profile
+                .source_path
+                .as_deref()
+                .map(|source_path| Path::new(source_path).is_file())
+                .unwrap_or(true)
+        });
+        let removed = before.saturating_sub(config.emulation.discovered_core_profiles.len());
+        if removed > 0 {
+            config.save_to_path(self.config_path.as_ref())?;
+        }
+        Ok(removed)
+    }
+
     pub fn discover_installed_core_options(&self) -> Result<usize> {
         let helper = core_probe_helper_path()?;
         if !helper.is_file() {
@@ -483,10 +503,11 @@ impl NativeServices {
             ));
         }
 
+        let stale_removed = self.prune_missing_discovered_core_profiles()?;
         let config = self.current_config()?;
         let core_root = config.paths.core_root.clone();
         let core_paths = installed_core_library_paths(&core_root)?;
-        let mut discovered = 0usize;
+        let mut discovered = stale_removed;
 
         for core_path in core_paths {
             let Some(core_name) = arcade_domain::infer_core_name_from_library_path(&core_path)
@@ -501,12 +522,14 @@ impl NativeServices {
                 .map(|duration| duration.as_secs())
                 .unwrap_or_default();
             let source_path = core_path.display().to_string();
+            let system = self.infer_installed_core_system(&config, &core_path, &core_name);
             if config
                 .emulation
                 .discovered_core_profiles
                 .iter()
                 .any(|profile| {
                     profile.core_name.eq_ignore_ascii_case(&core_name)
+                        && profile.system.eq_ignore_ascii_case(&system)
                         && arcade_domain::dynamic_profile_matches_core_file(
                             profile,
                             &source_path,
@@ -518,7 +541,6 @@ impl NativeServices {
                 continue;
             }
 
-            let system = arcade_domain::infer_system_for_core(&core_name);
             let output = Command::new(&helper)
                 .arg(&core_path)
                 .arg(&core_name)
@@ -1006,6 +1028,41 @@ impl NativeServices {
         )
     }
 
+    fn infer_installed_core_system(
+        &self,
+        config: &AppConfig,
+        core_path: &Path,
+        core_name: &str,
+    ) -> String {
+        let catalog = self.core_catalog_for_config(config);
+        let normalized_core_path = normalize_absolute_path(core_path).ok();
+        catalog
+            .entries
+            .iter()
+            .filter(|entry| entry.core_name.eq_ignore_ascii_case(core_name))
+            .find(|entry| {
+                normalized_core_path.as_ref().is_none_or(|core_path| {
+                    normalize_absolute_path(&entry.target_path)
+                        .map(|target_path| target_path == *core_path)
+                        .unwrap_or(false)
+                })
+            })
+            .or_else(|| {
+                catalog
+                    .entries
+                    .iter()
+                    .find(|entry| entry.core_name.eq_ignore_ascii_case(core_name))
+            })
+            .and_then(|entry| {
+                entry
+                    .systems
+                    .iter()
+                    .find(|system| !system.eq_ignore_ascii_case("ALL"))
+                    .cloned()
+            })
+            .unwrap_or_else(|| arcade_domain::infer_system_for_core(core_name))
+    }
+
     fn load_buildbot_listing_for_paths(&self, paths: &PathsConfig) -> Option<BuildbotCoreListing> {
         let Some(base_url) = dependency_buildbot_base_url() else {
             return None;
@@ -1201,7 +1258,9 @@ impl NativeServices {
             progress,
             download_bytes,
             ad_hoc_codesign,
-            |core_path, core_name| self.probe_installed_catalog_core(core_path, core_name),
+            |core_path, core_name, system| {
+                self.probe_installed_catalog_core(core_path, core_name, system)
+            },
         )
     }
 
@@ -1211,7 +1270,7 @@ impl NativeServices {
         progress: impl Fn(ManageProgressEvent),
         download_archive: impl FnOnce(&str) -> Result<Vec<u8>>,
         codesign_core: impl FnOnce(&Path) -> Result<()>,
-        probe_core: impl FnOnce(&Path, &str) -> Option<String>,
+        probe_core: impl FnOnce(&Path, &str, &str) -> Option<String>,
     ) -> Result<ManageOperationSummary> {
         let config = self.current_config()?;
         let catalog = self.core_catalog_for_config(&config);
@@ -1313,7 +1372,13 @@ impl NativeServices {
             total: Some(1),
             message: format!("Probing settings for {}...", entry.display_name),
         });
-        let probe_warning = probe_core(&entry.target_path, &entry.core_name);
+        let probe_system = entry
+            .systems
+            .iter()
+            .find(|system| !system.eq_ignore_ascii_case("ALL"))
+            .cloned()
+            .unwrap_or_else(|| arcade_domain::infer_system_for_core(&entry.core_name));
+        let probe_warning = probe_core(&entry.target_path, &entry.core_name, &probe_system);
         if let Some(warning) = &probe_warning {
             progress(ManageProgressEvent {
                 kind: ManageOperationKind::InstallCatalogCore,
@@ -1349,8 +1414,13 @@ impl NativeServices {
         })
     }
 
-    fn probe_installed_catalog_core(&self, core_path: &Path, core_name: &str) -> Option<String> {
-        match self.probe_installed_core_options(core_path, core_name) {
+    fn probe_installed_catalog_core(
+        &self,
+        core_path: &Path,
+        core_name: &str,
+        system: &str,
+    ) -> Option<String> {
+        match self.probe_installed_core_options(core_path, core_name, system) {
             Ok(true) => None,
             Ok(false) => Some(String::from("no configurable variables were discovered")),
             Err(err) => {
@@ -1364,7 +1434,12 @@ impl NativeServices {
         }
     }
 
-    fn probe_installed_core_options(&self, core_path: &Path, core_name: &str) -> Result<bool> {
+    fn probe_installed_core_options(
+        &self,
+        core_path: &Path,
+        core_name: &str,
+        system: &str,
+    ) -> Result<bool> {
         let helper = core_probe_helper_path()?;
         if !helper.is_file() {
             return Err(anyhow!(
@@ -1381,17 +1456,16 @@ impl NativeServices {
             .map(|duration| duration.as_secs())
             .unwrap_or_default();
         let source_path = core_path.display().to_string();
-        let system = arcade_domain::infer_system_for_core(core_name);
         let output = Command::new(&helper)
             .arg(core_path)
             .arg(core_name)
-            .arg(&system)
+            .arg(system)
             .output()
             .with_context(|| format!("failed to run core probe helper {}", helper.display()))?;
         if !output.status.success() {
             return Err(anyhow!(
-                "core probe helper failed with status {:?}: {}",
-                output.status.code(),
+                "core probe helper failed with {}: {}",
+                format_probe_exit_status(output.status),
                 String::from_utf8_lossy(&output.stderr)
             ));
         }
@@ -1577,6 +1651,24 @@ fn verify_installed_core_file(target_path: &Path) -> Result<()> {
         ));
     }
     Ok(())
+}
+
+fn format_probe_exit_status(status: std::process::ExitStatus) -> String {
+    if let Some(code) = status.code() {
+        return format!("exit code {code}");
+    }
+    signal_probe_exit_status(status).unwrap_or_else(|| status.to_string())
+}
+
+#[cfg(unix)]
+fn signal_probe_exit_status(status: std::process::ExitStatus) -> Option<String> {
+    use std::os::unix::process::ExitStatusExt;
+    status.signal().map(|signal| format!("signal {signal}"))
+}
+
+#[cfg(not(unix))]
+fn signal_probe_exit_status(_status: std::process::ExitStatus) -> Option<String> {
+    None
 }
 
 fn reject_symlink_target(target_path: &Path) -> Result<()> {
@@ -3078,6 +3170,30 @@ mod tests {
         config.paths.db_path.with_file_name("config.toml")
     }
 
+    fn test_dynamic_profile(
+        core_name: &str,
+        system: &str,
+        source_path: Option<&Path>,
+    ) -> DynamicCoreProfile {
+        DynamicCoreProfile {
+            core_name: core_name.to_string(),
+            display_name: core_name.to_string(),
+            system: system.to_string(),
+            source_path: source_path.map(|path| path.display().to_string()),
+            source_modified_unix: Some(1),
+            source_len: Some(4),
+            variables: vec![arcade_domain::DynamicCoreVariableDefinition {
+                key: format!("{core_name}_option"),
+                label: String::from("Option"),
+                group: String::from("Discovered"),
+                options: vec![arcade_domain::DynamicCoreVariableOption {
+                    value: String::from("enabled"),
+                    display: None,
+                }],
+            }],
+        }
+    }
+
     #[test]
     fn installed_core_library_paths_finds_root_and_arch_specific_libretro_cores() {
         let tmp = TempDir::new().unwrap();
@@ -3097,6 +3213,43 @@ mod tests {
             names,
             vec!["quicknes_libretro.dylib", "snes9x_libretro.dylib"]
         );
+    }
+
+    #[test]
+    fn missing_downloaded_core_prunes_dynamic_profile() {
+        let tmp = TempDir::new().expect("tempdir");
+        let mut config = make_config(&tmp);
+        let existing_core = config.paths.core_root.join("mesen_libretro.dylib");
+        let missing_core = config.paths.core_root.join("quicknes_libretro.dylib");
+        fs::create_dir_all(&config.paths.core_root).expect("create core root");
+        fs::write(&existing_core, b"core").expect("write core");
+        config.emulation.discovered_core_profiles = vec![
+            test_dynamic_profile("mesen", "NES", Some(&existing_core)),
+            test_dynamic_profile("quicknes", "NES", Some(&missing_core)),
+            test_dynamic_profile("legacy", "NES", None),
+        ];
+        let db = Database::open(&config).expect("open db");
+        let services = NativeServices::bootstrap(config.clone(), config_path_for(&config), db)
+            .expect("bootstrap");
+
+        let removed = services
+            .prune_missing_discovered_core_profiles()
+            .expect("prune missing profiles");
+
+        assert_eq!(removed, 1);
+        let profiles = &services.config().emulation.discovered_core_profiles;
+        assert!(profiles.iter().any(|profile| profile.core_name == "mesen"));
+        assert!(profiles.iter().any(|profile| profile.core_name == "legacy"));
+        assert!(!profiles
+            .iter()
+            .any(|profile| profile.core_name == "quicknes"));
+        let (saved, _) =
+            AppConfig::load_or_create(Some(&config_path_for(&config))).expect("reload");
+        assert!(!saved
+            .emulation
+            .discovered_core_profiles
+            .iter()
+            .any(|profile| profile.core_name == "quicknes"));
     }
 
     #[test]
@@ -3411,9 +3564,10 @@ systemname = "Arcade""#,
                     assert_eq!(path, target.as_path());
                     Ok(())
                 },
-                |path, core_name| {
+                |path, core_name, system| {
                     assert_eq!(path, target.as_path());
                     assert_eq!(core_name, "fceumm");
+                    assert_eq!(system, "NES");
                     None
                 },
             )
@@ -3449,7 +3603,7 @@ systemname = "Arcade""#,
                 |_| {},
                 |_| Ok(zip_with_member("fceumm_libretro.dylib", b"installed-core")),
                 |_| Ok(()),
-                |_, _| Some(String::from("simulated probe failure")),
+                |_, _, _| Some(String::from("simulated probe failure")),
             )
             .expect("install catalog core despite probe warning");
 
@@ -3478,7 +3632,7 @@ systemname = "Arcade""#,
                 |_| {},
                 |_| Ok(zip_with_member("fceumm_libretro.dylib", b"installed-core")),
                 |_| Ok(()),
-                |_, _| None,
+                |_, _, _| None,
             )
             .expect("install catalog core");
 

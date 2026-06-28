@@ -389,9 +389,9 @@ impl NativeArcadeUiApp {
                 Ok(count) => {
                     self.sync_manage_settings_from_services();
                     self.state.manage.status_message = if count == 0 {
-                        String::from("No new core options discovered.")
+                        String::from("No core option profile changes found.")
                     } else {
-                        format!("Discovered options for {count} installed core(s).")
+                        format!("Updated core option profiles for {count} core(s).")
                     };
                     self.state.status = self.state.manage.status_message.clone();
                 }
