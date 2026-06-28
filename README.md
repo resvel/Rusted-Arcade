@@ -18,7 +18,9 @@ for testing.
 - Provides video, audio, input, save state, VFS, and core-option integration.
 - Includes system-aware controller mapping with visual controller layouts.
 - Includes an in-app Dependency Installer under Settings for runtime setup,
-  repairs, imports, and diagnostics.
+  repairs, imports, diagnostics, and per-system core browsing.
+- Browses the live libretro buildbot for the active macOS architecture and uses
+  libretro `.info` metadata to classify additional downloadable cores.
 - Supports separate native ARM64 and Rosetta/x86_64 macOS core folders.
 - Builds local macOS app bundles with bundled UI assets and ad-hoc signing.
 
@@ -54,6 +56,7 @@ The app creates and uses paths like:
 /Library/Application Support/RustedArcade/config.toml
 /Library/Application Support/RustedArcade/roms/
 /Library/Application Support/RustedArcade/cores/
+/Library/Application Support/RustedArcade/cores/metadata/
 /Library/Application Support/RustedArcade/cores/x86_64/
 /Library/Application Support/RustedArcade/bios/
 /Library/Application Support/RustedArcade/data/arcade.db
@@ -62,7 +65,8 @@ The app creates and uses paths like:
 ```
 
 Native Apple Silicon cores live in `cores/`. Rosetta/x86_64 cores live in
-`cores/x86_64/`.
+`cores/x86_64/`. Runtime Setup caches buildbot listings and libretro `.info`
+metadata under the active core root's `metadata/` folder.
 
 ## First Launch
 
@@ -72,6 +76,9 @@ missing, it opens Settings to the Dependencies view.
 Use that view to:
 
 - Install standard libretro cores from the configured libretro buildbot.
+- Browse downloadable cores per supported system.
+- Open the ALL-page Advanced Buildbot Browser for ambiguous or unclassified
+  live buildbot cores.
 - Import local compatibility cores, such as PS2 or ARM64 N64 dynarec builds.
 - Import required resource folders, such as Dolphin `Sys` or PS2 Metal
   resources.
@@ -80,6 +87,39 @@ Use that view to:
 
 On macOS, imported or downloaded `.dylib` cores are ad-hoc codesigned by the
 app after installation.
+
+## Runtime Setup Core Browser
+
+Settings -> Runtime Setup includes a `Cores` section for each supported system.
+It combines Rusted Arcade's curated runtime catalog with the live upstream
+libretro buildbot listing for the active architecture:
+
+- Native Apple Silicon uses the ARM64 buildbot lane and `cores/`.
+- Rosetta/x86_64 uses the x86_64 buildbot lane and `cores/x86_64/`.
+- The app caches the buildbot directory listing and `info.zip` metadata under
+  `cores/metadata/` so Runtime Setup can still show cached catalog information
+  when the network or buildbot is unavailable.
+
+Curated recommended/default cores appear first. Additional remote buildbot cores
+can appear in a system's Advanced section when libretro `.info` metadata gives a
+reliable single-system match. Ambiguous, unsupported, or unclassified remote
+cores stay in the ALL-page Advanced Buildbot Browser with warnings.
+
+Runtime Setup intentionally keeps automatic setup conservative:
+
+- `Get What We Can` installs only standard required/recommended setup items; it
+  does not download every browsable buildbot core.
+- Curated and protected platform lanes remain authoritative.
+- Generic buildbot PS2 cores do not replace the native ARM64 `pcarmsx2` lane or
+  the Rosetta PCSX2 Metal PoC lane automatically.
+- Hardware-rendered, experimental, ambiguous, and metadata-only candidates are
+  treated as Advanced and should be considered unverified until tested.
+
+When installing a catalog core, the app downloads the explicit buildbot archive,
+extracts the expected `.dylib`, verifies that the installed file exists and is
+non-empty, ad-hoc signs it on macOS, rescans catalog state, and runs best-effort
+core-option probing when the helper is available. Probe failure is reported as a
+warning, not as an install failure.
 
 ## Running From Source
 
@@ -264,6 +304,10 @@ choices, and PS2 recompiler toggles where supported. The native Apple Silicon
 PS2 path uses `pcarmsx2`; Rosetta uses the PCSX2 Metal PoC path by default.
 You should not need to launch with long environment-variable commands for
 normal PS2 testing.
+
+Installed libretro cores can also publish core options dynamically. Runtime
+Setup and Core Settings treat that discovery as settings metadata, not as proof
+that a core is compatible with a given system or platform lane.
 
 ## macOS Rendering Notes
 
